@@ -36,6 +36,7 @@ cannot tell them apart except by `hello.device.platform`.
 | Status line | One translucent line on top: a dot and STANDBY / CONNECTING / LIVE (with the bitrate while live), the hub link dot (green connected, orange connecting, grey not set up), the clock dot (green healthy, orange degraded, red bad), the battery, and the Settings button. iOS also shows the thermal state when it matters and an icon while an orientation change waits |
 | Live button | A ringed circle on the right edge in landscape: dark at standby, orange while connecting, red while live; a haptic when it goes live or stops |
 | Not connected | A card: "Not connected", how to scan the hub's QR code |
+| Operator chrome | Left edge: lens buttons (the lenses the camera has, longest on top) above a zoom rocker (speed by deflection). Bottom left: the aids menu (grid, horizon level, safe areas 93 % / 90 %, centre cuts 4:3 and 9:16, focus peaking in red), each a persisted toggle drawn over the preview only, and the screen lock (every touch blocked but a slide to unlock; suggested in a toast at Go Live). Bottom right: the microphone meter (RMS bar, falling peak line, clip marker) |
 
 ## Settings
 
@@ -68,7 +69,8 @@ its own dark (#16181E), so launchers' masks keep the tally dot.
 | `torch_probe` | Yes | No | A measurement tool (docs/GENLOCK.md); add when Android genlock is measured |
 | `frame_duration` (Debug) | Yes | No | A measurement tool |
 | Protocol 2 (ownership, production, image statistics, live lock) | Yes | Yes | Same core state machine and statistics; tested on the emulator against the hub |
-| Operator aids (guides, horizon, zoom rocker and lens buttons, focus peaking, audio meter, screen lock) | Yes | No | docs/SHADING.md phase 1 step 3; the Android ones are still to build |
+| Microphone meter | Always (the microphone runs with the camera) | While live only | Android opens the microphone for the stream only: holding it at standby costs power and keeps the system's microphone indicator on |
+| Focus peaking source | The streamed frames, 9 per second | The small YUV stream (about 10 frames per second, the same as the statistics) | The same 16:9 picture; nothing extra for the ISP |
 | Image statistics source | Every frame offered, measured up to 4 per second | The small YUV stream, which Camera2 fills on about 10 frames per second (a repeating burst), measured up to 4 per second | Power: the ISP writes the extra stream only on the frames that are sampled |
 | Device key store | Secure Enclave | Android Keystore (StrongBox where present) | Platform equivalents |
 | Thermal state in the status line | When serious | Not shown (reported in `status.thermal`) | To add |

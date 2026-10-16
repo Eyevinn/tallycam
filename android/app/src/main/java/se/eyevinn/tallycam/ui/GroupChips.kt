@@ -53,12 +53,12 @@ import kotlin.math.roundToInt
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun GroupChips(model: AppModel, modifier: Modifier = Modifier) {
+fun GroupChips(model: AppModel, modifier: Modifier = Modifier, interactive: Boolean = true) {
     var open by remember { mutableStateOf<String?>(null) }
     var confirmTake by remember { mutableStateOf<GroupView?>(null) }
     Row(modifier, horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
         for (view in model.shading.groups) {
-            GroupChip(view, Modifier.combinedClickable(
+            GroupChip(view, if (!interactive) Modifier else Modifier.combinedClickable(
                 onClick = { open = view.group },
                 onLongClick = { if (view.indicator == "remote_disconnected") confirmTake = view },
             ))

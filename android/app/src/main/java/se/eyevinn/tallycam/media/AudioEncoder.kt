@@ -90,6 +90,7 @@ class AudioEncoder(private val aac: Boolean, private val sink: Sink) {
                     android.os.SystemClock.elapsedRealtimeNanos() - n / 2 * 1_000_000_000L / RATE
                 }
                 framesRead += n / 2
+                MicLevels.measure(pcm, n / 2)
                 val input = codec.dequeueInputBuffer(10_000)
                 if (input >= 0) {
                     val buf = codec.getInputBuffer(input)!!
@@ -150,5 +151,43 @@ class AudioEncoder(private val aac: Boolean, private val sink: Sink) {
          * yet: check with sync-probe --av.
          */
         private const val AAC_DELAY_NS = 2112L * 1_000_000_000L / RATE
+    }
+}
+
+/**
+ * The microphone's level for the operator's meter (as iOS MicLevels): the
+ * peak since the last read and an RMS over about 0.3 s. Written on the
+ * audio thread, read by the UI; no allocation.
+ */
+object MicLevels {
+    @Volatile private var peakBits = 0
+    @Volatile private var meanSquare = 0f
+    /** Bumped per chunk; the UI hides the meter while it does not move. */
+    @Volatile var chunks = 0L
+        private set
+
+    internal fun measure(pcm: ByteBuffer, samples: Int) {
+        var peak = 0
+        var sum = 0.0
+        for (i in 0 until samples) {
+            val v = pcm.getShort(i * 2).toInt()
+            val a = if (v < 0) -v else v
+            if (a > peak) peak = a
+            sum += v.toDouble() * v
+        }
+        if (samples == 0) return
+        val chunkMs = samples * 1000.0 / AudioEncoder.RATE
+        val k = (chunkMs / 300.0).coerceAtMost(1.0).toFloat()
+        meanSquare += k * ((sum / samples / (32768.0 * 32768.0)).toFloat() - meanSquare)
+        val p = peak / 32768f
+        if (p > Float.fromBits(peakBits)) peakBits = p.toBits()
+        chunks++
+    }
+
+    /** Peak since the last read, and RMS, both 0..1. */
+    fun read(): Pair<Float, Float> {
+        val peak = Float.fromBits(peakBits)
+        peakBits = 0
+        return peak to kotlin.math.sqrt(meanSquare)
     }
 }

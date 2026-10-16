@@ -67,15 +67,52 @@ fun TallyCamScreen(model: AppModel?, permitted: Boolean, onScan: () -> Unit) {
                 return@Box
             }
             var showSettings by remember { mutableStateOf(false) }
-            Preview(model, Modifier.align(Alignment.Center))
+            val context = androidx.compose.ui.platform.LocalContext.current
+            val aids = remember { Aids(context) }
+            var screenLocked by remember { mutableStateOf(false) }
+            var toast by remember { mutableStateOf<String?>(null) }
+            androidx.compose.runtime.LaunchedEffect(toast) {
+                if (toast != null) {
+                    kotlinx.coroutines.delay(4000)
+                    toast = null
+                }
+            }
+            Preview(model, aids, Modifier.align(Alignment.Center))
             TallyOverlay(model)
             Column(Modifier.align(Alignment.TopCenter).padding(top = 12.dp, start = 16.dp, end = 16.dp),
                    verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                StatusStrip(model, onSettings = { showSettings = true }, modifier = Modifier)
-                // Who owns exposure, colour and focus, as on iOS.
-                GroupChips(model, Modifier.padding(start = 4.dp))
+                StatusStrip(model, onSettings = { if (!screenLocked) showSettings = true }, modifier = Modifier)
+                // Who owns exposure, colour and focus, as on iOS; shown, not tappable, while locked.
+                GroupChips(model, Modifier.padding(start = 4.dp), interactive = !screenLocked)
             }
-            LiveButton(model, Modifier.align(Alignment.CenterEnd).padding(end = 28.dp))
+            if (!screenLocked) {
+                // Lens buttons above the zoom rocker at the leading edge, vertically centred.
+                Column(Modifier.align(Alignment.CenterStart).padding(start = 24.dp),
+                       verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    LensButtons(model)
+                    if (model.camera.zoomRange != null) ZoomRocker { rate -> model.rampZoom(rate) }
+                }
+                // Aids and screen lock, bottom leading.
+                Row(Modifier.align(Alignment.BottomStart).padding(start = 24.dp, bottom = 18.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    AidsMenu(aids)
+                    ChromeButton("🔒") { screenLocked = true }
+                }
+            }
+            AudioMeter(Modifier.align(Alignment.BottomEnd).padding(end = 24.dp, bottom = 18.dp))
+            LiveButton(model, Modifier.align(Alignment.CenterEnd).padding(end = 28.dp)) {
+                val starting = model.streamState == LiveStream.State.IDLE
+                model.toggleLive()
+                // Suggested, not forced: a camera on a tripod may need its controls.
+                if (starting && !screenLocked) toast = "Lock the screen against stray touches: lock button, bottom left"
+            }
+            toast?.let {
+                Text(it, color = Color.White, fontSize = 14.sp,
+                     modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 80.dp)
+                         .background(Color.Black.copy(alpha = 0.7f), RoundedCornerShape(12.dp))
+                         .padding(horizontal = 16.dp, vertical = 10.dp))
+            }
+            if (screenLocked) ScreenLockLayer { screenLocked = false }
             if (model.link == AppModel.Link.NOT_SET_UP && !showSettings) {
                 ConnectCard(onScan, Modifier.align(Alignment.Center))
             }
@@ -85,10 +122,21 @@ fun TallyCamScreen(model: AppModel?, permitted: Boolean, onScan: () -> Unit) {
 }
 
 @Composable
-private fun Preview(model: AppModel, modifier: Modifier) {
+private fun Preview(model: AppModel, aids: Aids, modifier: Modifier) {
+    Box(modifier.fillMaxSize().aspectRatio(16f / 9f, matchHeightConstraintsFirst = true)) {
+        PreviewView(model, Modifier.fillMaxSize())
+        // Over the preview only, never in the stream.
+        if (aids.peaking) PeakingOverlay(model)
+        FrameGuides(aids)
+        if (aids.horizon) HorizonLevel()
+    }
+}
+
+@Composable
+private fun PreviewView(model: AppModel, modifier: Modifier) {
     AndroidView(
         // Tap to focus and expose there, as on iOS (the `focus_at` command).
-        modifier = modifier.fillMaxSize().aspectRatio(16f / 9f, matchHeightConstraintsFirst = true)
+        modifier = modifier
             .pointerInput(Unit) {
                 detectTapGestures(
                     onTap = { p -> model.focusAt(p.x / size.width, p.y / size.height) },
@@ -201,7 +249,7 @@ private fun StatusStrip(model: AppModel, onSettings: () -> Unit, modifier: Modif
 }
 
 @Composable
-private fun LiveButton(model: AppModel, modifier: Modifier) {
+private fun LiveButton(model: AppModel, modifier: Modifier, onClick: () -> Unit) {
     val live = model.streamState != LiveStream.State.IDLE
     // As iOS: a haptic when the stream goes live or stops; orange while connecting.
     val haptics = androidx.compose.ui.platform.LocalHapticFeedback.current
@@ -221,7 +269,7 @@ private fun LiveButton(model: AppModel, modifier: Modifier) {
     Box(
         modifier.size(76.dp).border(4.dp, Color.White, CircleShape).padding(8.dp)
             .background(fill, CircleShape)
-            .clickable { model.toggleLive() },
+            .clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
         Text(if (live) "STOP" else "LIVE", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp)

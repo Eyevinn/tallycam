@@ -26,6 +26,7 @@ import se.eyevinn.tallycam.control.LcpClient
 import se.eyevinn.tallycam.control.ProvisioningLink
 import se.eyevinn.tallycam.control.Settings
 import se.eyevinn.tallycam.control.Shading
+import se.eyevinn.tallycam.control.ShadingMessages
 import se.eyevinn.tallycam.control.capitalizedFirst
 import se.eyevinn.tallycam.control.isRemote
 import se.eyevinn.tallycam.control.title
@@ -376,10 +377,9 @@ class AppModel(private val context: Context) : LcpClient.Listener, LiveStream.Li
                 else runCommand(message.opt("id"), name, message.optJSONObject("args"))
             }
             "own" -> {
-                val holder = message.optJSONObject("holder")
-                val label = holder?.optString("label").orEmpty()
-                val taken = shading.machine.own(strings(message.optJSONArray("groups")),
-                                                holder?.optString("id").orEmpty(), label)
+                val own = ShadingMessages.own(message)
+                val label = own.holderLabel
+                val taken = shading.machine.own(own.groups, own.holderId, label)
                 if (taken.fromLocal.isNotEmpty()) {
                     val names = taken.fromLocal.mapNotNull { shading.view(it)?.title }
                     showBanner("${names.joinToString(" and ")} taken over by ${label.ifEmpty { "the hub" }}")
@@ -388,14 +388,14 @@ class AppModel(private val context: Context) : LcpClient.Listener, LiveStream.Li
                 message.opt("id")?.let { result(it, taken.skipped.map { g -> "$g: no such group on this camera" }) }
             }
             "release" -> {
-                val released = shading.machine.release(strings(message.optJSONArray("groups")))
+                val released = shading.machine.release(ShadingMessages.groups(message))
                 shading.changed()
                 val errors = applyAuto(released)
                 message.opt("id")?.let { result(it, errors) }
             }
             "production" -> {
-                val hz = message.optDouble("mains_hz", Double.NaN).takeIf { it == 50.0 || it == 60.0 || it == 0.0 }?.toInt()
-                cameraControls.setProduction(hz, shutterPolicy(message.opt("shutter")))?.let { sendLog("warn", it) }
+                val production = ShadingMessages.production(message)
+                cameraControls.setProduction(production.mainsHz, production.shutter)?.let { sendLog("warn", it) }
                 publishState()
             }
             "stats" -> {
@@ -406,16 +406,6 @@ class AppModel(private val context: Context) : LcpClient.Listener, LiveStream.Li
         }
     }
 
-    private fun strings(array: org.json.JSONArray?): List<String> =
-        (0 until (array?.length() ?: 0)).mapNotNull { array?.optString(it)?.takeIf(String::isNotEmpty) }
-
-    /** `"mains"`, `"free"` or a denominator; anything else is mains. */
-    private fun shutterPolicy(value: Any?): Shutter = when {
-        value == "free" -> Shutter.Free
-        value is Number && value.toDouble().let { it >= 1 && it <= 100_000 && it == Math.rint(it) } ->
-            Shutter.Fixed(value.toInt())
-        else -> Shutter.Mains
-    }
 
     private fun admit() {
         admitted = true
@@ -744,6 +734,18 @@ class AppModel(private val context: Context) : LcpClient.Listener, LiveStream.Li
 
     /** White balance once, from the operator's controls (after [localSet]). */
     fun localWhiteBalanceOnce() = camera.whiteBalanceOnce { main.post { publishState() } }
+
+    /** A lens button: lens is shared by the operator and the hub (D5). */
+    fun selectLens(key: String) {
+        cameraControls.apply("lens", key)?.let { showBanner(it.capitalizedFirst()) }
+        publishState()
+    }
+
+    /** The zoom rocker: doublings per second, 0 stops (and reports the zoom reached). */
+    fun rampZoom(rate: Double) {
+        camera.rampZoom(rate)
+        if (rate == 0.0) main.postDelayed({ publishState() }, 100)
+    }
 
     /** The camera's descriptors and values, for the operator's group controls. */
     fun cameraDescriptors(): List<JSONObject> = cameraControls.descriptors()

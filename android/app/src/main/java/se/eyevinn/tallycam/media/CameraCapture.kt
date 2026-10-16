@@ -207,6 +207,15 @@ class CameraCapture(context: Context) {
     private val statsGrid = StatsGrid()
     private val statsBusy = java.util.concurrent.atomic.AtomicBoolean(false)
 
+    /** Focus peaking masks (analysis thread), about 9 a second while set; null: off. */
+    @Volatile var onPeaking: ((android.graphics.Bitmap) -> Unit)? = null
+    private val peaking = Peaking()
+    private val peakingBusy = java.util.concurrent.atomic.AtomicBoolean(false)
+    private var lastPeakingNs = 0L
+
+    /** Zoom ramp (camera thread): doublings per second, 0 for none. */
+    private var zoomRate = 0.0
+
     // MARK: Capabilities of the active camera
 
     private fun capabilities(): IntArray =
@@ -717,7 +726,10 @@ class CameraCapture(context: Context) {
 
     private fun thumbSize(): Size {
         val yuv = sizes?.getOutputSizes(ImageFormat.YUV_420_888)?.toList().orEmpty()
+        // 16:9 like the picture, so masks and statistics cover what is streamed.
+        val wide = yuv.filter { it.width * 9 == it.height * 16 }
         return yuv.firstOrNull { it.width == 640 && it.height == 360 }
+            ?: wide.filter { it.width >= 320 }.minByOrNull { it.width * it.height }
             ?: yuv.filter { it.width >= 320 }.minByOrNull { it.width * it.height }
             ?: Size(640, 480)
     }
@@ -734,6 +746,7 @@ class CameraCapture(context: Context) {
             val now = SystemClock.elapsedRealtimeNanos()
             stepAutoIso(image, now)
             sampleStats(image, now)
+            samplePeaking(image, now)
             val interval = thumbnailIntervalNs
             val sink = onThumbnail
             if (sink == null || interval <= 0 || now - lastThumbNs < interval) return
@@ -831,6 +844,50 @@ class CameraCapture(context: Context) {
         repeat()
     }
 
+    private fun samplePeaking(image: android.media.Image, now: Long) {
+        val sink = onPeaking ?: return
+        if (now - lastPeakingNs < 100_000_000L || !peakingBusy.compareAndSet(false, true)) return
+        lastPeakingNs = now
+        if (!peaking.sample(image)) {
+            peakingBusy.set(false)
+            return
+        }
+        analysisHandler.post {
+            try {
+                val mask = peaking.mask()
+                if (onPeaking != null) sink(mask)
+            } finally {
+                peakingBusy.set(false)
+            }
+        }
+    }
+
+    /**
+     * A zoom move for the operator's rocker: `rate` doublings per second
+     * (negative zooms out) until 0 or the end of the range (at most 10x).
+     */
+    fun rampZoom(rate: Double) {
+        handler.post {
+            val wasIdle = zoomRate == 0.0
+            zoomRate = rate
+            if (rate != 0.0 && wasIdle) handler.post(zoomStep)
+        }
+    }
+
+    private val zoomStep = object : Runnable {
+        override fun run() {
+            val range = zoomRange ?: return run { zoomRate = 0.0 }
+            val rate = zoomRate
+            if (rate == 0.0) return
+            val top = minOf(range.upper, 10f)
+            val z = (settings.zoom * Math.pow(2.0, rate * ZOOM_STEP_MS / 1000.0).toFloat()).coerceIn(range.lower, top)
+            change { it.copy(zoom = z) }
+            repeat()
+            if ((rate > 0 && z >= top) || (rate < 0 && z <= range.lower)) zoomRate = 0.0
+            else handler.postDelayed(this, ZOOM_STEP_MS)
+        }
+    }
+
     /** Camera thread: a grid of this frame for the statistics, measured on the analysis thread. */
     private fun sampleStats(image: android.media.Image, now: Long) {
         val sink = onStats ?: return
@@ -880,6 +937,7 @@ class CameraCapture(context: Context) {
 
     companion object {
         private const val TAG = "CameraCapture"
+        private const val ZOOM_STEP_MS = 33L
 
         /** CONTROL_AE_ANTIBANDING_MODE_* for a mains frequency (0: off). */
         fun antibandingMode(hz: Int) = when (hz) {

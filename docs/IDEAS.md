@@ -39,6 +39,33 @@ Where we can differ from Blackmagic Camera, Larix, Moblin and NDI apps:
    iPad 10. Build an LED reference on the TAI second, measure each model, and
    apply the offset to the SEI stamp and the genlock target.
 
+## Feature order after the chain demo
+
+From a review of a feature wish list, October 2026. In order:
+
+1. **Adaptive bitrate.** Needed on real Wi-Fi and for the 5G story. Favour
+   low latency over picture quality, since genlock depends on it. Done: the
+   loop runs on the core's SRT thread (core/src/bitrate/adaptive.rs), driven
+   by the send buffer, RTT, loss and drops; iOS uses it, Android can through
+   the same calls. Not yet tested on a throttled network.
+2. **Torch tally and operator aids.** Cheap, and they make the app feel
+   professional.
+   - Torch tally: the torch is white and lights the subject, so it shows in
+     the picture and shifts exposure. Run it at a low level and make it
+     opt-in. It is on the wrong side for the front camera, and it must not
+     clash with the torch probe (GENLOCK.md).
+   - Operator aids (PROTOCOL.md, "Candidates for later"): focus peaking and
+     zebra as Metal shaders on the preview, a histogram, and a horizon line
+     from Core Motion (the same data as gyro per frame,
+     DEVICE_CAPABILITIES.md).
+3. **Local ISO recording with timecode** (DEVICE_CAPABILITIES.md). A
+   full-quality backup that survives the network, aligned with the
+   programme by its TAI stamps. Heat from encoding twice is the main risk.
+4. **Talkback** (ARCHITECTURE.md, STROM_INTEGRATION.md). A low-latency
+   return audio path, playout to AirPods, and support in Strom: weeks, not
+   days. Most valuable for invited contributors.
+5. **SRTLA bonding and return video.** Later, as already planned.
+
 ## Other notes
 
 - **Avoid two servers.** Settled: the hub is one library (`tallycam-hub`)

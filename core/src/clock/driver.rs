@@ -129,13 +129,41 @@ impl HostClock for InstantHostClock {
     }
 }
 
+/// `CLOCK_BOOTTIME` in ns: the clock of Camera2 `SENSOR_TIMESTAMP` with the
+/// `REALTIME` timestamp source, of `SystemClock.elapsedRealtimeNanos()` and
+/// of `AudioTimestamp.TIMEBASE_BOOTTIME`. It counts suspend, so nothing is
+/// paused.
+#[cfg(target_os = "android")]
+#[derive(Debug, Default)]
+pub struct BootTimeHostClock;
+
+#[cfg(target_os = "android")]
+impl HostClock for BootTimeHostClock {
+    fn now_ns(&self) -> i64 {
+        let mut ts = libc::timespec {
+            tv_sec: 0,
+            tv_nsec: 0,
+        };
+        // SAFETY: plain out-parameter; CLOCK_BOOTTIME exists on every Android.
+        unsafe { libc::clock_gettime(libc::CLOCK_BOOTTIME, &mut ts) };
+        // time_t and c_long are i64 on 64-bit Android, i32 on 32-bit ARM.
+        #[allow(clippy::unnecessary_cast)]
+        let ns = ts.tv_sec as i64 * 1_000_000_000 + ts.tv_nsec as i64;
+        ns
+    }
+}
+
 /// The best host clock of this platform.
 pub fn default_host_clock() -> Arc<dyn HostClock> {
     #[cfg(target_vendor = "apple")]
     {
         Arc::new(MachHostClock::default())
     }
-    #[cfg(not(target_vendor = "apple"))]
+    #[cfg(target_os = "android")]
+    {
+        Arc::new(BootTimeHostClock)
+    }
+    #[cfg(not(any(target_vendor = "apple", target_os = "android")))]
     {
         Arc::new(InstantHostClock::default())
     }
@@ -577,6 +605,8 @@ impl ClockSource for DisciplineDriver {
 pub fn read_system_clock(host: &dyn HostClock) -> SystemClockReading {
     let host_ns = host.now_ns();
     let utc_ns = host.wall_utc_ns();
+    // Filled in below where the OS reports its discipline state.
+    #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
     let mut r = SystemClockReading {
         host_ns,
         utc_ns,

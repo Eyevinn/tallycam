@@ -14,9 +14,21 @@ The repository holds:
 
 - **The iOS and iPadOS app** (`ios/`, Swift): capture, encoding, the operator
   screen with tally, and the device side of the protocol.
+- **The Android app** (`android/`, Kotlin), early: provisioning, the
+  protocol with device keys, preview images, tally, camera names, H.264
+  plus Opus over SRT through the same core, and the camera controls with the
+  iOS ids (lens, zoom, resolution, frame rate, stabilization, torch, exposure
+  with ISO, shutter and bias, white balance, focus, `focus_at`,
+  `wb_one_shot`), each offered only where Camera2 reports it. It streams in
+  a foreground service (screen off, other app in front), has an in-app QR
+  scanner, H.264 or HEVC with Opus or AAC, `srt_latency_ms`, `mains_hz`
+  (auto exposure anti-banding), `clock_log`, and soft genlock through the
+  core's loop (manual exposure only: Camera2 applies a frame duration only
+  with auto exposure off). Tested on the emulator so far; manual exposure,
+  genlock, zoom and lens switching wait for a real phone.
 - **A shared Rust core** (`core/`): the clock discipline, frame timestamps,
   the MPEG-TS muxer, the SRT caller, genlock and auto ISO, device keys and
-  the protocol types. Android will use the same core.
+  the protocol types. The Android app uses the same core.
 - **The hub** (`hub/`): the server side of the Live Contribution Protocol
   (LCP) as a library, which Strom embeds, and **`control-hub/`**, the same
   library as a standalone server with a web page for operators.
@@ -46,11 +58,12 @@ What works today, on an iPhone 16 and an iPad 10:
 | Path | What |
 |---|---|
 | `ios/` | The iOS/iPadOS app (`project.yml` for XcodeGen, `Config/`, `TallyCam/`, `TallyCamTests/`) |
-| `core/` | `tallycam-core` (Rust), `core/srt` (SRT caller), `core/ffi` (Swift bindings: UniFFI and a small C ABI) |
+| `android/` | The Android app (Gradle, Kotlin, Jetpack Compose, Camera2, MediaCodec) |
+| `core/` | `tallycam-core` (Rust), `core/srt` (SRT caller), `core/ffi` (Swift bindings: UniFFI and a small C ABI), `core/android` (the same for Android, plus JNI wrappers of the C ABI) |
 | `hub/` | `tallycam-hub`: the LCP server side as a library, with the operator web page in `hub/web/` |
 | `control-hub/` | The standalone hub binary, and `fake_device`, a simulated phone |
 | `tools/` | `fake-camera`, `sync-probe`, `clockd-probe`, `srt-spike`, `torch-pair` |
-| `scripts/` | `build-core-apple.sh`: builds the core and its Swift bindings for Xcode |
+| `scripts/` | `build-core-apple.sh` and `build-core-android.sh`: build the core and its Swift or Kotlin bindings |
 | `docs/` | Design notes and measurements (see below) |
 | `design/` | App icon sketches |
 
@@ -79,6 +92,32 @@ into `build/core/` at the repository root (also not committed).
 
 For latency comparisons, the launch argument `-videoLowLatency NO` turns
 VideoToolbox's low-latency rate control off.
+
+### The Android app
+
+Requires a JDK 17, the Android SDK with platform 35 and an NDK, Rust with
+`aarch64-linux-android`, and `cargo-ndk` (`cargo install cargo-ndk`):
+
+```sh
+cd android
+echo "sdk.dir=$HOME/Library/Android/sdk" > local.properties
+./gradlew assembleDebug testDebugUnitTest      # builds the core first (scripts/build-core-android.sh)
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+```
+
+`-PskipCore` reuses the core already built. The core is one library,
+`libtallycam_android.so`: the UniFFI API of `core/ffi` (Kotlin bindings
+generated into `app/build/generated/uniffi`) and JNI wrappers of its
+per-frame C ABI, so frames reach the muxer in direct buffers. Android's host
+clock is `CLOCK_BOOTTIME`, the clock of Camera2 and AudioRecord timestamps.
+On the emulator the hub is `10.0.2.2`; provision with
+`adb shell am start -a android.intent.action.VIEW -d 'tallycam://connect?control=ws%3A%2F%2F10.0.2.2%3A8090%2Flcp%2Fv0%2Fdevice&srt=srt%3A%2F%2F10.0.2.2%3A9000%3Fstreamid%3D%7Bdevice%7D'`.
+Measure latency with a release build (`assembleRelease`, signed with the
+debug key unless `android/keystore.properties` names a release key): a
+debuggable build runs the app's code with little JIT and queues about a
+second of video. On the emulator a release build sends video about 160 ms
+after capture (p50, 720p, software encoder), audio about 150 ms. Without a
+hardware H.264 encoder the app streams 720p.
 
 ### The core and the hub
 

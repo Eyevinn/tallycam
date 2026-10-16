@@ -1,0 +1,17 @@
+[package]
+name = "tallycam-android"
+description = "Android/Kotlin bindings of the TallyCam core: the UniFFI API of tallycam-core-ffi in one library with JNI wrappers of its per-frame C ABI"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+name = "tallycam_android"
+crate-type = ["cdylib", "lib"]
+
+[dependencies]
+# Linked in as an rlib, so its UniFFI scaffolding, its C ABI and the clock
+# snapshot those calls read all live in this one library.
+tallycam-core-ffi = { path = "../ffi" }
+jni = { version = "0.21", default-features = false }

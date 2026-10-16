@@ -6,7 +6,7 @@
 # directory and depends on the core and the hub library by path. sync-probe and fake-camera are standalone tools.
 [workspace]
 resolver = "2"
-members = ["core", "core/ffi", "core/srt", "hub", "tools/clockd-probe", "tools/srt-spike"]
+members = ["core", "core/ffi", "core/srt", "core/android", "hub", "tools/clockd-probe", "tools/srt-spike"]
 exclude = ["control-hub", "tools/sync-probe", "tools/fake-camera"]
 
 [workspace.package]

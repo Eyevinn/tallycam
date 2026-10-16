@@ -1,0 +1,332 @@
+package se.eyevinn.tallycam.control
+
+import org.json.JSONArray
+import org.json.JSONObject
+import se.eyevinn.tallycam.media.CameraCapture
+import se.eyevinn.tallycam.media.CameraCapture.ExposureMode
+import se.eyevinn.tallycam.media.CameraCapture.FocusMode
+import se.eyevinn.tallycam.media.CameraCapture.WhiteBalanceMode
+import kotlin.math.roundToInt
+
+/**
+ * The camera controls (docs/PROTOCOL.md, "Controls in the iOS prototype"),
+ * with the same ids and meanings as on iOS, offered only where this camera
+ * has them: descriptors for `hello`, current values for `state` (measured
+ * in auto modes), and `set`.
+ */
+class CameraControls(
+    private val camera: CameraCapture,
+    private val isLive: () -> Boolean,
+    /** Persists `mains_hz` (50, 60, 0). */
+    private val saveMainsHz: (Int) -> Unit = {},
+) {
+    /** A resolution set while live; applied when the stream stops. */
+    var pendingResolution: Int? = null
+        private set
+
+    private fun whenMode(control: String, vararg modes: String) = JSONObject().put(control,
+        if (modes.size == 1) modes[0] else JSONArray(modes.toList()))
+
+    private fun options(vararg pairs: Pair<Any, String>) =
+        JSONArray(pairs.map { JSONObject().put("value", it.first).put("label", it.second) })
+
+    private fun enumControl(id: String, label: String, group: String, options: JSONArray) =
+        JSONObject().put("id", id).put("label", label).put("group", group).put("kind", "enum").put("options", options)
+
+    fun descriptors(): List<JSONObject> {
+        val c = camera
+        val list = mutableListOf<JSONObject>()
+        if (c.lenses.size > 1) {
+            list += enumControl("lens", "Lens", "lens", options(*c.lenses.map { it.key to it.label }.toTypedArray()))
+        }
+        c.zoomRange?.let {
+            list += Controls.range("zoom", "Zoom", "lens", it.lower.toDouble(), it.upper.toDouble(), 0.1, "x")
+                .put("scale", "log")
+        }
+        if (c.resolutions.size > 1) {
+            list += enumControl("resolution", "Resolution", "image",
+                                options(*c.resolutions.map { "${it}p" to "${it}p" }.toTypedArray()))
+        }
+        if (c.frameRates.size > 1) {
+            list += enumControl("frame_rate", "Frame rate", "image",
+                                options(*c.frameRates.map { it to "$it fps" }.toTypedArray()))
+        }
+        if (c.hasStabilization) {
+            list += enumControl("stabilization", "Stabilization", "image", options("off" to "Off", "standard" to "Standard"))
+        }
+        if (c.hasTorch) list += Controls.bool("torch", "Torch", "image")
+        // Exposure.
+        val modes = mutableListOf<Pair<Any, String>>("auto" to "Auto", "locked" to "Locked")
+        if (c.hasManualSensor) modes += "manual" to "Manual"
+        list += enumControl("exposure_mode", "Exposure", "exposure", options(*modes.toTypedArray()))
+        if (c.hasManualSensor) {
+            c.isoRange?.let {
+                list += Controls.range("iso", "ISO", "exposure", it.lower.toDouble(), it.upper.toDouble(), 1.0, "")
+                    .put("scale", "log").put("enabled_when", whenMode("exposure_mode", "manual"))
+            }
+            // Genlock needs manual exposure on Android (docs/GENLOCK.md).
+            list += Controls.bool("genlock", "Genlock", "image").put("enabled_when", whenMode("exposure_mode", "manual"))
+            list += Controls.range("genlock_offset_us", "Genlock offset", "image", -50000.0, 50000.0, 10.0, "µs")
+            shutters().takeIf { it.isNotEmpty() }?.let { shutters ->
+                list += enumControl("shutter", "Shutter", "exposure", options(*shutters.map { it to "1/$it" }.toTypedArray()))
+                    .put("enabled_when", whenMode("exposure_mode", "manual"))
+            }
+        }
+        mainsOptions().takeIf { it.size > 1 }?.let { hz ->
+            list += enumControl("mains_hz", "Mains frequency", "exposure",
+                                options(*hz.map { it to if (it == 0) "Off" else "$it Hz" }.toTypedArray()))
+        }
+        c.evRange?.let { (range, step) ->
+            list += Controls.range("ev_bias", "Exposure bias", "exposure", (range.lower * step).toDouble(),
+                                   (range.upper * step).toDouble(), step.toDouble(), "EV")
+                .put("enabled_when", whenMode("exposure_mode", "auto"))
+        }
+        // White balance.
+        val presets = c.awbPresets.filter { it in CameraMath.PRESET_KELVIN }
+        val wbModes = mutableListOf<Pair<Any, String>>("auto" to "Auto", "locked" to "Locked")
+        if (presets.isNotEmpty()) wbModes += "manual" to "Manual"
+        list += enumControl("wb_mode", "White balance", "white_balance", options(*wbModes.toTypedArray()))
+        if (presets.isNotEmpty()) {
+            val kelvins = presets.map { CameraMath.PRESET_KELVIN.getValue(it) }
+            list += Controls.range("wb_temperature", "Temperature", "white_balance", kelvins.min().toDouble(),
+                                   kelvins.max().toDouble(), 100.0, "K")
+                .put("enabled_when", whenMode("wb_mode", "manual"))
+        }
+        // Focus.
+        if (c.minFocusDiopters != null) {
+            list += enumControl("focus_mode", "Focus", "focus",
+                                options("auto" to "Auto", "locked" to "Locked", "manual" to "Manual"))
+            list += Controls.range("focus_position", "Focus position", "focus", 0.0, 1.0, 0.01, "")
+                .put("enabled_when", whenMode("focus_mode", "manual"))
+        }
+        return list
+    }
+
+    fun commands(): List<JSONObject> {
+        val list = mutableListOf<JSONObject>()
+        list += Controls.command("focus_at", "Focus at point").put("args", JSONObject().put("x", "0..1").put("y", "0..1"))
+        list += Controls.command("wb_one_shot", "White balance once")
+        return list
+    }
+
+    private fun shutters(): List<Int> {
+        val range = camera.exposureRange ?: return emptyList()
+        return CameraMath.shutterOptions(range.lower, range.upper, camera.settings.frameRate)
+    }
+
+    fun values(): JSONObject {
+        val c = camera
+        val s = c.settings
+        val m = c.measured
+        val v = JSONObject()
+        if (c.lenses.size > 1) c.lenses.firstOrNull { it.id == c.cameraId }?.let { v.put("lens", it.key) }
+        if (c.zoomRange != null) v.put("zoom", (s.zoom * 100).roundToInt() / 100.0)
+        if (c.resolutions.size > 1) v.put("resolution", "${pendingResolution ?: c.streamSize.height}p")
+        if (c.frameRates.size > 1) v.put("frame_rate", s.frameRate)
+        if (c.hasStabilization) v.put("stabilization", if (s.stabilization) "standard" else "off")
+        if (c.hasTorch) v.put("torch", s.torch)
+        v.put("exposure_mode", s.exposureMode.name.lowercase())
+        if (c.hasManualSensor) {
+            v.put("genlock", s.genlock)
+            v.put("genlock_offset_us", s.genlockOffsetNs / 1000.0)
+            val iso = if (s.exposureMode == ExposureMode.MANUAL) s.iso else m.iso
+            iso?.let { v.put("iso", it) }
+            val ns = if (s.exposureMode == ExposureMode.MANUAL) s.exposureNs else m.exposureNs
+            ns?.let { v.put("shutter", CameraMath.shutterDenominator(it, shutters().ifEmpty { CameraMath.SHUTTERS })) }
+        }
+        if (mainsOptions().size > 1) v.put("mains_hz", MAINS_OF[s.antibanding] ?: 0)
+        c.evRange?.let { (_, step) -> v.put("ev_bias", (s.evSteps * step * 100).roundToInt() / 100.0) }
+        v.put("wb_mode", s.whiteBalanceMode.name.lowercase())
+        if (s.whiteBalanceMode == WhiteBalanceMode.MANUAL) {
+            CameraMath.PRESET_KELVIN[s.awbPreset]?.let { v.put("wb_temperature", it) }
+        }
+        c.minFocusDiopters?.let { min ->
+            v.put("focus_mode", s.focusMode.name.lowercase())
+            val diopters = if (s.focusMode == FocusMode.AUTO) m.focusDiopters else s.focusDiopters
+            diopters?.let { v.put("focus_position", (CameraMath.focusPosition(it, min) * 100).roundToInt() / 100.0) }
+        }
+        return v
+    }
+
+    /** Applies one control; returns an error or warning, or null. */
+    fun apply(id: String, value: Any): String? {
+        val c = camera
+        val s = c.settings
+        fun number(): Double? = (value as? Number)?.toDouble()?.takeIf { it.isFinite() }
+        return when (id) {
+            "lens" -> {
+                val lens = c.lenses.firstOrNull { it.key == value } ?: return "expected " + c.lenses.joinToString(" or ") { it.key }
+                c.switchLens(lens.id)
+                null
+            }
+            "zoom" -> {
+                val range = c.zoomRange ?: return "not available on this lens"
+                val zoom = number() ?: return "expected a number"
+                val clamped = zoom.toFloat().coerceIn(range.lower, range.upper)
+                c.update { it.copy(zoom = clamped) }
+                if (clamped.toDouble() == zoom) null else "clamped to $clamped"
+            }
+            "resolution" -> {
+                val height = (value as? String)?.removeSuffix("p")?.toIntOrNull()?.takeIf { it in c.resolutions }
+                    ?: return "expected " + c.resolutions.joinToString(" or ") { "${it}p" }
+                if (isLive()) {
+                    pendingResolution = height
+                    "applies when the stream stops"
+                } else {
+                    c.setResolution(height)
+                    null
+                }
+            }
+            "frame_rate" -> {
+                val fps = number()?.toInt()?.takeIf { it in c.frameRates } ?: return "expected " + c.frameRates.joinToString(" or ")
+                c.update { it.copy(frameRate = fps, exposureNs = it.exposureNs.coerceAtMost(1_000_000_000L / fps)) }
+                null
+            }
+            "stabilization" -> when (value) {
+                "off" -> { c.update { it.copy(stabilization = false) }; null }
+                "standard" -> { c.update { it.copy(stabilization = true) }; null }
+                else -> "expected off or standard"
+            }
+            "torch" -> if (value is Boolean) { c.update { it.copy(torch = value) }; null } else "expected a bool"
+            "exposure_mode" -> {
+                val mode = when (value) {
+                    "auto" -> ExposureMode.AUTO
+                    "locked" -> ExposureMode.LOCKED
+                    "manual" -> if (c.hasManualSensor) ExposureMode.MANUAL else return "manual exposure not supported"
+                    else -> return "expected auto, locked or manual"
+                }
+                // Manual starts from what auto exposure picked.
+                val m = c.measured
+                c.update {
+                    if (mode == ExposureMode.MANUAL && it.exposureMode != ExposureMode.MANUAL)
+                        it.copy(exposureMode = mode, iso = m.iso ?: it.iso, exposureNs = m.exposureNs ?: it.exposureNs)
+                    else it.copy(exposureMode = mode)
+                }
+                null
+            }
+            "iso" -> {
+                if (s.exposureMode != ExposureMode.MANUAL) return "requires exposure_mode manual"
+                val range = c.isoRange ?: return "not available"
+                val iso = number() ?: return "expected a number"
+                val clamped = iso.roundToInt().coerceIn(range.lower, range.upper)
+                c.update { it.copy(iso = clamped) }
+                if (clamped.toDouble() == iso) null else "clamped to $clamped"
+            }
+            "shutter" -> {
+                if (s.exposureMode != ExposureMode.MANUAL) return "requires exposure_mode manual"
+                val d = number()?.toInt()?.takeIf { it in shutters() } ?: return "expected one of " + shutters().joinToString()
+                c.update { it.copy(exposureNs = CameraMath.shutterNs(d)) }
+                null
+            }
+            "genlock" -> {
+                if (value !is Boolean) return "expected a bool"
+                if (!c.hasManualSensor) return "needs manual exposure, which this camera lacks"
+                if (value && s.exposureMode != ExposureMode.MANUAL) return "requires exposure_mode manual"
+                c.update { it.copy(genlock = value) }
+                null
+            }
+            "genlock_offset_us" -> {
+                val us = number() ?: return "expected a number"
+                val clamped = us.coerceIn(-50000.0, 50000.0)
+                c.update { it.copy(genlockOffsetNs = (clamped * 1000).toLong()) }
+                if (clamped == us) null else "clamped to $clamped"
+            }
+            "mains_hz" -> {
+                val hz = number()?.takeIf { it == 50.0 || it == 60.0 || it == 0.0 }?.toInt()
+                    ?: return "expected 50, 60 or 0 (off)"
+                if (hz !in mainsOptions()) return "not supported by this camera"
+                setMainsHz(hz)
+                saveMainsHz(hz)
+                null
+            }
+            "ev_bias" -> {
+                if (s.exposureMode != ExposureMode.AUTO) return "requires exposure_mode auto"
+                val (range, step) = c.evRange ?: return "not available"
+                val ev = number() ?: return "expected a number"
+                val steps = (ev / step).roundToInt().coerceIn(range.lower, range.upper)
+                c.update { it.copy(evSteps = steps) }
+                if (kotlin.math.abs(steps * step - ev) < 1e-6) null else "rounded to ${steps * step}"
+            }
+            "wb_mode" -> {
+                val mode = when (value) {
+                    "auto" -> WhiteBalanceMode.AUTO
+                    "locked" -> WhiteBalanceMode.LOCKED
+                    "manual" -> if (c.awbPresets.any { it in CameraMath.PRESET_KELVIN }) WhiteBalanceMode.MANUAL
+                                else return "manual white balance not supported"
+                    else -> return "expected auto, locked or manual"
+                }
+                c.update { it.copy(whiteBalanceMode = mode) }
+                null
+            }
+            "wb_temperature" -> {
+                if (s.whiteBalanceMode != WhiteBalanceMode.MANUAL) return "requires wb_mode manual"
+                val k = number() ?: return "expected a number"
+                val preset = CameraMath.nearestPreset(k, c.awbPresets) ?: return "not available"
+                c.update { it.copy(awbPreset = preset) }
+                val applied = CameraMath.PRESET_KELVIN.getValue(preset)
+                // Camera2 offers presets, not any temperature.
+                if (applied.toDouble() == k) null else "nearest preset $applied K"
+            }
+            "focus_mode" -> {
+                val min = c.minFocusDiopters ?: return "fixed focus"
+                val mode = when (value) {
+                    "auto" -> FocusMode.AUTO
+                    "locked" -> FocusMode.LOCKED
+                    "manual" -> FocusMode.MANUAL
+                    else -> return "expected auto, locked or manual"
+                }
+                // Locked and manual start at the distance auto focus found.
+                val d = c.measured.focusDiopters
+                c.update {
+                    if (mode != FocusMode.AUTO && it.focusMode == FocusMode.AUTO)
+                        it.copy(focusMode = mode, focusDiopters = (d ?: it.focusDiopters).coerceIn(0f, min), meteringPoint = null)
+                    else it.copy(focusMode = mode, meteringPoint = if (mode == FocusMode.AUTO) it.meteringPoint else null)
+                }
+                null
+            }
+            "focus_position" -> {
+                if (s.focusMode != FocusMode.MANUAL) return "requires focus_mode manual"
+                val min = c.minFocusDiopters ?: return "fixed focus"
+                val p = number() ?: return "expected a number"
+                c.update { it.copy(focusDiopters = CameraMath.focusDiopters(p, min)) }
+                if (p in 0.0..1.0) null else "clamped to 0..1"
+            }
+            else -> "Unknown control $id"
+        }
+    }
+
+    /**
+     * Mains frequency for the auto exposure's anti-banding (flicker from
+     * mains-powered light): 50, 60, or 0 for off (no such light, e.g.
+     * outdoors). Camera2 does this itself; there is no auto ISO loop here.
+     */
+    fun setMainsHz(hz: Int) {
+        val mode = MAINS_OF.entries.firstOrNull { it.value == hz }?.key ?: return
+        camera.update { it.copy(antibanding = mode) }
+    }
+
+    private fun mainsOptions(): List<Int> =
+        listOf(50, 60, 0).filter { hz -> MAINS_OF.entries.any { it.value == hz && it.key in camera.antibandingModes } }
+
+    /** Ids this table handles. */
+    fun handles(id: String) = id in IDS
+
+    /** Called when the stream stops: a resolution set while live. */
+    fun streamStopped() {
+        pendingResolution?.let {
+            pendingResolution = null
+            camera.setResolution(it)
+        }
+    }
+
+    companion object {
+        val IDS = setOf("lens", "zoom", "resolution", "frame_rate", "stabilization", "torch", "exposure_mode", "iso",
+                        "shutter", "genlock", "genlock_offset_us", "mains_hz", "ev_bias", "wb_mode", "wb_temperature", "focus_mode", "focus_position")
+
+        private val MAINS_OF = mapOf(
+            android.hardware.camera2.CameraMetadata.CONTROL_AE_ANTIBANDING_MODE_50HZ to 50,
+            android.hardware.camera2.CameraMetadata.CONTROL_AE_ANTIBANDING_MODE_60HZ to 60,
+            android.hardware.camera2.CameraMetadata.CONTROL_AE_ANTIBANDING_MODE_OFF to 0,
+        )
+    }
+}

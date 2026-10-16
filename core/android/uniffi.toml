@@ -1,0 +1,5 @@
+# Kotlin bindings of tallycam-core-ffi, loaded from libtallycam_android.so
+# (scripts/build-core-android.sh passes this file to uniffi-bindgen).
+[crates.tallycam_core_ffi.bindings.kotlin]
+package_name = "se.eyevinn.tallycam.core"
+cdylib_name = "tallycam_android"

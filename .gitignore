@@ -45,3 +45,17 @@ target/
 
 # Python bytecode (tools/torch-pair)
 __pycache__/
+
+# Android (android/): Gradle output, local SDK path, the core built by scripts/build-core-android.sh
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/app/src/main/jniLibs/
+android/.idea/
+*.iml
+
+# Android release signing (android/app/build.gradle.kts)
+android/keystore.properties
+*.jks
+*.keystore

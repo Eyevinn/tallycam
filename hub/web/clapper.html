@@ -16,6 +16,10 @@
   #info { color: var(--muted); font-size: 14px; line-height: 1.5; max-width: 40em; }
   button { font-size: 20px; padding: 12px 28px; border-radius: 10px; border: 1px solid var(--muted);
     background: #222; color: var(--fg); cursor: pointer; }
+  #options { display: flex; gap: 20px; color: var(--muted); font-size: 16px; }
+  #options label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+  #options input { width: 18px; height: 18px; }
+  body.running #options { display: none; }
 </style>
 </head>
 <body>
@@ -36,10 +40,14 @@
 -->
 <div id="ui">
   <div id="clock">--:--:--</div>
-  <button id="start">Start</button>
+  <button id="toggle">Start</button>
+  <div id="options">
+    <label title="Off: flash only, for camera-to-camera tests"><input type="checkbox" id="sound" checked> Sound</label>
+    <label title="Each second's flash starts (second mod 34) ms later, crossing a whole 30p frame in 34 s"><input type="checkbox" id="sweep"> Sweep</label>
+  </div>
   <div id="info">Flash and beep on every whole second; longer every 5th second.
     Full screen, built-in speakers, volume up. Film this screen with the camera
-    under test.</div>
+    under test. Stop: the button, Esc, or tap the screen.</div>
 </div>
 <script>
 "use strict";
@@ -107,19 +115,66 @@ function frame(t) {
   requestAnimationFrame(frame);
 }
 
-// ?silent: flash only, no audio (camera-to-camera tests).
-const silent = new URLSearchParams(location.search).has("silent");
-const sweep = new URLSearchParams(location.search).has("sweep");
+// Sound off: flash only (camera-to-camera tests). ?silent and ?sweep set the
+// boxes' starting values.
+const params = new URLSearchParams(location.search);
+const toggleEl = document.getElementById("toggle");
+const soundEl = document.getElementById("sound");
+const sweepEl = document.getElementById("sweep");
+soundEl.checked = !params.has("silent");
+sweepEl.checked = params.has("sweep");
+let sweep = sweepEl.checked;
+sweepEl.addEventListener("change", () => { sweep = sweepEl.checked; });
 let started = false;
-document.getElementById("start").addEventListener("click", async () => {
+let beepTimer = null;
+
+async function start() {
   started = true;
+  body.classList.add("running");
+  toggleEl.textContent = "Stop";
   try { await document.documentElement.requestFullscreen(); } catch (e) { /* not available */ }
-  document.getElementById("start").remove();
-  if (silent) return;
+  if (!soundEl.checked) {
+    infoEl.textContent = "Flash only, no sound. Stop: the button, Esc, or tap the screen.";
+    return;
+  }
   ctx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: "interactive" });
   await ctx.resume();
+  scheduledUntil = 0;
   scheduleBeeps();
-  setInterval(scheduleBeeps, 250);
+  beepTimer = setInterval(scheduleBeeps, 250);
+}
+
+function stop() {
+  started = false;
+  body.classList.remove("running", "lit");
+  toggleEl.textContent = "Start";
+  clearInterval(beepTimer);
+  beepTimer = null;
+  // Closing the context also silences the beeps already scheduled.
+  if (ctx) {
+    ctx.close();
+    ctx = null;
+  }
+  if (document.fullscreenElement) {
+    document.exitFullscreen().catch(() => {});
+  }
+  infoEl.textContent = "Stopped. Flash and beep on every whole second; longer every 5th second.";
+}
+
+toggleEl.addEventListener("click", e => {
+  e.stopPropagation();
+  started ? stop() : start();
+});
+// While running, a tap anywhere stops it (the button is hidden during flashes).
+document.addEventListener("pointerdown", e => {
+  if (started && e.target !== toggleEl) stop();
+});
+document.addEventListener("keydown", e => {
+  if (started && e.key === "Escape") stop();
+});
+// Leaving full screen (Esc in most browsers) stops too.
+document.addEventListener("fullscreenchange", () => {
+  if (started && !document.fullscreenElement) stop();
 });
 requestAnimationFrame(frame);
 </script>

@@ -122,6 +122,10 @@ async fn hub_end_to_end() {
             key_path.to_str().unwrap(),
             "--name",
             "Fake One",
+            // Ungated control, as an app before shading; protocol 2 has its
+            // own test below.
+            "--protocol",
+            "1",
         ])
         .kill_on_drop(true)
         .stdout(std::process::Stdio::null())
@@ -390,6 +394,163 @@ async fn hub_end_to_end() {
     .await;
     let e = wait_for(&mut d, 3, "offline error", |v| v["type"] == "error").await;
     assert!(e["message"].as_str().unwrap().contains("offline"));
+
+    fake_proc.kill().await.ok();
+    let _ = std::fs::remove_dir_all(&key_dir);
+}
+
+/// Shading with the real fake device at protocol 2: ownership reported and
+/// enforced by the hub and the phone, take over and release, image stats,
+/// and the production settings.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shading_end_to_end() {
+    let addr = start_hub().await;
+    let key_dir = temp_dir("e2e-shading");
+    let key_path = key_dir.join("fake.key");
+    let fake = device_key::load_or_create(&key_path)
+        .unwrap()
+        .public_key()
+        .device_id();
+    let mut fake_proc = tokio::process::Command::new(env!("CARGO_BIN_EXE_fake_device"))
+        .args([
+            "--url",
+            &format!("ws://{addr}/lcp/v0/device"),
+            "--key",
+            key_path.to_str().unwrap(),
+        ])
+        .kill_on_drop(true)
+        .stdout(std::process::Stdio::null())
+        .spawn()
+        .expect("spawn fake_device");
+
+    let mut a = connect(addr, "/lcp/v0/control").await;
+    let snap = wait_for(&mut a, 3, "snapshot", |v| v["type"] == "snapshot").await;
+    assert_eq!(snap["production"]["mains_hz"], 50);
+    let own = wait_for(&mut a, 5, "ownership", |v| is(v, "device_ownership", &fake)).await;
+    assert_eq!(own["groups"]["exposure"]["owner"], "auto", "{own}");
+    let shader_a = json!({"id":"a1","label":"Shader A"});
+    let shader_b = json!({"id":"b2","label":"Shader B"});
+
+    // Not owned: the hub refuses, nothing reaches the phone.
+    send(
+        &mut a,
+        json!({"type":"set","device":fake,"id":1,"holder":shader_a,"values":{"iso":400}}),
+    )
+    .await;
+    let e = wait_for(&mut a, 3, "refusal", |v| v["type"] == "error").await;
+    assert_eq!(
+        e["message"],
+        "exposure is not under remote control: take over first"
+    );
+
+    // Take over exposure and colour.
+    send(
+        &mut a,
+        json!({"type":"own","device":fake,"id":2,"groups":["exposure","white_balance"],"holder":shader_a}),
+    )
+    .await;
+    let own = wait_for(&mut a, 3, "ownership remote", |v| {
+        is(v, "device_ownership", &fake) && v["groups"]["exposure"]["owner"] == "remote"
+    })
+    .await;
+    assert_eq!(
+        own["groups"]["white_balance"]["holder"]["label"],
+        "Shader A"
+    );
+    assert_eq!(own["groups"]["focus"]["owner"], "auto");
+    let r = wait_for(&mut a, 3, "own result", |v| {
+        is(v, "device_result", &fake) && v["id"] == 2
+    })
+    .await;
+    assert_eq!(r["ok"], true, "{r}");
+
+    // The holder sets; another holder is refused by the hub.
+    send(
+        &mut a,
+        json!({"type":"set","device":fake,"id":3,"holder":shader_a,
+               "values":{"exposure_mode":"manual","iso":400,"zoom":2.0}}),
+    )
+    .await;
+    let r = wait_for(&mut a, 3, "set result", |v| {
+        is(v, "device_result", &fake) && v["id"] == 3
+    })
+    .await;
+    assert_eq!(r["ok"], true, "{r}");
+    send(
+        &mut a,
+        json!({"type":"set","device":fake,"id":4,"holder":shader_b,"values":{"iso":800}}),
+    )
+    .await;
+    let e = wait_for(&mut a, 3, "held refusal", |v| v["type"] == "error").await;
+    assert_eq!(
+        e["message"],
+        "exposure is held by Shader A: take over first"
+    );
+
+    // Image statistics while a controller is connected, reacting to ISO.
+    let st = wait_for(&mut a, 5, "image stats", |v| {
+        is(v, "device_image_stats", &fake) && v["camera"]["iso"] == 400
+    })
+    .await;
+    let dark = st["luma"]["mean"].as_f64().unwrap();
+    assert!(st["luma"]["histogram"].as_str().unwrap().len() > 10);
+    send(
+        &mut a,
+        json!({"type":"set","device":fake,"holder":shader_a,"values":{"iso":1600}}),
+    )
+    .await;
+    let st = wait_for(&mut a, 5, "brighter stats", |v| {
+        is(v, "device_image_stats", &fake) && v["camera"]["iso"] == 1600
+    })
+    .await;
+    assert!(st["luma"]["mean"].as_f64().unwrap() > dark, "{st}");
+
+    // Production: applied while idle, refused while live.
+    send(
+        &mut a,
+        json!({"type":"production","mains_hz":60,"shutter":"mains"}),
+    )
+    .await;
+    let p = wait_for(&mut a, 3, "production", |v| v["type"] == "production").await;
+    assert_eq!(p["mains_hz"], 60);
+    wait_for(&mut a, 5, "shutter 1/60", |v| {
+        is(v, "device_state", &fake) && v["values"]["shutter"] == 60
+    })
+    .await;
+    send(
+        &mut a,
+        json!({"type":"set","device":fake,"values":{"live":true}}),
+    )
+    .await;
+    wait_for(&mut a, 5, "live", |v| {
+        is(v, "device_status", &fake)
+            && matches!(v["stream"]["state"].as_str(), Some("live" | "connecting"))
+    })
+    .await;
+    send(
+        &mut a,
+        json!({"type":"production","mains_hz":50,"shutter":"mains"}),
+    )
+    .await;
+    let e = wait_for(&mut a, 3, "production refused", |v| v["type"] == "error").await;
+    assert_eq!(e["message"], "production: not while cameras are live");
+
+    // Release: back to auto.
+    send(
+        &mut a,
+        json!({"type":"release","device":fake,"id":5,"groups":["exposure"]}),
+    )
+    .await;
+    wait_for(&mut a, 3, "auto exposure", |v| {
+        is(v, "device_state", &fake) && v["values"]["exposure_mode"] == "auto"
+    })
+    .await;
+    let own = wait_for(&mut a, 3, "ownership after release", |v| {
+        is(v, "device_ownership", &fake)
+    })
+    .await;
+    assert_eq!(own["groups"]["exposure"]["owner"], "auto");
+    assert_eq!(own["groups"]["white_balance"]["owner"], "remote");
 
     fake_proc.kill().await.ok();
     let _ = std::fs::remove_dir_all(&key_dir);

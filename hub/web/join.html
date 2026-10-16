@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Join as a camera</title>
+<style>
+  :root { --bg: #0f1216; --card: #171b21; --line: #2a313b; --text: #e8eaed; --muted: #8b95a1; --accent: #3b82f6; }
+  @media (prefers-color-scheme: light) {
+    :root { --bg: #f4f5f7; --card: #fff; --line: #d9dde3; --text: #1b1f24; --muted: #5d6673; }
+  }
+  html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--text);
+    font: 16px/1.5 -apple-system, system-ui, sans-serif; }
+  main { max-width: 480px; margin: 0 auto; padding: 48px 16px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 24px; }
+  h1 { font-size: 22px; margin: 0 0 8px; }
+  p { margin: 0 0 16px; color: var(--muted); }
+  a.open { display: block; text-align: center; background: var(--accent); color: #fff; text-decoration: none;
+    font-weight: 600; padding: 14px; border-radius: 10px; font-size: 18px; }
+  ol { color: var(--muted); padding-left: 20px; margin: 16px 0 0; }
+  .bad { color: #e5534b; }
+</style>
+</head>
+<body>
+<!--
+  A clickable link for joining as a camera, for e-mail or messages, where a
+  tallycam:// link is not clickable. The deep link is in the URL fragment
+  (#tallycam://connect?...), so it and any invite token in it never reach a
+  server. Only tallycam:// links are followed: this page cannot send anyone
+  to another site.
+-->
+<main>
+  <div class="card">
+    <h1>Join as a camera</h1>
+    <p id="lead">This phone becomes a camera in the production.</p>
+    <a class="open" id="open" hidden>Open in TallyCam</a>
+    <ol id="steps">
+      <li>Install TallyCam on this phone.</li>
+      <li>Tap <b>Open in TallyCam</b> above.</li>
+      <li>The app connects by itself. If it asks, allow camera and microphone.</li>
+    </ol>
+  </div>
+</main>
+<script>
+"use strict";
+const SCHEME = "tallycam:";
+const link = decodeURIComponent(location.hash.slice(1));
+const open = document.getElementById("open");
+if (link.toLowerCase().startsWith(SCHEME + "//")) {
+  open.href = link;
+  open.hidden = false;
+  // Straight into the app where it is installed; the button stays for
+  // browsers that block the automatic switch.
+  location.href = link;
+} else {
+  const lead = document.getElementById("lead");
+  lead.textContent = "This link is incomplete. Ask for a new one.";
+  lead.className = "bad";
+  document.getElementById("steps").hidden = true;
+}
+</script>
+</body>
+</html>

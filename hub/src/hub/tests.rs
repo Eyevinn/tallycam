@@ -1,5 +1,6 @@
 use super::*;
 use crate::device_key::SoftwareKey;
+use crate::protocol::{Holder, Owner, ShutterPolicy};
 
 /// Records what the hub saves.
 #[derive(Default)]
@@ -151,6 +152,15 @@ fn set_tally_reaches_phone_and_subscribers_once_per_change() {
     assert!(matches!(
         phone.try_recv(),
         Ok(ServerToDevice::Preview { .. })
+    ));
+    // A protocol 2 phone also gets the production and the stats preference.
+    assert!(matches!(
+        phone.try_recv(),
+        Ok(ServerToDevice::Production(_))
+    ));
+    assert!(matches!(
+        phone.try_recv(),
+        Ok(ServerToDevice::Stats { enabled: false, .. })
     ));
 
     let mut events = hub.subscribe();
@@ -639,4 +649,353 @@ fn a_device_forgotten_after_admission_cannot_join() {
         saved_before,
         "not saved back"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Shading: ownership checks, production, image statistics
+// ---------------------------------------------------------------------------
+
+fn hello_v1(id: &str, name: &str) -> Hello {
+    Hello {
+        protocol: 1,
+        ..hello(id, name)
+    }
+}
+
+fn holder(id: &str, label: &str) -> Holder {
+    Holder {
+        id: id.into(),
+        label: label.into(),
+    }
+}
+
+/// What a controller frame does, through the same parsing as the server.
+fn controller(hub: &Hub, json: Value) -> Result<(), String> {
+    match crate::protocol::ControllerInput::parse(&json.to_string())? {
+        Some(crate::protocol::ControllerInput::Device(req)) => hub.controller_request(req),
+        Some(crate::protocol::ControllerInput::Production(p)) => hub.set_production(p),
+        None => Ok(()),
+    }
+}
+
+/// The phone reports `exposure` remote for `holder`, the rest auto.
+fn report_exposure_held(hub: &Hub, device: &str, by: Holder) {
+    let conn = CONNS.with(|c| c.borrow()[device]);
+    let groups: Ownership = serde_json::from_value(serde_json::json!({
+        "exposure": { "owner": "remote", "holder": by },
+        "white_balance": { "owner": "local" },
+        "focus": { "owner": "auto" },
+    }))
+    .unwrap();
+    hub.device_message(conn, device, DeviceMessage::Ownership { groups });
+}
+
+fn report_stream(hub: &Hub, device: &str, state: &str) {
+    let conn = CONNS.with(|c| c.borrow()[device]);
+    let status: Status =
+        serde_json::from_value(serde_json::json!({ "stream": { "state": state } })).unwrap();
+    hub.device_message(conn, device, DeviceMessage::Status(status));
+}
+
+#[test]
+fn a_set_on_a_group_needs_its_remote_holder() {
+    let hub = Hub::new();
+    let mut phone = connect_phone(&hub, "cam1");
+    report_exposure_held(&hub, "cam1", holder("a", "Shader A"));
+    assert_eq!(hub.devices()[0].protocol, PROTOCOL_VERSION);
+    assert_eq!(hub.devices()[0].ownership["exposure"].owner, Owner::Remote);
+
+    // Another holder, and no holder at all.
+    let set_iso = |h: Option<Value>| {
+        let mut m =
+            serde_json::json!({ "type": "set", "device": "cam1", "values": { "iso": 400 } });
+        if let Some(h) = h {
+            m["holder"] = h;
+        }
+        m
+    };
+    assert_eq!(
+        controller(
+            &hub,
+            set_iso(Some(serde_json::json!({ "id": "b", "label": "Shader B" })))
+        ),
+        Err("exposure is held by Shader A: take over first".into())
+    );
+    assert_eq!(
+        controller(&hub, set_iso(None)),
+        Err("exposure is held by Shader A: take over first".into())
+    );
+    assert!(phone.try_recv().is_err(), "nothing sent on a refusal");
+
+    // The holder: forwarded, without the holder.
+    controller(
+        &hub,
+        set_iso(Some(serde_json::json!({ "id": "a", "label": "Shader A" }))),
+    )
+    .unwrap();
+    let Ok(ServerToDevice::Set { values, .. }) = phone.try_recv() else {
+        panic!("expected the set")
+    };
+    assert_eq!(values["iso"], 400);
+
+    // A group that is not remote, in the same set as a held one: refused whole.
+    let both = serde_json::json!({
+        "type": "set", "device": "cam1", "holder": { "id": "a", "label": "Shader A" },
+        "values": { "iso": 200, "wb_temperature": 5600 },
+    });
+    assert_eq!(
+        controller(&hub, both),
+        Err("white_balance is not under remote control: take over first".into())
+    );
+    // Keys outside the groups need no holder.
+    controller(
+        &hub,
+        serde_json::json!({ "type": "set", "device": "cam1", "values": { "zoom": 2.0 } }),
+    )
+    .unwrap();
+    assert!(matches!(phone.try_recv(), Ok(ServerToDevice::Set { .. })));
+    // Commands by their group.
+    assert_eq!(
+        controller(
+            &hub,
+            serde_json::json!({ "type": "command", "device": "cam1", "name": "focus_at",
+                                "args": { "x": 0.5, "y": 0.5 } }),
+        ),
+        Err("focus is not under remote control: take over first".into())
+    );
+    controller(
+        &hub,
+        serde_json::json!({ "type": "command", "device": "cam1", "name": "clock_log" }),
+    )
+    .unwrap();
+    assert!(matches!(
+        phone.try_recv(),
+        Ok(ServerToDevice::Command { .. })
+    ));
+    // The shutter joins exposure only when the production shutter is free.
+    let shutter =
+        serde_json::json!({ "type": "set", "device": "cam1", "values": { "shutter": 100 } });
+    controller(&hub, shutter.clone()).unwrap();
+    assert!(matches!(phone.try_recv(), Ok(ServerToDevice::Set { .. })));
+    hub.set_production(Production {
+        shutter: ShutterPolicy::Free,
+        ..default_production()
+    })
+    .unwrap();
+    assert!(matches!(
+        phone.try_recv(),
+        Ok(ServerToDevice::Production(_))
+    ));
+    assert!(controller(&hub, shutter).is_err());
+}
+
+#[test]
+fn own_and_release_are_forwarded_with_the_holder() {
+    let hub = Hub::new();
+    let mut phone = connect_phone(&hub, "cam1");
+    controller(
+        &hub,
+        serde_json::json!({ "type": "own", "device": "cam1", "id": 3,
+                            "groups": ["exposure"], "holder": { "id": "a", "label": "Shader A" } }),
+    )
+    .unwrap();
+    assert_eq!(
+        phone.try_recv().unwrap(),
+        ServerToDevice::Own {
+            id: Some(Value::from(3)),
+            groups: vec!["exposure".into()],
+            holder: holder("a", "Shader A"),
+        }
+    );
+    assert!(controller(
+        &hub,
+        serde_json::json!({ "type": "own", "device": "cam1", "groups": ["exposure"],
+                            "holder": { "id": "", "label": "x" } }),
+    )
+    .is_err());
+    controller(
+        &hub,
+        serde_json::json!({ "type": "release", "device": "cam1", "groups": ["exposure"] }),
+    )
+    .unwrap();
+    assert!(matches!(
+        phone.try_recv(),
+        Ok(ServerToDevice::Release { .. })
+    ));
+}
+
+#[test]
+fn protocol_1_devices_get_requests_unchecked_and_no_shading() {
+    let hub = Hub::new();
+    let (tx, mut phone) = mpsc::unbounded_channel();
+    let conn = hub.new_connection_id();
+    join(&hub, conn, hello_v1("old", "Old app"), tx);
+    CONNS.with(|c| c.borrow_mut().insert("old".into(), conn));
+    // Admission sends tally and preview only.
+    assert!(matches!(phone.try_recv(), Ok(ServerToDevice::Tally { .. })));
+    assert!(matches!(
+        phone.try_recv(),
+        Ok(ServerToDevice::Preview { .. })
+    ));
+    assert!(phone.try_recv().is_err(), "no production or stats");
+
+    controller(
+        &hub,
+        serde_json::json!({ "type": "set", "device": "old", "values": { "iso": 400, "wb_tint": 3 } }),
+    )
+    .unwrap();
+    assert!(matches!(phone.try_recv(), Ok(ServerToDevice::Set { .. })));
+    controller(
+        &hub,
+        serde_json::json!({ "type": "command", "device": "old", "name": "focus_at",
+                            "holder": { "id": "a" } }),
+    )
+    .unwrap();
+    assert!(matches!(
+        phone.try_recv(),
+        Ok(ServerToDevice::Command { .. })
+    ));
+    assert!(controller(
+        &hub,
+        serde_json::json!({ "type": "own", "device": "old", "groups": ["exposure"],
+                            "holder": { "id": "a", "label": "A" } }),
+    )
+    .unwrap_err()
+    .contains("protocol 1"));
+    hub.set_production(Production {
+        mains_hz: 60,
+        ..default_production()
+    })
+    .unwrap();
+    assert!(
+        phone.try_recv().is_err(),
+        "production goes to protocol 2 only"
+    );
+    assert_eq!(hub.devices()[0].protocol, 1);
+}
+
+#[test]
+fn production_is_sent_on_admission_and_refused_while_live() {
+    let hub = Hub::new();
+    let mut events = hub.subscribe();
+    hub.set_production(Production {
+        mains_hz: 60,
+        shutter: ShutterPolicy::Fixed(120),
+        extra: Map::new(),
+    })
+    .unwrap();
+    assert!(matches!(
+        &*events.try_recv().unwrap().event,
+        ControllerEvent::Production(p) if p.mains_hz == 60
+    ));
+
+    let (tx, mut phone) = mpsc::unbounded_channel();
+    let conn = hub.new_connection_id();
+    join(&hub, conn, hello("cam1", "Cam 1"), tx);
+    CONNS.with(|c| c.borrow_mut().insert("cam1".into(), conn));
+    let sent: Vec<_> = std::iter::from_fn(|| phone.try_recv().ok()).collect();
+    assert!(sent.iter().any(|m| matches!(
+        m,
+        ServerToDevice::Production(p) if p.mains_hz == 60 && p.shutter == ShutterPolicy::Fixed(120)
+    )));
+
+    report_stream(&hub, "cam1", "connecting");
+    let fifty = default_production();
+    assert_eq!(
+        hub.set_production(fifty.clone()),
+        Err("not while cameras are live".into())
+    );
+    report_stream(&hub, "cam1", "live");
+    assert!(controller(
+        &hub,
+        serde_json::json!({ "type": "production", "mains_hz": 50, "shutter": "mains" })
+    )
+    .is_err());
+    assert!(phone.try_recv().is_err());
+    // Unchanged settings are fine while live.
+    assert_eq!(hub.production().mains_hz, 60);
+    hub.set_production(hub.production()).unwrap();
+
+    // A camera that went offline while live does not block it.
+    hub.device_disconnected(conn, "cam1");
+    hub.set_production(fifty.clone()).unwrap();
+    assert_eq!(hub.production(), fifty);
+    assert!(hub
+        .set_production(Production {
+            mains_hz: 55,
+            ..fifty
+        })
+        .is_err());
+}
+
+#[test]
+fn image_stats_follow_the_controllers() {
+    let hub = Arc::new(Hub::new());
+    let mut v2 = connect_phone(&hub, "cam1");
+    let (tx, mut v1) = mpsc::unbounded_channel();
+    join(&hub, hub.new_connection_id(), hello_v1("old", "Old"), tx);
+    while v1.try_recv().is_ok() {}
+
+    let (snapshot, _rx, guard) = hub.controller_joined();
+    assert!(snapshot.contains(r#""production":{"mains_hz":50,"shutter":"mains"}"#));
+    assert!(matches!(
+        v2.try_recv(),
+        Ok(ServerToDevice::Preview { enabled: true, .. })
+    ));
+    assert_eq!(
+        v2.try_recv().unwrap(),
+        ServerToDevice::Stats {
+            enabled: true,
+            fps: Some(DEFAULT_STATS_FPS)
+        }
+    );
+    assert!(matches!(
+        v1.try_recv(),
+        Ok(ServerToDevice::Preview { enabled: true, .. })
+    ));
+    assert!(v1.try_recv().is_err(), "no stats for protocol 1");
+
+    // A second controller changes nothing; a controller's rate is clamped.
+    let (_, _rx2, guard2) = hub.controller_joined();
+    assert!(v2.try_recv().is_err());
+    controller(
+        &hub,
+        serde_json::json!({ "type": "stats", "device": "cam1", "enabled": true, "fps": 10 }),
+    )
+    .unwrap();
+    assert_eq!(
+        v2.try_recv().unwrap(),
+        ServerToDevice::Stats {
+            enabled: true,
+            fps: Some(4.0)
+        }
+    );
+
+    // The device's statistics are kept for the snapshot.
+    let conn = CONNS.with(|c| c.borrow()["cam1"]);
+    let stats: ImageStats =
+        serde_json::from_value(serde_json::json!({ "luma": { "mean": 0.4, "clipped": 0.01 } }))
+            .unwrap();
+    hub.device_message(conn, "cam1", DeviceMessage::ImageStats(stats.clone()));
+    assert_eq!(hub.devices()[0].image_stats, Some(stats));
+
+    drop(guard2);
+    assert!(v2.try_recv().is_err());
+    drop(guard);
+    assert!(matches!(
+        v2.try_recv(),
+        Ok(ServerToDevice::Preview { enabled: false, .. })
+    ));
+    assert_eq!(
+        v2.try_recv().unwrap(),
+        ServerToDevice::Stats {
+            enabled: false,
+            fps: None
+        }
+    );
+    assert!(matches!(
+        v1.try_recv(),
+        Ok(ServerToDevice::Preview { enabled: false, .. })
+    ));
+    assert!(v1.try_recv().is_err());
 }

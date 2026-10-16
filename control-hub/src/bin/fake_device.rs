@@ -1,7 +1,7 @@
 //! Fake LCP v0 phone for testing the control hub without an iPhone.
 //!
 //! Usage: fake_device [--url ws://127.0.0.1:8090/lcp/v0/device] [--key PATH | --legacy-id ID]
-//! [--name NAME]
+//! [--name NAME] [--protocol 1|2]
 //!
 //! Proves a device key like the app: the hello carries the public key, the
 //! hub's `challenge` is answered with a signed `auth`, and the device id is
@@ -12,6 +12,13 @@
 //! honouring `enabled_when`, replying with `result`), sends `status` every
 //! second and generated JPEG previews while the hub asks for them. Reconnects
 //! after a disconnect.
+//!
+//! With protocol 2 (the default for a keyed device) it also acts like a
+//! phone with shading (docs/SHADING.md): it runs the core's ownership state
+//! machine for exposure, colour and focus, answers `own` and `release`,
+//! refuses `set` keys and commands of groups the remote does not own, applies
+//! the hub's `production`, and sends `image_stats` from its test picture
+//! while the hub asks for them. `--protocol 1` acts as an app before that.
 
 use std::f64::consts::PI;
 use std::io::Cursor;
@@ -22,13 +29,17 @@ use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Map, Value};
 use tallycam_core::clock::report::clock_status;
 use tallycam_core::clock::sim::{Scenario, SimServer, Simulation};
+use tallycam_core::image_stats::{self, Grid};
+use tallycam_core::ownership::{command_group, control_group, Group, Ownership};
 use tallycam_hub::device_key::{self, SoftwareKey};
 use tallycam_hub::protocol::{
     Battery, CommandDescriptor, ControlDescriptor, ControlKind, DeviceInfo, DeviceMessage,
-    EnumOption, Hello, Log, Preview, Scale, ServerToDevice, Status, StreamStatus, TallyState,
-    Values, CONTROL_PATH, DEVICE_PATH, PROTOCOL_VERSION,
+    EnumOption, Hello, Log, Preview, Production, Scale, ServerToDevice, ShutterPolicy, Status,
+    StreamStatus, TallyState, Values, CONTROL_PATH, DEVICE_PATH, PROTOCOL_VERSION,
 };
-use tallycam_hub::protocol::{ClockStatus, CommandResult, Percentiles, StreamLatency};
+use tallycam_hub::protocol::{
+    ClockStatus, CommandResult, Holder, ImageStats, Percentiles, StreamLatency,
+};
 use tokio::time::{interval, sleep, sleep_until, MissedTickBehavior};
 use tokio_tungstenite::tungstenite::Message;
 
@@ -83,6 +94,8 @@ struct Args {
     key: Option<String>,
     legacy_id: Option<String>,
     name: String,
+    /// `hello.protocol` of a keyed device (a legacy one always sends 0).
+    protocol: u32,
 }
 
 fn parse_args() -> Args {
@@ -91,6 +104,7 @@ fn parse_args() -> Args {
         key: None,
         legacy_id: None,
         name: "Fake iPhone".into(),
+        protocol: PROTOCOL_VERSION,
     };
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
@@ -103,13 +117,21 @@ fn parse_args() -> Args {
             "--key" => a.key = Some(val()),
             "--legacy-id" => a.legacy_id = Some(val()),
             "--name" => a.name = val(),
+            "--protocol" => {
+                a.protocol = match val().parse() {
+                    Ok(p) if (1..=PROTOCOL_VERSION).contains(&p) => p,
+                    _ => die(&format!("--protocol must be 1 to {PROTOCOL_VERSION}")),
+                }
+            }
             "--help" | "-h" => {
                 println!(
-                    "fake_device [--url URL] [--key PATH | --legacy-id ID] [--name NAME]\n\
+                    "fake_device [--url URL] [--key PATH | --legacy-id ID] [--name NAME] [--protocol N]\n\
                      URL defaults to ws://127.0.0.1:8090{DEVICE_PATH} (controllers use {CONTROL_PATH}).\n\
                      --key PATH       device key file (hex P-256 secret), created when missing;\n\
                      \x20                default: a new key, and so a new device, on every run.\n\
-                     --legacy-id ID   no device key, this id (an app before device keys)."
+                     --legacy-id ID   no device key, this id (an app before device keys).\n\
+                     --protocol N     LCP version in hello, 1 to {PROTOCOL_VERSION} (default\n\
+                     \x20                {PROTOCOL_VERSION}); 1 has no ownership, production or image stats."
                 );
                 std::process::exit(0);
             }
@@ -405,6 +427,49 @@ struct Camera {
     started: Instant,
     rng: u64,
     clock: FakeClock,
+    /// `hello.protocol`.
+    protocol: u32,
+    /// Who owns exposure, colour and focus (protocol 2).
+    ownership: Ownership,
+    /// From the hub (protocol 2); `None` until it sends one.
+    production: Option<Production>,
+    /// `image_stats` per second while the hub asks for them.
+    stats: Option<f64>,
+    /// The production shutter in use (1/x s), `None` without a production
+    /// or under `free`. A new production waits until the stream stops.
+    applied_shutter: Option<i64>,
+}
+
+/// The test picture's parameters at one moment, shared by the preview and
+/// the image statistics.
+struct Scene {
+    exposure: f64,
+    warm: f64,
+    tint: f64,
+    zoom: f64,
+    torch: bool,
+    t: f64,
+}
+
+impl Scene {
+    /// Linear RGB (may exceed 1) at `xf`, `yf` in 0..1 of the frame.
+    fn rgb(&self, xf: f64, yf: f64) -> [f64; 3] {
+        let u = (xf - 0.5) / self.zoom * 4.0;
+        let v = (yf - 0.5) / self.zoom * 4.0 * 9.0 / 16.0;
+        let checker = (((u * 4.0).floor() + (v * 4.0).floor()) as i64).rem_euclid(2) as f64;
+        let rings = 0.5 + 0.5 * (((u * u + v * v).sqrt() * 6.0 * PI) - self.t).sin();
+        let mut base = 0.25 + 0.25 * checker + 0.3 * rings;
+        if self.torch {
+            let d = ((xf - 0.5).powi(2) + (yf - 0.5).powi(2)).sqrt();
+            base += (0.4 - d).max(0.0);
+        }
+        let l = base * self.exposure;
+        [
+            l * (1.0 + 0.35 * self.warm),
+            l * (1.0 - 0.25 * self.tint),
+            l * (1.0 - 0.35 * self.warm),
+        ]
+    }
 }
 
 impl Camera {
@@ -462,7 +527,44 @@ impl Camera {
             started: Instant::now(),
             rng: 0x2545_f491_4f6c_dd1d ^ u64::from(std::process::id()),
             clock: FakeClock::new(),
+            protocol: if args.legacy_id.is_some() {
+                0
+            } else {
+                args.protocol
+            },
+            ownership: Ownership::new(Group::ALL),
+            production: None,
+            stats: None,
+            applied_shutter: None,
         }
+    }
+
+    fn shading(&self) -> bool {
+        self.protocol >= 2
+    }
+
+    fn shutter_policy(&self) -> ShutterPolicy {
+        self.production
+            .as_ref()
+            .map(|p| p.shutter)
+            .unwrap_or_default()
+    }
+
+    /// The `ownership` message.
+    fn ownership_message(&self) -> DeviceMessage {
+        DeviceMessage::Ownership {
+            groups: self.ownership.report(),
+        }
+    }
+
+    /// May the remote change `group`? `None` for keys outside the groups and
+    /// for protocol 1.
+    fn refusal(&self, group: Option<Group>) -> Option<String> {
+        let group = group.filter(|_| self.shading())?;
+        self.ownership
+            .check_remote(group)
+            .err()
+            .map(|r| r.to_string())
     }
 
     fn rand(&mut self) -> f64 {
@@ -475,11 +577,7 @@ impl Camera {
 
     fn hello(&self) -> DeviceMessage {
         DeviceMessage::Hello(Hello {
-            protocol: if self.key.is_some() {
-                PROTOCOL_VERSION
-            } else {
-                0
-            },
+            protocol: self.protocol,
             device: self.info.clone(),
             public_key: self.key.as_ref().map(|k| k.public_key().to_base64()),
             controls: self.controls.clone(),
@@ -588,7 +686,25 @@ impl Camera {
         let old_lens = self.str_of("lens").to_string();
         // Controls without a condition first, so `{"exposure_mode":"manual",
         // "iso":400}` in one set works.
-        let (plain, conditional): (Vec<_>, Vec<_>) = values.iter().partition(|(k, _)| {
+        // Keys of groups the remote does not own are refused by name; the
+        // rest still apply.
+        let shutter = self.shutter_policy();
+        let mut refused = Vec::new();
+        let values_ok: Values = values
+            .iter()
+            .filter(|(k, _)| match self.refusal(control_group(k, shutter)) {
+                Some(why) => {
+                    if !refused.contains(&why) {
+                        refused.push(why);
+                    }
+                    false
+                }
+                None => true,
+            })
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        errors.append(&mut refused);
+        let (plain, conditional): (Vec<_>, Vec<_>) = values_ok.iter().partition(|(k, _)| {
             self.controls
                 .iter()
                 .find(|c| &c.id == *k)
@@ -658,8 +774,10 @@ impl Camera {
         args: Option<Map<String, Value>>,
     ) -> Vec<DeviceMessage> {
         let mut out = Vec::new();
-        let res: Result<(), String> = match name {
-            "focus_at" => {
+        let refused = self.refusal(command_group(name));
+        let res: Result<(), String> = match (name, refused) {
+            (_, Some(why)) => Err(why),
+            ("focus_at", None) => {
                 let args = args.unwrap_or_default();
                 let x = args.get("x").and_then(Value::as_f64);
                 let y = args.get("y").and_then(Value::as_f64);
@@ -684,7 +802,7 @@ impl Camera {
                     _ => Err("focus_at needs x and y in 0..1".into()),
                 }
             }
-            "wb_one_shot" => {
+            ("wb_one_shot", None) => {
                 let k = (5600.0 + (self.rand() - 0.5) * 400.0) / 50.0;
                 let k = (k.round() * 50.0) as i64;
                 self.state.insert("wb_mode".into(), json!("locked"));
@@ -695,7 +813,7 @@ impl Camera {
                 out.push(DeviceMessage::State { values });
                 Ok(())
             }
-            _ => Err(format!("unknown command '{name}'")),
+            (_, None) => Err(format!("unknown command '{name}'")),
         };
         if let Some(id) = id {
             out.push(DeviceMessage::Result(CommandResult {
@@ -708,18 +826,138 @@ impl Camera {
         out
     }
 
+    /// `own` from the hub: the values stay as they are.
+    fn apply_own(
+        &mut self,
+        id: Option<Value>,
+        groups: &[String],
+        holder: &Holder,
+    ) -> Vec<DeviceMessage> {
+        let taken = self.ownership.own(groups, holder);
+        println!(
+            "fake_device: own {groups:?} by {} ({}): taken {:?}, from local {:?}",
+            holder.label, holder.id, taken.taken, taken.from_local
+        );
+        let mut out = vec![self.ownership_message()];
+        if !taken.from_local.is_empty() {
+            let names: Vec<_> = taken.from_local.iter().map(|g| g.as_str()).collect();
+            out.push(DeviceMessage::Log(Log {
+                level: "info".into(),
+                message: format!("{} taken over by {}", names.join(", "), holder.label),
+            }));
+        }
+        if let Some(id) = id {
+            let skipped = (!taken.skipped.is_empty())
+                .then(|| format!("no such group: {}", taken.skipped.join(", ")));
+            out.push(DeviceMessage::Result(CommandResult {
+                id,
+                ok: skipped.is_none(),
+                error: skipped,
+                data: None,
+            }));
+        }
+        out
+    }
+
+    /// `release` from the hub: the released groups go back to auto (rule 4).
+    fn apply_release(&mut self, id: Option<Value>, groups: &[String]) -> Vec<DeviceMessage> {
+        let released = self.ownership.release(groups);
+        println!("fake_device: release {groups:?}: released {released:?}");
+        let mut values = Values::new();
+        for group in &released {
+            let auto: &[(&str, Value)] = match group {
+                Group::Exposure => &[("exposure_mode", json!("auto")), ("ev_bias", json!(0.0))],
+                Group::WhiteBalance => &[("wb_mode", json!("auto"))],
+                Group::Focus => &[("focus_mode", json!("auto"))],
+            };
+            for (k, v) in auto {
+                self.state.insert((*k).into(), v.clone());
+                values.insert((*k).into(), v.clone());
+            }
+        }
+        let mut out = Vec::new();
+        if !values.is_empty() {
+            out.push(DeviceMessage::State { values });
+        }
+        out.push(self.ownership_message());
+        if let Some(id) = id {
+            out.push(DeviceMessage::Result(CommandResult {
+                id,
+                ok: true,
+                error: None,
+                data: None,
+            }));
+        }
+        out
+    }
+
+    fn is_live(&self) -> bool {
+        self.state
+            .get("live")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    }
+
+    /// The shutter the production asks for, made to fit the frame rate (a
+    /// shutter longer than a frame doubles to the next flicker-free value).
+    fn production_shutter(&self) -> Option<i64> {
+        let p = self.production.as_ref()?;
+        let mut shutter = match p.shutter {
+            ShutterPolicy::Mains if p.mains_hz == 60 => 60,
+            ShutterPolicy::Mains => 50,
+            ShutterPolicy::Fixed(x) => i64::from(x),
+            ShutterPolicy::Free => return None,
+        };
+        let fps = self.num_of("frame_rate").max(1.0) as i64;
+        while shutter < fps {
+            shutter *= 2;
+        }
+        Some(shutter)
+    }
+
+    /// `production` from the hub; the shutter applies on the next tick, or
+    /// when the stream stops.
+    fn apply_production(&mut self, production: Production) -> Vec<DeviceMessage> {
+        println!(
+            "fake_device: production mains {} Hz, shutter {:?}",
+            production.mains_hz, production.shutter
+        );
+        self.production = Some(production);
+        if self.is_live() && self.production_shutter() != self.applied_shutter {
+            return vec![DeviceMessage::Log(Log {
+                level: "warn".into(),
+                message: "New production shutter applies when the stream stops".into(),
+            })];
+        }
+        Vec::new()
+    }
+
     /// Once a second: auto modes drift, so the operator sees measured values.
     fn tick(&mut self) -> (Status, Values) {
         let t = self.started.elapsed().as_secs_f64();
         let mut changed = Values::new();
+        // The production shutter, held while live.
+        if !self.is_live() {
+            self.applied_shutter = self.production_shutter();
+        }
+        if let Some(shutter) = self.applied_shutter {
+            let v = json!(shutter);
+            if self.state.get("shutter") != Some(&v) {
+                self.state.insert("shutter".into(), v.clone());
+                changed.insert("shutter".into(), v);
+            }
+        }
         if self.str_of("exposure_mode") == "auto" {
             let caps = lens_caps(self.str_of("lens"));
             let ev = self.num_of("ev_bias");
             let iso = (200.0 * 2f64.powf(ev) * (1.0 + 0.3 * (t / 7.0).sin()))
                 .clamp(caps.iso_min, caps.iso_max)
                 .round() as i64;
-            let shutter = if iso > 400 { 50 } else { 100 };
-            for (k, v) in [("iso", json!(iso)), ("shutter", json!(shutter))] {
+            let mut auto = vec![("iso", json!(iso))];
+            if self.applied_shutter.is_none() {
+                auto.push(("shutter", json!(if iso > 400 { 50 } else { 100 })));
+            }
+            for (k, v) in auto {
                 if self.state.get(k) != Some(&v) {
                     self.state.insert(k.into(), v.clone());
                     changed.insert(k.into(), v);
@@ -810,10 +1048,7 @@ impl Camera {
         (status, changed)
     }
 
-    /// A generated test picture that reacts to the controls.
-    fn render_preview(&self, width: u32) -> Option<Preview> {
-        let width = width.clamp(64, 1280);
-        let height = width * 9 / 16;
+    fn scene(&self) -> Scene {
         let t = self.started.elapsed().as_secs_f64();
         // Exposure: brighter with higher ISO and longer shutter.
         let iso = self.num_of("iso").max(1.0);
@@ -841,6 +1076,63 @@ impl Camera {
             .get("torch")
             .and_then(Value::as_bool)
             .unwrap_or(false);
+        Scene {
+            exposure,
+            warm,
+            tint,
+            zoom,
+            torch,
+            t,
+        }
+    }
+
+    /// `image_stats` of the test picture, on a coarse grid as a phone samples
+    /// it, so the hub's shader view reacts to ISO and white balance.
+    fn image_stats(&self) -> Option<ImageStats> {
+        const W: usize = 64;
+        const H: usize = 36;
+        let scene = self.scene();
+        let mut y = Vec::with_capacity(W * H);
+        let mut cbcr = Vec::with_capacity(2 * W * H);
+        for row in 0..H {
+            for col in 0..W {
+                let xf = (col as f64 + 0.5) / W as f64;
+                let yf = (row as f64 + 0.5) / H as f64;
+                let [r, g, b] = scene.rgb(xf, yf).map(|c| c.clamp(0.0, 1.0));
+                // BT.709 Y'CbCr, video range.
+                let luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+                let pb = (b - luma) / 1.8556;
+                let pr = (r - luma) / 1.5748;
+                y.push((16.0 + 219.0 * luma).round() as u8);
+                cbcr.push((128.0 + 224.0 * pb).round().clamp(16.0, 240.0) as u8);
+                cbcr.push((128.0 + 224.0 * pr).round().clamp(16.0, 240.0) as u8);
+            }
+        }
+        let mut stats = image_stats::compute(&Grid {
+            y: &y,
+            cbcr: &cbcr,
+            width: W,
+            height: H,
+            video_range: true,
+        })?;
+        let mut camera = Values::new();
+        for k in ["iso", "shutter", "wb_temperature", "wb_tint"] {
+            if let Some(v) = self.state.get(k) {
+                camera.insert(k.into(), v.clone());
+            }
+        }
+        let ev = (scene.exposure.log2() * 10.0).round() / 10.0;
+        camera.insert("exposure_offset_ev".into(), json!(ev));
+        stats.camera = Some(camera);
+        Some(stats)
+    }
+
+    /// A generated test picture that reacts to the controls.
+    fn render_preview(&self, width: u32) -> Option<Preview> {
+        let width = width.clamp(64, 1280);
+        let height = width * 9 / 16;
+        let scene = self.scene();
+        let t = scene.t;
         let (fx, fy) = self.focus_point;
         let tally_rgb = match self.tally {
             TallyState::Program => Some([220u8, 30, 30]),
@@ -851,23 +1143,7 @@ impl Camera {
 
         let mut img = image::RgbImage::new(width, height);
         for (x, y, px) in img.enumerate_pixels_mut() {
-            let u = (x as f64 / width as f64 - 0.5) / zoom * 4.0;
-            let v = (y as f64 / height as f64 - 0.5) / zoom * 4.0 * 9.0 / 16.0;
-            let checker = (((u * 4.0).floor() + (v * 4.0).floor()) as i64).rem_euclid(2) as f64;
-            let rings = 0.5 + 0.5 * (((u * u + v * v).sqrt() * 6.0 * PI) - t).sin();
-            let mut base = 0.25 + 0.25 * checker + 0.3 * rings;
-            if torch {
-                let d = ((x as f64 / width as f64 - 0.5).powi(2)
-                    + (y as f64 / height as f64 - 0.5).powi(2))
-                .sqrt();
-                base += (0.4 - d).max(0.0);
-            }
-            let l = base * exposure;
-            let mut rgb = [
-                l * (1.0 + 0.35 * warm),
-                l * (1.0 - 0.25 * tint),
-                l * (1.0 - 0.35 * warm),
-            ];
+            let mut rgb = scene.rgb(x as f64 / width as f64, y as f64 / height as f64);
             if x.abs_diff(bar_x) < 3 {
                 rgb = [0.9, 0.9, 0.2];
             }
@@ -923,6 +1199,7 @@ fn on_server_message(
     cam: &mut Camera,
     msg: ServerToDevice,
     next_preview: &mut tokio::time::Instant,
+    next_stats: &mut tokio::time::Instant,
     far: tokio::time::Instant,
 ) -> Vec<DeviceMessage> {
     let mut out = Vec::new();
@@ -960,6 +1237,26 @@ fn on_server_message(
                 *next_preview = far;
             }
             println!("fake_device: preview {:?}", cam.preview);
+        }
+        // Protocol 1 apps do not know these (they parse as unknown and are
+        // ignored), so neither does the fake device then.
+        ServerToDevice::Own { .. }
+        | ServerToDevice::Release { .. }
+        | ServerToDevice::Production(_)
+        | ServerToDevice::Stats { .. }
+            if !cam.shading() => {}
+        ServerToDevice::Own { id, groups, holder } => out = cam.apply_own(id, &groups, &holder),
+        ServerToDevice::Release { id, groups } => out = cam.apply_release(id, &groups),
+        ServerToDevice::Production(p) => out = cam.apply_production(p),
+        ServerToDevice::Stats { enabled, fps } => {
+            if enabled {
+                cam.stats = Some(fps.filter(|f| *f > 0.0).unwrap_or(1.0).clamp(0.2, 4.0));
+                *next_stats = tokio::time::Instant::now();
+            } else {
+                cam.stats = None;
+                *next_stats = far;
+            }
+            println!("fake_device: image stats {:?}", cam.stats);
         }
         ServerToDevice::Ping(p) => out.push(DeviceMessage::Pong(p)),
         // The fake device does not sync its clock; a late challenge is ignored.
@@ -1017,14 +1314,23 @@ async fn run_once(args: &Args, cam: &mut Camera) -> Result<(), String> {
         }
     }
     sink.send(text(&cam.full_state())).await.map_err(send_err)?;
+    if cam.shading() {
+        // After the full state, as a phone does (docs/SHADING.md).
+        cam.ownership.set_connected(true);
+        sink.send(text(&cam.ownership_message()))
+            .await
+            .map_err(send_err)?;
+    }
     cam.preview = None;
+    cam.stats = None;
 
     let mut status_tick = interval(Duration::from_secs(1));
     status_tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
     let far = tokio::time::Instant::now() + Duration::from_secs(86400 * 365);
     let mut next_preview = far;
+    let mut next_stats = far;
     for msg in early {
-        for m in on_server_message(cam, msg, &mut next_preview, far) {
+        for m in on_server_message(cam, msg, &mut next_preview, &mut next_stats, far) {
             sink.send(text(&m)).await.map_err(send_err)?;
         }
     }
@@ -1046,7 +1352,7 @@ async fn run_once(args: &Args, cam: &mut Camera) -> Result<(), String> {
                     Ok(m) => m,
                     Err(_) => continue, // unknown types are ignored
                 };
-                out = on_server_message(cam, msg, &mut next_preview, far);
+                out = on_server_message(cam, msg, &mut next_preview, &mut next_stats, far);
             }
             _ = status_tick.tick() => {
                 let (status, changed) = cam.tick();
@@ -1065,6 +1371,16 @@ async fn run_once(args: &Args, cam: &mut Camera) -> Result<(), String> {
                     next_preview = far;
                 }
             }
+            _ = sleep_until(next_stats) => {
+                if let Some(fps) = cam.stats {
+                    if let Some(stats) = cam.image_stats() {
+                        out.push(DeviceMessage::ImageStats(stats));
+                    }
+                    next_stats = tokio::time::Instant::now() + Duration::from_secs_f64(1.0 / fps);
+                } else {
+                    next_stats = far;
+                }
+            }
         }
         for m in &out {
             sink.send(text(m)).await.map_err(send_err)?;
@@ -1080,6 +1396,8 @@ async fn main() {
         if let Err(e) = run_once(&args, &mut cam).await {
             eprintln!("fake_device: {e}, reconnecting in 2 s");
         }
+        // Remote groups keep their values while the hub is away (rule 6).
+        cam.ownership.set_connected(false);
         sleep(Duration::from_secs(2)).await;
     }
 }

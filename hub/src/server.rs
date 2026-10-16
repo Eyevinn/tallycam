@@ -22,9 +22,7 @@ use tokio::time::{interval, timeout, MissedTickBehavior};
 use tracing::{debug, info, warn};
 
 use crate::hub::{check_hello_key, AdmitError, Challenge, Hub, Proof, DEFAULT_INVITE_TTL};
-use crate::protocol::{
-    ControllerEvent, ControllerRequest, DeviceMessage, CONTROL_PATH, DEVICE_PATH,
-};
+use crate::protocol::{ControllerEvent, ControllerInput, DeviceMessage, CONTROL_PATH, DEVICE_PATH};
 use crate::protocol::{Hello, ServerToDevice};
 use crate::provision::{deep_link, qr_svg, with_invite_token, Provisioning};
 
@@ -40,12 +38,15 @@ pub const AUTH_TIMEOUT: Duration = Duration::from_secs(10);
 const INDEX_HTML: &str = include_str!("../web/index.html");
 /// The digital clapper: flash and beep at whole seconds, to film for A/V sync.
 pub const CLAPPER_HTML: &str = include_str!("../web/clapper.html");
+/// A clickable join link for e-mail or messages: opens the deep link in its
+/// URL fragment (`/join#tallycam://connect?...`) in the app.
+pub const JOIN_HTML: &str = include_str!("../web/join.html");
 /// Where [`operator_page`] puts its configuration script.
 const CONFIG_MARKER: &str = "<!--TALLYCAM_CONFIG-->";
 
 /// The operator web UI for an embedding server, with `config` as
 /// `window.TALLYCAM_CONFIG` (keys: `controlPath`, `infoUrl`, `qrUrl`,
-/// `clapperUrl`, `inviteUrl`, `devicesUrl`, `title`; see the top of the
+/// `clapperUrl`, `joinPath`, `inviteUrl`, `devicesUrl`, `title`; see the top of the
 /// page's script).
 pub fn operator_page(config: &serde_json::Value) -> String {
     // "</" inside a script would end it early.
@@ -124,6 +125,7 @@ pub fn router_with(hub: Arc<Hub>, provisioning: Provisioning, options: ServerOpt
     Router::new()
         .route("/", get(index))
         .route("/clapper", get(clapper))
+        .route("/join", get(join))
         .route("/api/info", get(api_info))
         .route("/api/connect.svg", get(api_connect_svg))
         .route("/api/invite", post(api_invite))
@@ -139,6 +141,10 @@ pub fn router_with(hub: Arc<Hub>, provisioning: Provisioning, options: ServerOpt
 
 async fn clapper() -> impl IntoResponse {
     Html(CLAPPER_HTML)
+}
+
+async fn join() -> impl IntoResponse {
+    Html(JOIN_HTML)
 }
 
 /// The operator page. With invites required, "Add a camera" shows a fresh
@@ -606,14 +612,18 @@ fn handle_controller_text(hub: &Hub, text: &str) -> Option<String> {
             return Some(pong.to_string());
         }
     }
-    match ControllerRequest::parse(text) {
-        Ok(Some(req)) => {
+    match ControllerInput::parse(text) {
+        Ok(Some(ControllerInput::Device(req))) => {
             let device = req.device.clone();
             match hub.controller_request(req) {
                 Ok(()) => None,
                 Err(e) => reply(Some(device), e),
             }
         }
+        Ok(Some(ControllerInput::Production(production))) => match hub.set_production(production) {
+            Ok(()) => None,
+            Err(e) => reply(None, format!("production: {e}")),
+        },
         Ok(None) => None,
         Err(e) => reply(None, format!("bad request: {e}")),
     }

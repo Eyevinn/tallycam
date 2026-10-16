@@ -1,4 +1,5 @@
-//! Hub logic: device registry, controller fan-out, tally and preview gating.
+//! Hub logic: device registry, controller fan-out, tally and preview gating,
+//! and shading (ownership checks, production, image statistics).
 //!
 //! Transport independent. The WebSocket glue (`server.rs`, or the embedding
 //! server's own) feeds parsed messages in and drains the per-device channel
@@ -19,13 +20,14 @@ use tracing::{debug, info, warn};
 use crate::device_key::{KeyError, PublicKey};
 use crate::protocol::{
     CommandDescriptor, CommandResult, ControlDescriptor, ControllerEvent, ControllerRequest,
-    DeviceInfo, DeviceMessage, DeviceSnapshot, Hello, Preview, ServerToDevice, Status, TallyState,
-    Values, PROTOCOL_VERSION,
+    DeviceInfo, DeviceMessage, DeviceSnapshot, Hello, ImageStats, Ownership, Preview, Production,
+    ServerToDevice, Status, TallyState, Values, PROTOCOL_VERSION,
 };
 use crate::store::{DeviceStore, NoStore, StoredDevice};
 
 mod admission;
 mod calls;
+mod shading;
 #[cfg(test)]
 mod tests;
 
@@ -33,6 +35,8 @@ pub(crate) use admission::random_token;
 pub use admission::{check_hello_key, Admission, AdmitError, Challenge, Proof};
 pub use calls::CallError;
 use calls::PendingCall;
+use shading::{check_holder_shape, clamp_stats_fps, StatsPref};
+pub use shading::{default_production, DEFAULT_STATS_FPS, SHADING_PROTOCOL};
 
 /// Channel to one connected phone.
 pub type DeviceTx = mpsc::UnboundedSender<ServerToDevice>;
@@ -102,7 +106,13 @@ struct DeviceEntry {
     status: Option<Status>,
     preview: Option<Preview>,
     tally: TallyState,
+    /// `hello.protocol`; 2 and up know ownership, production and stats.
+    protocol: u32,
+    /// As the device last reported it; the device is the source of truth.
+    ownership: Ownership,
+    image_stats: Option<ImageStats>,
     preview_pref: PreviewPref,
+    stats_pref: StatsPref,
     conn: Option<Connection>,
 }
 
@@ -118,7 +128,11 @@ impl DeviceEntry {
             status: None,
             preview: None,
             tally: TallyState::Off,
+            protocol: 0,
+            ownership: Ownership::new(),
+            image_stats: None,
             preview_pref: PreviewPref::default(),
+            stats_pref: StatsPref::default(),
             conn: None,
         };
         entry.set_key(public_key);
@@ -135,6 +149,9 @@ impl DeviceEntry {
             status: self.status.clone(),
             preview: self.preview.clone(),
             tally: self.tally,
+            protocol: self.protocol,
+            ownership: self.ownership.clone(),
+            image_stats: self.image_stats.clone(),
             online: self.conn.is_some(),
             key_fingerprint: self.key_fingerprint(),
         }
@@ -184,7 +201,6 @@ impl DeviceEntry {
     }
 }
 
-#[derive(Default)]
 struct Inner {
     /// Keyed by `device.id` from `hello`.
     devices: HashMap<String, DeviceEntry>,
@@ -202,6 +218,24 @@ struct Inner {
     forgets: HashMap<String, u64>,
     /// [`Hub::set_preview_fps`]; `None` is [`DEFAULT_PREVIEW_FPS`].
     preview_fps: Option<f64>,
+    /// Sent to every protocol 2 device; see [`Hub::set_production`].
+    production: Production,
+}
+
+impl Default for Inner {
+    fn default() -> Self {
+        Self {
+            devices: HashMap::new(),
+            order: Vec::new(),
+            controllers: 0,
+            pending: HashMap::new(),
+            invite_required: false,
+            invites: HashMap::new(),
+            forgets: HashMap::new(),
+            preview_fps: None,
+            production: default_production(),
+        }
+    }
 }
 
 impl Inner {
@@ -399,8 +433,11 @@ impl Hub {
         link: Option<(DeviceTx, Option<String>)>,
     ) {
         let controllers = inner.controllers;
+        let production = inner.production.clone();
         let id = hello.device.id.clone();
-        if hello.protocol != PROTOCOL_VERSION {
+        // Older devices are fine (version 1 has no ownership); a newer one
+        // may use messages this hub does not know.
+        if hello.protocol > PROTOCOL_VERSION {
             warn!(
                 "Device {id} speaks protocol {}, hub speaks {PROTOCOL_VERSION}",
                 hello.protocol
@@ -426,6 +463,12 @@ impl Hub {
         }
         let changed = new_device || key_changed || entry.info != hello.device;
         entry.info = hello.device;
+        entry.protocol = hello.protocol;
+        if !entry.shading() {
+            // An older app on the same device reports no ownership.
+            entry.ownership.clear();
+            entry.image_stats = None;
+        }
         let save = changed.then(|| entry.stored());
         entry.controls = hello.controls;
         entry.commands = hello.commands;
@@ -440,6 +483,10 @@ impl Hub {
             // Bring the phone up to date with what the hub owns.
             entry.send(ServerToDevice::Tally { state: entry.tally });
             entry.send(entry.preview_command(controllers));
+            if entry.shading() {
+                entry.send(ServerToDevice::Production(production));
+                entry.send_stats(controllers);
+            }
             // Calls sent on the old connection will not be answered.
             inner.drop_pending_for(&id);
         } else {
@@ -455,6 +502,7 @@ impl Hub {
             info: entry.info.clone(),
             controls: entry.controls.clone(),
             commands: entry.commands.clone(),
+            protocol: entry.protocol,
             key_fingerprint: entry.key_fingerprint(),
         };
         self.emit(event);
@@ -501,6 +549,14 @@ impl Hub {
                 ControllerEvent::DeviceResult { device, result }
             }
             DeviceMessage::Log(log) => ControllerEvent::DeviceLog { device, log },
+            DeviceMessage::Ownership { groups } => {
+                entry.ownership = groups.clone();
+                ControllerEvent::DeviceOwnership { device, groups }
+            }
+            DeviceMessage::ImageStats(stats) => {
+                entry.image_stats = Some(stats.clone());
+                ControllerEvent::DeviceImageStats { device, stats }
+            }
             DeviceMessage::Ping(p) => {
                 entry.send(ServerToDevice::Pong(p));
                 return;
@@ -544,6 +600,7 @@ impl Hub {
         serde_json::to_string(&ControllerEvent::Snapshot {
             protocol: PROTOCOL_VERSION,
             devices: Self::snapshot_list(inner),
+            production: inner.production.clone(),
         })
         .unwrap_or_else(|_| "{}".into())
     }
@@ -556,9 +613,10 @@ impl Hub {
         let mut inner = self.lock();
         inner.controllers += 1;
         if inner.controllers == 1 {
-            info!("First controller connected, enabling previews");
+            info!("First controller connected, enabling previews and image stats");
             for entry in inner.devices.values() {
                 entry.send(entry.preview_command(1));
+                entry.send_stats(1);
             }
         }
         let snapshot = Self::snapshot_json(&inner);
@@ -582,9 +640,10 @@ impl Hub {
         let mut inner = self.lock();
         inner.controllers = inner.controllers.saturating_sub(1);
         if inner.controllers == 0 {
-            info!("Last controller disconnected, disabling previews");
+            info!("Last controller disconnected, disabling previews and image stats");
             for entry in inner.devices.values() {
                 entry.send(entry.preview_command(0));
+                entry.send_stats(0);
             }
         }
     }
@@ -646,12 +705,31 @@ impl Hub {
     }
 
     /// Handle a controller request. `Err` goes back to that controller only.
+    ///
+    /// On a protocol 2 device, a `set` key or `command` in a control group
+    /// (exposure, colour, focus) is refused, and nothing is sent, unless the
+    /// request's holder owns that group. `own` and `release` need protocol 2.
     pub fn controller_request(&self, req: ControllerRequest) -> Result<(), String> {
         let mut inner = self.lock();
         let controllers = inner.controllers;
+        let shutter = inner.production.shutter;
         let Some(entry) = inner.devices.get_mut(&req.device) else {
             return Err(format!("unknown device '{}'", req.device));
         };
+        entry.check_holder(&req.message, req.holder.as_ref(), shutter)?;
+        if matches!(
+            req.message,
+            ServerToDevice::Own { .. } | ServerToDevice::Release { .. }
+        ) && !entry.shading()
+        {
+            return Err(format!(
+                "device '{}' has no remote ownership (protocol {}): update the app",
+                req.device, entry.protocol
+            ));
+        }
+        if let ServerToDevice::Own { holder, .. } = &req.message {
+            check_holder_shape(holder)?;
+        }
         match req.message {
             ServerToDevice::Tally { state } => {
                 self.apply_tally(entry, &req.device, state);
@@ -671,9 +749,24 @@ impl Hub {
                 entry.send(entry.preview_command(controllers));
                 Ok(())
             }
+            ServerToDevice::Stats { enabled, fps } => {
+                entry.stats_pref = StatsPref {
+                    enabled,
+                    fps: fps
+                        .filter(|f| f.is_finite() && *f > 0.0)
+                        .map(clamp_stats_fps)
+                        .unwrap_or(entry.stats_pref.fps),
+                };
+                entry.send_stats(controllers);
+                Ok(())
+            }
             ServerToDevice::Ping(_) | ServerToDevice::Pong(_) => Ok(()),
-            ServerToDevice::Challenge { .. } => Err("not a controller request".into()),
+            ServerToDevice::Challenge { .. } | ServerToDevice::Production(_) => {
+                Err("not a controller request".into())
+            }
             msg @ (ServerToDevice::Set { .. }
+            | ServerToDevice::Own { .. }
+            | ServerToDevice::Release { .. }
             | ServerToDevice::Command { .. }
             | ServerToDevice::Message { .. }) => {
                 if entry.conn.is_none() {

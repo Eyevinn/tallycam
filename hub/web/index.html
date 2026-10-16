@@ -72,6 +72,8 @@ main { flex: 1; display: flex; min-height: 0; }
 .add code { font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; word-break: break-all; color: var(--text); }
 .add select { background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 3px 6px; max-width: 100%; }
 .add .note { color: var(--muted); font-size: 12px; margin-top: 12px; }
+.add .share { display: flex; gap: 8px; align-items: center; margin-top: 6px; flex-wrap: wrap; }
+.add .copied { color: var(--muted); font-size: 12px; }
 #modal {
   position: fixed; inset: 0; background: rgba(0, 0, 0, .6); z-index: 50;
   display: flex; align-items: flex-start; justify-content: center; padding: 48px 16px; overflow: auto;
@@ -93,8 +95,11 @@ main { flex: 1; display: flex; min-height: 0; }
 .card-head { display: flex; align-items: center; gap: 8px; padding: 6px 8px; }
 .card-head .name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .card-head .model { color: var(--muted); font-size: 11px; margin-left: auto; white-space: nowrap; }
-.media { position: relative; background: #000; aspect-ratio: 16 / 9; }
-.media img { width: 100%; height: 100%; object-fit: contain; display: block; }
+/* Always 16:9: a portrait camera is shown pillarboxed, so its card is not
+   taller than the others. The image is positioned so it cannot stretch the
+   box (aspect-ratio is only a preferred size). */
+.media { position: relative; background: #000; aspect-ratio: 16 / 9; overflow: hidden; }
+.media img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; display: block; }
 .media .overlay {
   position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
   color: var(--faint); font-size: 12px; text-transform: uppercase; letter-spacing: .08em;
@@ -222,12 +227,71 @@ a.btn { color: inherit; text-decoration: none; display: inline-flex; align-items
 #log .debug { color: var(--muted); }
 .offline-note { color: var(--warn); font-size: 12px; }
 .offline-note:empty { display: none; }
+
+/* Shading view */
+#shade { flex: 1; overflow: auto; padding: 12px 16px 24px; display: flex; flex-direction: column; gap: 12px; }
+#shade[hidden], #grid[hidden] { display: none; }
+.shade-bar {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 8px 12px;
+}
+.shade-bar label { color: var(--muted); display: inline-flex; align-items: center; gap: 6px; }
+.shade-bar input[type=text], .shade-bar select, .shade-card select {
+  background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 3px 6px;
+}
+.shade-bar input[type=text] { width: 120px; }
+.shade-bar .note { color: var(--warn); font-size: 12px; }
+.shade-bar .note:empty { display: none; }
+.shade-bar .spacer { flex: 1; }
+#shade-grid {
+  display: grid; gap: 12px; align-content: start;
+  grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
+}
+#shade-grid .none { color: var(--muted); padding: 16px 0; }
+.shade-card {
+  background: var(--card); border: 3px solid var(--line); border-radius: var(--radius);
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.shade-card.tally-preview { border-color: var(--pvw); }
+.shade-card.tally-program { border-color: var(--pgm); }
+.shade-card.offline .media, .shade-card.offline .scope { opacity: .45; }
+.scope { display: block; width: 100%; height: 96px; background: #07090b; border-top: 1px solid var(--line); }
+.meter { display: flex; flex-wrap: wrap; gap: 4px 10px; padding: 4px 8px; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.meter b { color: var(--text); font-weight: 500; }
+.meter .hot { color: var(--warn); }
+.owners { display: flex; flex-direction: column; gap: 4px; padding: 6px 8px; border-top: 1px solid var(--line); }
+.owner-row { display: flex; align-items: center; gap: 6px; }
+.owner-row .g { width: 52px; color: var(--muted); font-size: 11px; letter-spacing: .06em; }
+.owner-row .btn { margin-left: auto; padding: 2px 8px; min-height: 24px; font-size: 12px; }
+.own { padding: 1px 6px; border-radius: 3px; font-size: 11px; font-weight: 600; letter-spacing: .04em;
+  background: var(--raised); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 160px; }
+.own.local { background: #5a4a14; color: #ffe08a; }
+.own.remote { background: #1d3a66; color: #cfe2ff; }
+.own.mine { background: #1d5f33; color: #d9ffe6; }
+.owners .both { align-self: flex-start; padding: 2px 8px; min-height: 24px; font-size: 12px; }
+.owners .v1 { color: var(--faint); font-size: 12px; }
+.shade-ctl { display: flex; flex-direction: column; gap: 6px; padding: 6px 8px 8px; border-top: 1px solid var(--line); }
+.srow { display: grid; grid-template-columns: 74px 1fr 64px; gap: 6px; align-items: center; }
+.srow > label { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.srow input[type=range] { width: 100%; accent-color: var(--accent); height: 22px; }
+.srow .sval { text-align: right; font-variant-numeric: tabular-nums; }
+.srow.disabled > label, .srow.disabled .sval { color: var(--faint); }
+.srow .seg button { padding: 2px 7px; min-height: 22px; font-size: 12px; }
+.shade-actions { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 8px 8px; }
+.shade-actions .btn { padding: 2px 8px; min-height: 24px; font-size: 12px; }
+.shade-actions select { max-width: 150px; font-size: 12px; }
+.shade-err { color: #ff6b6b; font-size: 12px; padding: 0 8px 6px; }
+.shade-err:empty { display: none; }
 </style>
 </head>
 <body>
 <header>
   <h1>TallyCam Control</h1>
   <span class="conn"><span class="dot" id="conn-dot"></span><span id="conn-text">connecting</span></span>
+  <div class="seg" id="views">
+    <button type="button" data-view="cameras">Cameras</button>
+    <button type="button" data-view="shading">Shading</button>
+  </div>
   <span class="spacer"></span>
   <span class="conn" id="count"></span>
   <a class="btn" id="clapper" href="/clapper" target="_blank" title="Flash and beep on every whole second: film it to check A/V sync">Clapper</a>
@@ -236,6 +300,7 @@ a.btn { color: inherit; text-decoration: none; display: inline-flex; align-items
 <main>
   <div id="grid"><div id="empty"></div></div>
   <aside id="panel"></aside>
+  <div id="shade" hidden></div>
 </main>
 <div id="modal" hidden></div>
 <!--TALLYCAM_CONFIG-->
@@ -257,6 +322,9 @@ const CONFIG = Object.assign({
   qrUrl: "/api/connect.svg",
   // The clapper page, or null to hide the button.
   clapperUrl: "/clapper",
+  // Path of the join page (JOIN_HTML) on the control URL's host, for a link
+  // that can be sent by e-mail or message; null hides it.
+  joinPath: "/join",
   // POST: a one-time invite { deep_link, control_url, qr_svg, expires_in_secs }.
   // When set it replaces infoUrl and qrUrl.
   inviteUrl: null,
@@ -350,7 +418,9 @@ function send(obj) {
 }
 
 function sendSet(device, values, withId) {
-  const msg = { type: "set", device, values };
+  // The holder lets the hub check exposure, colour and focus against the
+  // camera's owner (protocol 2); it is removed before the camera sees it.
+  const msg = { type: "set", device, values, holder: holderMsg() };
   if (withId) {
     msg.id = ++nextId;
     pending.set(msg.id, { device, what: "set " + Object.keys(values).join(", ") });
@@ -361,7 +431,7 @@ function sendSet(device, values, withId) {
 function sendCommand(device, name, args) {
   const id = ++nextId;
   pending.set(id, { device, what: "command " + name });
-  const msg = { type: "command", device, id, name };
+  const msg = { type: "command", device, id, name, holder: holderMsg() };
   if (args && Object.keys(args).length) msg.args = args;
   send(msg);
 }
@@ -385,6 +455,7 @@ function addDevice(id) {
   d = {
     id, info: { id, name: id }, controls: [], commands: [], state: {}, status: null,
     preview: null, tally: "off", online: false, log: [], card: null, keyFingerprint: null,
+    protocol: 0, ownership: {}, imageStats: null, shade: null,
   };
   devices.set(id, d);
   order.push(id);
@@ -655,6 +726,8 @@ function closePanel() {
 }
 
 function buildPanel() {
+  // The shading view has no side panel; it is built again on the way back.
+  if (view === "shading") return;
   const p = document.getElementById("panel");
   const d = selected && devices.get(selected);
   if (!d) { closePanel(); return; }
@@ -991,6 +1064,9 @@ function applySnapshotDevice(s) {
   d.tally = s.tally || "off";
   d.online = !!s.online;
   d.keyFingerprint = s.key_fingerprint || null;
+  d.protocol = s.protocol || 0;
+  d.ownership = s.ownership || {};
+  d.imageStats = s.image_stats || null;
 }
 
 // "3f2a 9c1d 7b0e 44a1": the start of the key fingerprint, to compare with
@@ -1003,11 +1079,13 @@ function removeDevice(id) {
   const d = devices.get(id);
   if (!d) return;
   if (d.card) d.card.root.remove();
+  if (d.shade) d.shade.root.remove();
   devices.delete(id);
   const i = order.indexOf(id);
   if (i >= 0) order.splice(i, 1);
   if (selected === id) closePanel();
   renderGrid();
+  renderShade();
 }
 
 async function forgetDevice(d) {
@@ -1030,7 +1108,9 @@ function onMessage(m) {
       for (const s of m.devices || []) { applySnapshotDevice(s); seen.add(s.id); }
       // Devices the hub no longer knows (hub restarted) stay, but offline.
       for (const [id, dev] of devices) if (!seen.has(id)) dev.online = false;
+      if (m.production) production = m.production;
       renderGrid();
+      renderShade();
       // Deep link: open a camera's panel with #<device id>.
       const want = decodeURIComponent(location.hash.slice(1));
       if (!selected && want && devices.has(want)) selected = want;
@@ -1043,9 +1123,13 @@ function onMessage(m) {
       nd.controls = m.controls || [];
       nd.commands = m.commands || [];
       nd.keyFingerprint = m.key_fingerprint || null;
+      nd.protocol = m.protocol || 0;
       if (!nd.online) addLog(nd.id, "debug", "online");
       nd.online = true;
       renderGrid();
+      // New controls or protocol: build the shading card again.
+      if (nd.shade) { nd.shade.root.remove(); nd.shade = null; }
+      renderShade();
       if (selected === nd.id) buildPanel();
       return;
     }
@@ -1054,6 +1138,7 @@ function onMessage(m) {
       Object.assign(d.state, m.values || {});
       updateCard(d);
       if (selected === d.id) updatePanel();
+      updateShadeCard(d);
       return;
     case "device_status":
       if (!d) return;
@@ -1061,17 +1146,21 @@ function onMessage(m) {
       updateCard(d);
       updateClockPanel(d);
       updateLatencyPanel(d);
+      updateShadeCard(d);
+      updateProductionBar();
       return;
     case "device_preview":
       if (!d) return;
       d.preview = { jpeg: m.jpeg, width: m.width, height: m.height };
       if (d.card) updateMedia(d, d.card.img, d.card.overlay);
       if (selected === d.id && panel) updateMedia(d, panel.media.img, panel.media.overlay);
+      if (d.shade) updateMedia(d, d.shade.img, d.shade.overlay);
       return;
     case "device_tally":
       if (!d) return;
       d.tally = m.state;
       updateCard(d);
+      updateShadeCard(d);
       return;
     case "device_offline":
       if (!d) return;
@@ -1079,6 +1168,8 @@ function onMessage(m) {
       addLog(d.id, "warn", "offline");
       renderGrid();
       if (selected === d.id) updatePanel();
+      updateShadeCard(d);
+      updateProductionBar();
       return;
     case "device_removed":
       removeDevice(m.device);
@@ -1086,7 +1177,10 @@ function onMessage(m) {
     case "device_result": {
       const p = pending.get(m.id);
       pending.delete(m.id);
-      if (d && !m.ok) addLog(d.id, "error", (p ? p.what + ": " : "") + (m.error || "failed"));
+      if (d && !m.ok) {
+        addLog(d.id, "error", (p ? p.what + ": " : "") + (m.error || "failed"));
+        shadeError(d, (p ? p.what + ": " : "") + (m.error || "failed"));
+      }
       // Command output, e.g. clock_log: its lines go to the log.
       if (d && m.ok && m.data) {
         if (typeof m.data.reports === "string" && m.data.reports) addLog(d.id, "debug", m.data.reports);
@@ -1097,14 +1191,623 @@ function onMessage(m) {
     case "device_log":
       if (d) addLog(d.id, m.level, m.message);
       return;
+    case "device_ownership":
+      if (!d) return;
+      d.ownership = m.groups || {};
+      updateShadeCard(d);
+      ownershipChanged(d);
+      return;
+    case "device_image_stats":
+      if (!d) return;
+      d.imageStats = m;
+      if (d.shade) drawStats(d);
+      return;
+    case "production":
+      production = m;
+      updateShadeAll();
+      return;
     case "error":
-      if (d) addLog(d.id, "error", "hub: " + m.message);
-      else console.warn("hub error:", m.message);
+      if (d) {
+        addLog(d.id, "error", "hub: " + m.message);
+        shadeError(d, m.message);
+      } else {
+        console.warn("hub error:", m.message);
+        shadeNotice(m.message);
+      }
       return;
     default:
       return; // unknown types are ignored
   }
 }
+
+// ---------------------------------------------------------------------------
+// Shading view (docs/SHADING.md): every camera side by side with its picture,
+// a waveform or histogram from image_stats, who owns exposure, colour and
+// focus, and the controls of the groups this browser holds. Cameras with an
+// app before protocol 2 have no ownership: their controls work as in the
+// camera panel.
+// ---------------------------------------------------------------------------
+
+const SHADE_GROUPS = [["exposure", "EXP"], ["white_balance", "COLOUR"], ["focus", "FOCUS"]];
+const SHADE_PROTOCOL = 2;
+let view = "cameras";
+let scopeMode = "waveform";  // or "histogram"
+let production = null;       // { mains_hz, shutter } from the hub
+let shadeBar = null;         // { mains, shutter, note, scope, name }
+// Sets waiting until the camera reports this browser as the holder.
+const afterOwn = new Map();  // device id -> { group, values, until }
+
+function storageGet(k) {
+  try { return localStorage.getItem(k); } catch (e) { return null; }
+}
+
+function storageSet(k, v) {
+  try { localStorage.setItem(k, v); } catch (e) { /* private mode */ }
+}
+
+// Who this browser is to the cameras: a random id, stable per browser, and a
+// name the operator can change (shown on the phone, "REMOTE · Shader").
+const HOLDER = (() => {
+  let id = storageGet("tallycamHolderId");
+  if (!id || !/^[0-9a-f]{8,64}$/.test(id)) {
+    const b = new Uint8Array(8);
+    crypto.getRandomValues(b);
+    id = [...b].map(x => x.toString(16).padStart(2, "0")).join("");
+    storageSet("tallycamHolderId", id);
+  }
+  return { id, label: storageGet("tallycamHolderName") || "Shader" };
+})();
+
+function holderMsg() {
+  return { id: HOLDER.id, label: HOLDER.label };
+}
+
+function hasShading(d) {
+  return (d.protocol || 0) >= SHADE_PROTOCOL;
+}
+
+function owner(d, g) {
+  return (d.ownership || {})[g] || null;
+}
+
+function iHold(d, g) {
+  const o = owner(d, g);
+  return !!(o && o.owner === "remote" && o.holder && o.holder.id === HOLDER.id);
+}
+
+// May this browser change the group's controls on this camera?
+function mayControl(d, g) {
+  return d.online && (!hasShading(d) || iHold(d, g));
+}
+
+function isLiveState(d) {
+  const st = d.status && d.status.stream;
+  return !!(d.online && st && (st.state === "live" || st.state === "connecting"));
+}
+
+function anyLive() {
+  for (const d of devices.values()) if (isLiveState(d)) return true;
+  return false;
+}
+
+function sendOwn(d, groups) {
+  const id = ++nextId;
+  pending.set(id, { device: d.id, what: "take over " + groups.join(", ") });
+  send({ type: "own", device: d.id, id, groups, holder: holderMsg() });
+}
+
+function sendRelease(d, groups) {
+  const id = ++nextId;
+  pending.set(id, { device: d.id, what: "release " + groups.join(", ") });
+  send({ type: "release", device: d.id, id, groups });
+}
+
+// The camera reported new owners: send what waited for a take over.
+function ownershipChanged(d) {
+  const w = afterOwn.get(d.id);
+  if (!w) return;
+  if (performance.now() > w.until) { afterOwn.delete(d.id); return; }
+  if (iHold(d, w.group)) {
+    afterOwn.delete(d.id);
+    sendSet(d.id, w.values, true);
+  }
+}
+
+// Colour values of one camera, to set on others (wb_mode manual, so the
+// temperature and tint take effect).
+function colourOf(d) {
+  const v = { wb_mode: "manual" };
+  if (typeof d.state.wb_temperature === "number") v.wb_temperature = d.state.wb_temperature;
+  if (typeof d.state.wb_tint === "number") v.wb_tint = d.state.wb_tint;
+  return v;
+}
+
+function hasColour(d) {
+  return !!controlById(d, "wb_temperature");
+}
+
+// Set `src`'s colour on `targets`. Cameras whose colour this browser does not
+// hold are taken over first, after one confirmation.
+function copyColour(src, targets) {
+  const values = colourOf(src);
+  if (!("wb_temperature" in values)) { shadeError(src, "no white balance temperature to copy"); return; }
+  targets = targets.filter(t => t.id !== src.id && t.online && hasColour(t));
+  if (!targets.length) { shadeError(src, "no other camera online with white balance"); return; }
+  const direct = targets.filter(t => mayControl(t, "white_balance"));
+  const takeOver = targets.filter(t => !mayControl(t, "white_balance"));
+  if (takeOver.length) {
+    const names = takeOver.map(t => t.info.name || t.id).join(", ");
+    if (confirm("Take over colour on " + names + " first?")) {
+      for (const t of takeOver) {
+        afterOwn.set(t.id, { group: "white_balance", values, until: performance.now() + 5000 });
+        sendOwn(t, ["white_balance"]);
+      }
+    }
+  }
+  for (const t of direct) sendSet(t.id, values, true);
+}
+
+function b64bytes(s) {
+  try {
+    const bin = atob(s || "");
+    const out = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  } catch (e) {
+    return new Uint8Array(0);
+  }
+}
+
+// Waveform (32 columns of 16 levels) or histogram (32 bins) of image_stats.
+function drawScope(canvas, stats) {
+  const r = canvas.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  const W = Math.max(64, Math.round((r.width || 280) * dpr)), H = Math.max(32, Math.round((r.height || 96) * dpr));
+  if (canvas.width !== W) canvas.width = W;
+  if (canvas.height !== H) canvas.height = H;
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#07090b";
+  ctx.fillRect(0, 0, W, H);
+  ctx.strokeStyle = "#1f252d";
+  ctx.lineWidth = 1;
+  for (const q of [0.25, 0.5, 0.75]) {
+    const y = Math.round(H - q * H) + 0.5;
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+  }
+  const luma = stats && stats.luma;
+  if (!luma) return;
+  canvas.title = scopeMode === "histogram"
+    ? "Histogram: how much of the picture has each brightness, black left to white right. Click for waveform"
+    : "Waveform: brightness (black at the bottom, white at the top) for each strip of the picture, left to right. Red: clipped. Click for histogram";
+  canvas.style.cursor = "pointer";
+  if (scopeMode === "histogram") {
+    const h = b64bytes(luma.histogram);
+    if (!h.length) return;
+    const bw = W / h.length;
+    h.forEach((v, i) => {
+      const bh = v / 255 * (H - 2);
+      ctx.fillStyle = i === h.length - 1 && v > 0 ? "#e5302f" : i === 0 && v > 0 ? "#4c9aff" : "#9aa4b2";
+      ctx.fillRect(i * bw + 0.5, H - bh, Math.max(1, bw - 1), bh);
+    });
+  } else {
+    const cols = 32, levels = 16;
+    const w = b64bytes(luma.waveform);
+    if (w.length < cols * levels) return;
+    const cw = W / cols, lh = H / levels;
+    for (let c = 0; c < cols; c++) {
+      for (let l = 0; l < levels; l++) {
+        const a = w[c * levels + l] / 255;
+        if (a <= 0) continue;
+        ctx.fillStyle = l === levels - 1 ? `rgba(240,90,80,${Math.min(1, 0.25 + a * 2.5)})`
+                                         : `rgba(90,230,130,${Math.min(1, 0.2 + a * 2.5)})`;
+        ctx.fillRect(c * cw, H - (l + 1) * lh, cw - 0.5, lh - 0.5);
+      }
+    }
+  }
+}
+
+function pct(x) {
+  return typeof x === "number" ? (x * 100).toFixed(x < 0.1 ? 1 : 0) + "%" : "-";
+}
+
+function drawStats(d) {
+  const sh = d.shade;
+  if (!sh) return;
+  drawScope(sh.canvas, d.imageStats);
+  const l = d.imageStats && d.imageStats.luma;
+  if (!l) {
+    sh.meter.replaceChildren(el("span", {}, hasShading(d) ? "no image statistics yet" : "no image statistics (older app)"));
+    return;
+  }
+  sh.meter.replaceChildren(
+    el("span", { class: l.clipped > 0.02 ? "hot" : "", title: "Share of the picture at the top of the range" }, "clip ", el("b", {}, pct(l.clipped))),
+    el("span", { class: l.crushed > 0.05 ? "hot" : "", title: "Share of the picture at the bottom of the range" }, "crush ", el("b", {}, pct(l.crushed))),
+    el("span", { title: "Mean and median level" }, "mean ", el("b", {}, pct(l.mean)), " p50 ", el("b", {}, pct(l.p50))));
+}
+
+// A slider for a range control (log when the descriptor says so), throttled
+// like the panel's: about 10 sets a second while dragging, one with an id on
+// release so a refusal shows up.
+function shadeSlider(label, desc, fmt, sendValue) {
+  const min = Number(desc.min ?? 0), max = Number(desc.max ?? 100);
+  const step = desc.step ? Number(desc.step) : 0;
+  const isLog = desc.scale === "log" && min > 0 && max > min;
+  const POS = 1000;
+  const toPos = v => isLog ? Math.round(Math.log(v / min) / Math.log(max / min) * POS) : v;
+  const fromPos = p => {
+    let v = isLog ? min * Math.pow(max / min, p / POS) : Number(p);
+    if (step > 0) v = min + Math.round((v - min) / step) * step;
+    v = Math.min(max, Math.max(min, v));
+    return Number(v.toFixed(step > 0 ? decimalsFor(step) : 3));
+  };
+  const slider = el("input", { type: "range" });
+  if (isLog) { slider.min = 0; slider.max = POS; slider.step = 1; }
+  else { slider.min = min; slider.max = max; slider.step = step > 0 ? step : "any"; }
+  const val = el("span", { class: "sval" });
+  const row = el("div", { class: "srow" }, el("label", {}, label), slider, val);
+  let dragging = false, lastSent = 0, timer = null, queued = null;
+  const flush = withId => {
+    clearTimeout(timer); timer = null;
+    if (queued === null) return;
+    lastSent = performance.now();
+    sendValue(queued, withId);
+    queued = null;
+  };
+  slider.addEventListener("input", () => {
+    dragging = true;
+    queued = fromPos(slider.value);
+    val.textContent = fmt(queued);
+    const wait = 100 - (performance.now() - lastSent);
+    if (wait <= 0) flush(false);
+    else if (!timer) timer = setTimeout(() => flush(false), wait);
+  });
+  slider.addEventListener("change", () => {
+    queued = fromPos(slider.value);
+    flush(true);
+    setTimeout(() => { dragging = false; }, 600);
+  });
+  return {
+    row,
+    update(value, enabled) {
+      slider.disabled = !enabled;
+      row.classList.toggle("disabled", !enabled);
+      if (!dragging && typeof value === "number") {
+        slider.value = toPos(value);
+        val.textContent = fmt(value);
+      } else if (!dragging) {
+        val.textContent = "";
+      }
+    },
+  };
+}
+
+// The mode buttons of a control (auto / locked / manual) from its descriptor.
+function shadeModes(d, c, group, label) {
+  const opts = c.options || [];
+  const buttons = opts.map(o => el("button", {
+    type: "button",
+    onclick: () => sendSet(d.id, { [c.id]: o.value }, true),
+  }, String(o.label ?? o.value)));
+  const row = el("div", { class: "srow" }, el("label", { title: c.label || c.id }, label), el("div", { class: "seg" }, buttons), el("span"));
+  return {
+    row,
+    update() {
+      const enabled = mayControl(d, group);
+      row.classList.toggle("disabled", !enabled);
+      buttons.forEach((b, i) => {
+        b.disabled = !enabled;
+        b.classList.toggle("active", same(opts[i].value, d.state[c.id]));
+      });
+    },
+  };
+}
+
+function fmtShutter(v) {
+  return typeof v === "number" ? "1/" + v : "";
+}
+
+function buildShadeCard(d) {
+  const img = el("img", { alt: "" });
+  img.style.display = "none";
+  const overlay = el("div", { class: "overlay" });
+  const badge = el("span", { class: "badge" });
+  badge.style.display = "none";
+  // Click to switch every camera between waveform and histogram (the
+  // same switch as "Scope" in the bar above).
+  const canvas = el("canvas", {
+    class: "scope",
+    onclick: () => {
+      scopeMode = scopeMode === "waveform" ? "histogram" : "waveform";
+      storageSet("tallycamScope", scopeMode);
+      updateShadeAll();
+    },
+  });
+  const meter = el("div", { class: "meter" });
+  const owners = el("div", { class: "owners" });
+  const err = el("div", { class: "shade-err" });
+  const ctl = el("div", { class: "shade-ctl" });
+  const updaters = [];
+
+  // Exposure: mode, ISO (the "iris"), and the shutter, a production setting
+  // that only an owner of exposure may change under a free shutter.
+  const expMode = controlById(d, "exposure_mode");
+  if (expMode) {
+    const m = shadeModes(d, expMode, "exposure", "Exposure");
+    ctl.append(m.row);
+    updaters.push(m.update);
+  }
+  const isoDesc = controlById(d, "iso");
+  if (isoDesc) {
+    const iso = shadeSlider("ISO", isoDesc, v => String(Math.round(v)), (v, withId) => {
+      const values = { iso: v };
+      if (d.state.exposure_mode !== "manual") values.exposure_mode = "manual";
+      sendSet(d.id, values, withId);
+    });
+    ctl.append(iso.row);
+    updaters.push(() => iso.update(d.state.iso, mayControl(d, "exposure")));
+  }
+  const shutterDesc = controlById(d, "shutter");
+  const shutterText = el("span", { class: "sval" });
+  const shutterSel = el("select", {});
+  if (shutterDesc && shutterDesc.options) {
+    for (const o of shutterDesc.options) shutterSel.append(el("option", { value: JSON.stringify(o.value) }, String(o.label ?? o.value)));
+  }
+  shutterSel.addEventListener("change", () => {
+    const values = { shutter: JSON.parse(shutterSel.value) };
+    if (d.state.exposure_mode !== "manual") values.exposure_mode = "manual";
+    sendSet(d.id, values, true);
+  });
+  const shutterRow = el("div", { class: "srow" }, el("label", {}, "Shutter"), el("div", {}, shutterSel), shutterText);
+  if (shutterDesc || "shutter" in d.state) ctl.append(shutterRow);
+  updaters.push(() => {
+    const free = production && production.shutter === "free";
+    const editable = free && shutterDesc && shutterDesc.options && hasShading(d);
+    shutterSel.style.display = editable ? "" : "none";
+    shutterSel.disabled = !mayControl(d, "exposure");
+    if (editable && document.activeElement !== shutterSel) {
+      const i = shutterDesc.options.findIndex(o => same(o.value, d.state.shutter));
+      if (i >= 0) shutterSel.selectedIndex = i;
+    }
+    shutterText.textContent = editable ? "" : fmtShutter(d.state.shutter);
+    shutterText.title = production ? "Production shutter: " + (typeof production.shutter === "number"
+      ? "1/" + production.shutter : production.shutter) + ", mains " + production.mains_hz + " Hz" : "";
+  });
+
+  // Colour: mode, temperature and tint (a set switches to manual).
+  const wbMode = controlById(d, "wb_mode");
+  if (wbMode) {
+    const m = shadeModes(d, wbMode, "white_balance", "Colour");
+    ctl.append(m.row);
+    updaters.push(m.update);
+  }
+  for (const [cid, label, fmt] of [
+    ["wb_temperature", "Temp", v => Math.round(v) + " K"],
+    ["wb_tint", "Tint", v => (v > 0 ? "+" : "") + Math.round(v)],
+  ]) {
+    const desc = controlById(d, cid);
+    if (!desc) continue;
+    const s = shadeSlider(label, desc, fmt, (v, withId) => {
+      const values = { [cid]: v };
+      if (d.state.wb_mode !== "manual") values.wb_mode = "manual";
+      sendSet(d.id, values, withId);
+    });
+    ctl.append(s.row);
+    updaters.push(() => s.update(d.state[cid], mayControl(d, "white_balance")));
+  }
+
+  // Copy and match colour.
+  const copyAll = el("button", {
+    class: "btn", type: "button",
+    title: "Set this camera's white balance on every other camera (takes over their colour after asking)",
+    onclick: () => copyColour(d, order.map(id => devices.get(id)).filter(Boolean)),
+  }, "Copy colour to all");
+  const match = el("select", {
+    title: "Give this camera another camera's white balance",
+    onchange: () => {
+      const t = devices.get(match.value);
+      match.value = "";
+      if (t) copyColour(t, [d]);
+    },
+  });
+  const actions = el("div", { class: "shade-actions" }, copyAll, match);
+  if (!hasColour(d)) actions.style.display = "none";
+
+  const name = el("span", { class: "name" });
+  const root = el("div", { class: "shade-card" },
+    el("div", { class: "card-head" }, el("span", { class: "dot" }), name, el("span", { class: "model" })),
+    el("div", { class: "media" }, img, overlay, badge),
+    canvas, meter, owners, ctl, actions, err);
+  d.shade = { root, img, overlay, badge, canvas, meter, owners, err, updaters, match, copyAll, name, errTimer: null };
+  return root;
+}
+
+function ownerLabel(d, g) {
+  const o = owner(d, g);
+  if (!o) return ["", "-"];
+  if (o.owner === "auto") return ["auto", "AUTO"];
+  if (o.owner === "local") return ["local", "LOCKED"];
+  const h = o.holder || {};
+  if (h.id === HOLDER.id) return ["remote mine", "REMOTE · you"];
+  return ["remote", "REMOTE · " + (h.label || h.id || "?")];
+}
+
+function renderOwners(d) {
+  const sh = d.shade;
+  if (!hasShading(d)) {
+    sh.owners.replaceChildren(el("div", { class: "v1" }, "Older app: no remote ownership, controls are shared."));
+    return;
+  }
+  const rows = [];
+  const free = [];
+  for (const [g, short] of SHADE_GROUPS) {
+    const o = owner(d, g);
+    if (!o) continue;  // the camera has no such group
+    const [cls, text] = ownerLabel(d, g);
+    const mine = iHold(d, g);
+    if (!mine && (g === "exposure" || g === "white_balance")) free.push(g);
+    rows.push(el("div", { class: "owner-row" },
+      el("span", { class: "g" }, short),
+      el("span", { class: "own " + cls, title: text }, text),
+      el("button", {
+        class: "btn", type: "button", disabled: !d.online,
+        title: mine ? "Give " + prettyGroup(g) + " back to the camera's auto" : "Take " + prettyGroup(g) + " under remote control",
+        onclick: () => mine ? sendRelease(d, [g]) : sendOwn(d, [g]),
+      }, mine ? "Release" : "Take over")));
+  }
+  if (!rows.length) rows.push(el("div", { class: "v1" }, "No ownership reported yet."));
+  const both = SHADE_GROUPS.slice(0, 2).map(([g]) => g).filter(g => owner(d, g));
+  if (free.length && both.length === 2) {
+    rows.push(el("button", {
+      class: "btn both", type: "button", disabled: !d.online,
+      onclick: () => sendOwn(d, both),
+    }, "Take exposure + colour"));
+  }
+  sh.owners.replaceChildren(...rows);
+}
+
+function updateShadeCard(d) {
+  const sh = d.shade;
+  if (!sh || view !== "shading") return;
+  const r = sh.root;
+  r.classList.toggle("offline", !d.online);
+  r.classList.toggle("tally-preview", d.tally === "preview");
+  r.classList.toggle("tally-program", d.tally === "program");
+  r.querySelector(".card-head .dot").className = "dot" + (d.online ? " on" : "");
+  sh.name.textContent = d.info.name || d.id;
+  sh.name.title = d.id;
+  r.querySelector(".card-head .model").textContent =
+    (d.tally !== "off" ? d.tally.toUpperCase() + " · " : "") + (d.info.model || "");
+  updateMedia(d, sh.img, sh.overlay);
+  const st = d.status && d.status.stream;
+  if (d.online && st && st.state && st.state !== "idle") {
+    sh.badge.style.display = "";
+    sh.badge.className = "badge " + st.state;
+    sh.badge.textContent = st.state.toUpperCase();
+    // Why it failed or is reconnecting, as on the Cameras view.
+    sh.badge.title = st.error || "";
+  } else {
+    sh.badge.style.display = "none";
+  }
+  renderOwners(d);
+  for (const u of sh.updaters) u();
+  // Match targets: the other cameras with white balance.
+  const others = order.map(id => devices.get(id)).filter(t => t && t.id !== d.id && hasColour(t));
+  const key = others.map(t => t.id + ":" + (t.info.name || "")).join("|");
+  if (sh.match._key !== key) {
+    sh.match._key = key;
+    sh.match.replaceChildren(el("option", { value: "" }, "Match to camera..."),
+      ...others.map(t => el("option", { value: t.id }, t.info.name || t.id)));
+  }
+  sh.match.disabled = !d.online || !others.length;
+  sh.copyAll.disabled = !d.online || !others.length;
+  drawStats(d);
+}
+
+function updateShadeAll() {
+  updateProductionBar();
+  for (const id of order) updateShadeCard(devices.get(id));
+}
+
+function shadeError(d, text) {
+  const sh = d.shade;
+  if (!sh) return;
+  sh.err.textContent = text;
+  clearTimeout(sh.errTimer);
+  sh.errTimer = setTimeout(() => { sh.err.textContent = ""; }, 8000);
+}
+
+function shadeNotice(text) {
+  if (!shadeBar) return;
+  shadeBar.note.textContent = text;
+  clearTimeout(shadeBar.timer);
+  shadeBar.timer = setTimeout(updateProductionBar, 8000);
+}
+
+const SHUTTER_CHOICES = [["mains", "Mains"], ["free", "Free"], [100, "1/100"], [120, "1/120"], [200, "1/200"], [240, "1/240"]];
+
+function buildShadeBar() {
+  const name = el("input", { type: "text", maxlength: "32", value: HOLDER.label, title: "Shown on the phones whose controls you hold" });
+  name.addEventListener("change", () => {
+    HOLDER.label = name.value.trim() || "Shader";
+    name.value = HOLDER.label;
+    storageSet("tallycamHolderName", HOLDER.label);
+  });
+  const scope = el("div", { class: "seg" }, ["waveform", "histogram"].map(m => el("button", {
+    type: "button", "data-m": m,
+    onclick: () => { scopeMode = m; storageSet("tallycamScope", m); updateShadeAll(); },
+  }, m === "waveform" ? "Waveform" : "Histogram")));
+  const mains = el("select", {}, [[50, "50 Hz"], [60, "60 Hz"], [0, "None"]].map(([v, l]) => el("option", { value: v }, l)));
+  const shutter = el("select", {});
+  const sendProduction = () => {
+    const sv = shutter.value;
+    send({ type: "production", mains_hz: Number(mains.value), shutter: /^\d+$/.test(sv) ? Number(sv) : sv });
+  };
+  mains.addEventListener("change", sendProduction);
+  shutter.addEventListener("change", sendProduction);
+  const note = el("span", { class: "note" });
+  const bar = el("div", { class: "shade-bar" },
+    el("label", {}, "Your name", name),
+    el("label", {}, "Scope", scope),
+    el("span", { class: "spacer" }),
+    el("label", { title: "Mains frequency of the lights: the shutter avoids their flicker" }, "Mains", mains),
+    el("label", { title: "Production shutter for every camera. Free: no mains-lit light, the shutter joins exposure" }, "Shutter", shutter),
+    note);
+  shadeBar = { root: bar, mains, shutter, note, scope, name, timer: null };
+  return bar;
+}
+
+function updateProductionBar() {
+  if (!shadeBar) return;
+  const b = shadeBar;
+  for (const btn of b.scope.children) btn.classList.toggle("active", btn.dataset.m === scopeMode);
+  const p = production || { mains_hz: 50, shutter: "mains" };
+  const choices = SHUTTER_CHOICES.slice();
+  if (typeof p.shutter === "number" && !choices.some(([v]) => v === p.shutter)) choices.push([p.shutter, "1/" + p.shutter]);
+  const key = choices.map(([v]) => v).join(",");
+  if (b.shutter._key !== key) {
+    b.shutter._key = key;
+    b.shutter.replaceChildren(...choices.map(([v, l]) => el("option", { value: v }, l)));
+  }
+  if (document.activeElement !== b.mains) b.mains.value = String(p.mains_hz);
+  if (document.activeElement !== b.shutter) b.shutter.value = String(p.shutter);
+  const live = anyLive();
+  b.mains.disabled = live || !production;
+  b.shutter.disabled = live || !production;
+  clearTimeout(b.timer);
+  b.note.textContent = live ? "Stop all streams to change mains or shutter." : "";
+}
+
+function renderShade() {
+  if (view !== "shading") return;
+  const root = document.getElementById("shade");
+  if (!shadeBar) root.append(buildShadeBar());
+  let grid = document.getElementById("shade-grid");
+  if (!grid) { grid = el("div", { id: "shade-grid" }); root.append(grid); }
+  const cards = order.map(id => devices.get(id)).filter(Boolean).map(d => d.shade ? d.shade.root : buildShadeCard(d));
+  grid.replaceChildren(...(cards.length ? cards : [el("div", { class: "none" }, "No cameras yet. Add one in the Cameras view.")]));
+  updateShadeAll();
+}
+
+function setView(v) {
+  view = v === "shading" ? "shading" : "cameras";
+  storageSet("tallycamView", view);
+  for (const b of document.querySelectorAll("#views button")) b.classList.toggle("active", b.dataset.view === view);
+  const shading = view === "shading";
+  document.getElementById("grid").hidden = shading;
+  document.getElementById("shade").hidden = !shading;
+  if (shading) {
+    document.getElementById("panel").classList.remove("open");
+    renderShade();
+  } else if (selected) {
+    buildPanel();
+  }
+}
+
+document.querySelectorAll("#views button").forEach(b => b.addEventListener("click", () => setView(b.dataset.view)));
+window.addEventListener("resize", () => {
+  if (view === "shading") for (const id of order) { const d = devices.get(id); if (d && d.shade) drawStats(d); }
+});
+scopeMode = storageGet("tallycamScope") === "histogram" ? "histogram" : "waveform";
 
 // Keep the pending map bounded if a phone never answers.
 setInterval(() => {
@@ -1139,6 +1842,7 @@ function connect() {
     for (const d of devices.values()) d.online = false;
     renderGrid();
     if (selected) updatePanel();
+    updateShadeAll();
     setTimeout(connect, backoff);
     backoff = Math.min(backoff * 2, 5000);
   };
@@ -1201,6 +1905,38 @@ function buildAddCard(closable) {
       el("dd", {}, targets.map(x => el("div", {}, el("code", {}, x.control_url)))));
   }
   if (t && t.srt_url) rows.push(el("dt", {}, "SRT URL"), el("dd", {}, el("code", {}, t.srt_url)));
+  const join = t && joinLink(t);
+  if (join) {
+    const status = el("span", { class: "copied" });
+    const flash = text => {
+      status.textContent = text;
+      clearTimeout(status._timer);
+      status._timer = setTimeout(() => { status.textContent = ""; }, 2500);
+    };
+    const subject = "Join as a camera";
+    const body = "Open this link on the phone that will be the camera (TallyCam must be installed):\n\n" + join +
+      (t.expires_in_secs ? "\n\nThe link works for one phone and expires in " + Math.round(t.expires_in_secs / 60) + " minutes." : "");
+    rows.push(el("dt", {}, "Link"), el("dd", {},
+      el("div", {}, el("code", {}, join)),
+      el("div", { class: "share" },
+        el("button", {
+          type: "button", class: "btn",
+          onclick: async () => {
+            flash(await copyText(join) ? "Copied" : "Copy failed: select the link and copy it");
+          },
+        }, "Copy link"),
+        el("button", {
+          type: "button", class: "btn",
+          onclick: async () => {
+            if (navigator.share) {
+              try { await navigator.share({ title: subject, text: body }); } catch (e) { /* cancelled */ }
+            } else {
+              location.href = "mailto:?subject=" + encodeURIComponent(subject) + "&body=" + encodeURIComponent(body);
+            }
+          },
+        }, navigator.share ? "Share..." : "E-mail..."),
+        status)));
+  }
   const card = el("div", { class: "add" },
     closable ? el("button", { class: "btn close", type: "button", onclick: closeAdd, title: "Close (Esc)" }, "Close") : null,
     qr,
@@ -1208,8 +1944,10 @@ function buildAddCard(closable) {
       el("h2", {}, "Add a camera"),
       el("ol", {},
         el("li", {}, "Install TallyCam on the phone."),
-        el("li", {}, "Same Wi-Fi as this computer."),
-        el("li", {}, "Scan the code with the iPhone Camera app and open it in TallyCam.")),
+        el("li", {}, t && !isLocalUrl(t.control_url)
+          ? "Any internet connection on the phone: Wi-Fi or mobile data."
+          : "The phone on the same network as this hub: the same Wi-Fi, or a cable on the same network."),
+        el("li", {}, "Scan the code with the phone's camera, or send it the link below, and open it in TallyCam.")),
       el("dl", {}, rows),
       t && t.srt_url && t.srt_url.includes("{device}")
         ? el("div", { class: "note" }, "The phone replaces {device} with its own stream id (cam- and the start of its device id).")
@@ -1219,6 +1957,57 @@ function buildAddCard(closable) {
             Math.round(t.expires_in_secs / 60) + " minutes. The phone gets its stream address when it is used in a flow.")
         : null));
   return card;
+}
+
+// True for an address only reachable on the local network (private,
+// link-local or .local): the phone must then be on that network. A public
+// address (--public-url, a proxy) works over any connection, 5G included.
+function isLocalUrl(url) {
+  let host;
+  try { host = new URL(url).hostname.replace(/^\[|\]$/g, "").toLowerCase(); } catch (e) { return true; }
+  if (host === "localhost" || host.endsWith(".local")) return true;
+  const v4 = host.match(/^(\d+)\.(\d+)\.\d+\.\d+$/);
+  if (v4) {
+    const [a, b] = [Number(v4[1]), Number(v4[2])];
+    return a === 10 || a === 127 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168)
+      || (a === 169 && b === 254) || (a === 100 && b >= 64 && b <= 127);
+  }
+  // IPv6: unique local (fc00::/7) and link-local (fe80::/10).
+  return /^f[cd]/.test(host) || /^fe[89ab]/.test(host);
+}
+
+// Copies text. The clipboard API needs a secure context (https or
+// localhost); the page is often opened over http on a LAN address, so fall
+// back to a selected textarea.
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch (e) {
+    const area = el("textarea", { readonly: "" });
+    area.value = text;
+    area.style.position = "fixed";
+    area.style.opacity = "0";
+    document.body.append(area);
+    area.select();
+    let ok = false;
+    try { ok = document.execCommand("copy"); } catch (e2) { /* not allowed */ }
+    area.remove();
+    return ok;
+  }
+}
+
+// A clickable http(s) link to the join page that opens `t.deep_link` in the
+// app, on the control URL's host (which the phone can reach), or null.
+function joinLink(t) {
+  if (!CONFIG.joinPath || !t.deep_link || !t.control_url) return null;
+  try {
+    const u = new URL(t.control_url);
+    const scheme = u.protocol === "wss:" ? "https:" : "http:";
+    return scheme + "//" + u.host + CONFIG.joinPath + "#" + encodeURIComponent(t.deep_link);
+  } catch (e) {
+    return null;
+  }
 }
 
 function renderAddCards() {
@@ -1254,6 +2043,7 @@ if (CONFIG.clapperUrl) document.getElementById("clapper").href = CONFIG.clapperU
 else document.getElementById("clapper").remove();
 renderAddCards();
 loadInfo();
+setView(storageGet("tallycamView") || "cameras");
 connect();
 </script>
 </body>

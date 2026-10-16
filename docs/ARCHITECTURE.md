@@ -8,8 +8,9 @@ truth for the implementation.
 
 Not a phone app as such, but a **device role**: a device that is provisioned,
 keeps its own disciplined clock, describes its controls, takes remote control
-and tally, and sends media to Strom. The phone is the first device. Android,
-desktops, small capture boxes and browsers can take the same role.
+and tally, and sends media to Strom. The phone is the first device: the iOS
+app, and since October 2026 a first Android version on the same core.
+Desktops, small capture boxes and browsers can take the same role.
 
 The range of use goes from crowd contribution (anyone scans a QR code and
 sends a stream) to a studio of phones on tripods, logged in, time synced and
@@ -78,6 +79,11 @@ The media path splits into three layers:
   on 2026-10-16 to stay on it rather than switch to libsrt or the newer pure-Rust
   crates: when the next fault turns up, move the fixes from the driver layer
   into a fork of the crate and offer them upstream.
+- **Adaptive bitrate in the core, on the SRT thread.** The SRT caller runs the
+  controller (`core/src/bitrate/adaptive.rs`) on each statistics refresh and
+  reports the bitrate to the app, which only applies it to its encoder. iOS
+  and Android get the same behaviour from the same code; the operator's
+  bitrate is the ceiling.
 - **WebRTC/WHIP later, with `str0m`** (sans-IO, fits the core's design).
 - **The core muxes and sends.** The app hands encoded frames and audio
   packets with their capture times to the core (`lc_ts_*`); the core builds

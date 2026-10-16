@@ -1,6 +1,6 @@
 [package]
 name = "tallycam-core"
-description = "Shared TallyCam core: chrony-like clock discipline, LCP SEI timestamps, MPEG-TS muxer, genlock and auto ISO loops, bitrate defaults, LCP protocol types, device keys"
+description = "Shared TallyCam core: chrony-like clock discipline, LCP SEI timestamps, MPEG-TS muxer, genlock and auto ISO loops, bitrate defaults and adaptive bitrate, LCP protocol types, device keys"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

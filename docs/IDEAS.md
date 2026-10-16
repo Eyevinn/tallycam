@@ -96,6 +96,9 @@ before iPhone 12 (Wi-Fi or USB Ethernet). Not scheduled.
 
 ## Android
 
+A first version is in `android/` (October 2026), on the same core as iOS;
+docs/APPS.md lists where it still differs. Tested on the emulator so far.
+
 Cheaper, but fragmented. Many budget phones expose Camera2 only at
 `LEGACY`/`LIMITED` (no real manual ISO or shutter), and MediaCodec encoders
 vary in rate control and latency. Strengths: kiosk mode (device owner),

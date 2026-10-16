@@ -1,11 +1,12 @@
 # TallyCam
 
-TallyCam turns iPhones and iPads into cameras for live production. A phone
-scans a QR code, streams camera and microphone over SRT, shows tally from
-the vision mixer, is remote controlled from the gallery (exposure, white
-balance, focus, lens, format, codec, bitrate), and stamps every frame with
-its capture time from its own disciplined clock. With software genlock,
-phones line up their frames on a shared time grid without cables.
+TallyCam turns iPhones, iPads and Android phones into cameras for live
+production. A phone scans a QR code, streams camera and microphone over SRT,
+shows tally from the vision mixer, is remote controlled from the gallery
+(exposure, white balance, focus, lens, format, codec, bitrate), and stamps
+every frame with its capture time from its own disciplined clock. With
+software genlock, phones line up their frames on a shared time grid without
+cables.
 
 It is built for [Strom](https://github.com/Eyevinn/strom), which embeds the
 server side, and also runs on its own with the standalone control hub.
@@ -14,7 +15,7 @@ The repository holds:
 
 - **The iOS and iPadOS app** (`ios/`, Swift): capture, encoding, the operator
   screen with tally, and the device side of the protocol.
-- **The Android app** (`android/`, Kotlin), early: provisioning, the
+- **The Android app** (`android/`, Kotlin), a first version: provisioning, the
   protocol with device keys, preview images, tally, camera names, H.264
   plus Opus over SRT through the same core, and the camera controls with the
   iOS ids (lens, zoom, resolution, frame rate, stabilization, torch, exposure
@@ -39,11 +40,20 @@ The repository holds:
 A prototype, not released and not stable. Protocol, APIs and storage
 formats may change without notice.
 
-What works today, on an iPhone 16 and an iPad 10:
+What works today, on an iPhone 16 and an iPad 10 (Android on the emulator):
 
 - H.264 or HEVC up to 2160p60 and 1080p240, Opus or AAC audio, as MPEG-TS
   over SRT with AES encryption; about 45 to 50 ms from capture to the network
   plus the SRT latency ([LATENCY](docs/LATENCY.md)).
+- A first Android version on the same core: the same design, settings and
+  protocol as the iOS app, H.264 or HEVC with Opus or AAC over SRT, tally,
+  remote control and soft genlock. Tested on the emulator (126 ms p50 from
+  capture to the SRT receiver, 100 ms of it SRT latency); a real phone is
+  next. Where it differs from iOS: [APPS](docs/APPS.md).
+- Adaptive bitrate in the core's SRT caller: the video bitrate drops when the
+  network cannot carry it (send buffer, RTT, loss, drops) and climbs back to
+  the operator's bitrate. On by default on iOS and Android
+  (`adaptive_bitrate`); not yet tested on a throttled network.
 - Provisioning by QR code, optionally invite-only with a per-device key in
   the Secure Enclave; remote control and tally from the hub or from Strom;
   camera names set by the operator; operator messages on the phone.

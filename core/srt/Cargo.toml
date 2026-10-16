@@ -1,6 +1,6 @@
 [package]
 name = "tallycam-srt"
-description = "SRT caller sender for TallyCam: the pure-Rust srt-protocol engine driven by one thread with its own UDP socket"
+description = "SRT caller sender for TallyCam: the pure-Rust srt-protocol engine driven by one thread with its own UDP socket, with adaptive bitrate"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

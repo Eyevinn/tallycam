@@ -331,7 +331,11 @@ What WebRTC (WHIP) would change for this path:
   late or are lost.
 - **Congestion control.** SRT live mode sends at the encoder's rate and only
   drops what is too late; WebRTC (GCC/TWCC) lowers the encoder bitrate
-  before queues build up, which matters more on cellular than here.
+  before queues build up, which matters more on cellular than here. TallyCam
+  adds its own on top of SRT: adaptive bitrate on the core's SRT thread
+  (`core/src/bitrate/adaptive.rs`) lowers the encoder bitrate when the send
+  buffer, the RTT or the loss rate shows a queue, before packets come too
+  late. It samples every 250 ms, so it reacts more slowly than GCC.
 - **Timing.** RTCP sender reports map RTP time to NTP time, and the
   `abs-capture-time` header extension carries the capture time per frame,
   so a receiver can align cameras without our SEI (the SEI would still

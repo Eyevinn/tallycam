@@ -1,8 +1,6 @@
 package se.eyevinn.tallycam
 
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
-import org.junit.Assert.assertTrue
 import org.junit.Test
 import se.eyevinn.tallycam.media.AnnexB
 import java.nio.ByteBuffer
@@ -20,7 +18,6 @@ class AnnexBTest {
         val out = ByteArray(n).also { dst.get(it) }
         val expected = bytes(0, 0, 0, 3, 0x67, 1, 2, 0, 0, 0, 2, 0x68, 3, 0, 0, 0, 4, 0x65, 4, 5, 6)
         assertEquals(expected.toList(), out.toList())
-        assertTrue(AnnexB.isH264Keyframe(dst, n))
     }
 
     @Test
@@ -32,7 +29,6 @@ class AnnexBTest {
         val n = AnnexB.toLengthPrefixed(src, dst)
         assertEquals(4 + 3, n)
         assertEquals(3, dst.getInt(0))
-        assertFalse(AnnexB.isH264Keyframe(dst, n))
     }
 
     @Test

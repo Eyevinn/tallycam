@@ -21,17 +21,18 @@ jobs:
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018"
           echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
-      - name: Rust for Android
-        run: |
-          rustup target add aarch64-linux-android
-          cargo install cargo-ndk --locked
       - uses: actions/cache@v4
         with:
           path: |
+            ~/.cargo/bin/cargo-ndk
             ~/.cargo/registry
             ~/.cargo/git
             target
           key: android-${{ hashFiles('Cargo.lock') }}
+      - name: Rust for Android
+        run: |
+          rustup target add aarch64-linux-android
+          command -v cargo-ndk || cargo install cargo-ndk --locked
       - name: Build and test
         working-directory: android
         run: |

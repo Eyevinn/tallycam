@@ -46,13 +46,17 @@ class VideoEncoder(
             setInteger(MediaFormat.KEY_FRAME_RATE, frameRate)
             setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
             if (mime == MediaFormat.MIMETYPE_VIDEO_AVC) {
+                // The level follows the size and rate (2160p and 60 fps need more than 4.1).
                 setInteger(MediaFormat.KEY_PROFILE, MediaCodecInfo.CodecProfileLevel.AVCProfileHigh)
-                setInteger(MediaFormat.KEY_LEVEL, MediaCodecInfo.CodecProfileLevel.AVCLevel41)
             } else {
                 setInteger(MediaFormat.KEY_PROFILE, MediaCodecInfo.CodecProfileLevel.HEVCProfileMain)
             }
             // No B-frames: PTS order is decode order, as the muxer expects.
             setInteger(MediaFormat.KEY_MAX_B_FRAMES, 0)
+            // Real time, no faster: the codec neither buffers frames for
+            // speed nor clocks up beyond the frame rate (power, heat).
+            setInteger(MediaFormat.KEY_PRIORITY, 0)
+            setInteger(MediaFormat.KEY_OPERATING_RATE, frameRate)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
             }
@@ -84,6 +88,14 @@ class VideoEncoder(
         inputSurface = codec.createInputSurface()
         codec.start()
         Log.i(TAG, "$mime ${width}x$height@$frameRate, $bitrateKbps kbit/s")
+    }
+
+    /** Reused: a keyframe request allocates nothing. */
+    private val syncFrame = android.os.Bundle().apply { putInt(MediaCodec.PARAMETER_KEY_REQUEST_SYNC_FRAME, 0) }
+
+    /** Makes the next frame a keyframe (stream thread). */
+    fun requestKeyframe() {
+        runCatching { codec.setParameters(syncFrame) }
     }
 
     /** Applied live. */

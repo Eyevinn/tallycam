@@ -55,6 +55,9 @@ object Hot {
     /** late video frames, late audio frames, started (0/1), start ns, PCR delay ns. */
     @JvmStatic external fun tsStats(mux: Long, out: LongArray)
 
+    /** The stream waits for a keyframe in time for its PCR: ask the encoder for one. */
+    @JvmStatic external fun tsWantsKeyframe(mux: Long): Boolean
+
     const val GENLOCK_FREE_RUN = 0
     const val GENLOCK_ACQUIRING = 1
     const val GENLOCK_LOCKED = 2

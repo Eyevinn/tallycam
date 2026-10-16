@@ -73,9 +73,13 @@ class AppModel(private val context: Context) : LcpClient.Listener, LiveStream.Li
         private set
 
     private var admitted = false
+    /** Bumped per connection, so an old admission timer does nothing. */
+    private var connectionSerial = 0
     private var challengeSeen = false
     private var helloName: String? = null
-    private var lastStats: LiveStream.Stats? = null
+    /** The latest stream stats (Settings shows round trip and losses). */
+    var lastStats by mutableStateOf<LiveStream.Stats?>(null)
+        private set
     private var sentValues: String? = null
 
     val model: String = CameraName.model(Build.MANUFACTURER, Build.MODEL)
@@ -120,6 +124,48 @@ class AppModel(private val context: Context) : LcpClient.Listener, LiveStream.Li
         }
     }
 
+    /** The name Settings shows as the placeholder: the model and the start of the id. */
+    val defaultName: String get() = CameraName.display(null, model, deviceId)
+
+    /** The hub's host, for Settings. */
+    val host: String? get() = runCatching { android.net.Uri.parse(settings.controlUrl).host }.getOrNull()
+
+    /** "H.264, 6000 kbit/s (auto)", as iOS shows it. */
+    val videoSummary: String get() {
+        val codec = if (settings.videoCodec == "hevc") "HEVC" else "H.264"
+        val kbps = settings.bitrateKbps.takeIf { it > 0 }
+        return "$codec, ${kbps ?: DEFAULT_KBPS} kbit/s" + if (kbps == null) " (auto)" else ""
+    }
+
+    /** "Back Camera 1280x720 30 fps", as iOS shows the capture. */
+    val pictureSummary: String get() {
+        val size = camera.streamSize
+        val lens = camera.lenses.firstOrNull { it.id == camera.cameraId }?.label ?: "Camera"
+        return "$lens ${size.width}x${size.height} ${camera.settings.frameRate} fps"
+    }
+
+    fun batteryPercent(): Int? =
+        (context.getSystemService(Context.BATTERY_SERVICE) as BatteryManager)
+            .getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY).takeIf { it in 0..100 }
+
+    fun clockSummary(): se.eyevinn.tallycam.control.ClockSummary? =
+        clock?.let { c -> runCatching { c.statusJson() }.getOrNull()?.let(se.eyevinn.tallycam.control.ClockSummary::parse) }
+
+    fun setSrtUrl(url: String) {
+        if (url.isEmpty() || url.startsWith("srt://")) settings.srtUrl = url
+        publishState()
+    }
+
+    /** Disconnects and forgets the hub, as "Disconnect and forget server" on iOS. */
+    fun forgetServer() {
+        client.close()
+        settings.controlUrl = ""
+        settings.srtUrl = ""
+        link = Link.NOT_SET_UP
+        admitted = false
+        tally = Tally.OFF
+    }
+
     fun setCameraName(name: String) {
         settings.cameraName = name
         cameraNameSetting = settings.cameraName ?: ""
@@ -131,53 +177,85 @@ class AppModel(private val context: Context) : LcpClient.Listener, LiveStream.Li
 
     fun attachPreview(texture: SurfaceTexture) = camera.open(texture)
 
+    /** A tap on the preview, normalised 0..1. */
+    fun focusAt(x: Float, y: Float) = camera.focusAt(x, y)
+
     /** The preview is gone (app in the background): the camera stays only while streaming. */
-    fun detachPreview() = camera.detachPreview()
+    fun detachPreview(released: () -> Unit) = camera.detachPreview(released)
 
     // MARK: Live
 
     fun toggleLive() = if (streamState == LiveStream.State.IDLE) goLive() else stopLive()
 
     fun goLive(): String? {
-        if (streamState != LiveStream.State.IDLE) return null
+        // Asked again while a stop is still under way: start once it is done.
+        if (stopping) {
+            startAfterStop = true
+            return null
+        }
+        // The stream's own state: the UI's follows a moment later.
+        if (stream.state != LiveStream.State.IDLE) return null
         val id = deviceId ?: return "No device key"
         val url = settings.srtUrl.ifEmpty { return "No SRT URL: scan the hub's QR code" }
         val kbps = settings.bitrateKbps.takeIf { it > 0 } ?: DEFAULT_KBPS
+        val mic = context.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) ==
+            android.content.pm.PackageManager.PERMISSION_GRANTED
         return try {
+            // The foreground first: from the background Android 12+ refuses
+            // it, and then nothing else has started.
+            StreamService.start(context, "Live as $displayName", microphone = mic)
             val surface = stream.start(ProvisioningLink.resolveSrtUrl(url, id), camera.streamSize.width,
                                        camera.streamSize.height, camera.settings.frameRate, kbps,
-                                       camera.timestampOffsetNs(), withAudio = true,
+                                       camera.timestampOffsetNs(), withAudio = mic,
                                        hevc = settings.videoCodec == "hevc", aac = settings.audioCodec == "aac")
             bitrateKbps = kbps
+            streamMessage = null
             camera.setEncoderSurface(surface)
             clock?.setLive(true)
-            StreamService.start(context, "Live as $displayName")
             null
         } catch (e: Exception) {
             Log.e(TAG, "Go live failed", e)
+            StreamService.stop(context)
             streamMessage = e.message
             e.message ?: "could not start"
         }
     }
 
-    fun stopLive() {
-        camera.setEncoderSurface(null)
-        stream.stop()
-        clock?.setLive(false)
-        StreamService.stop(context)
+    /**
+     * Stops the stream: the camera stops rendering into the encoder's
+     * Surface first, then the encoder and SRT go (camera thread, then main).
+     */
+    fun stopLive(reason: String? = null) {
+        startAfterStop = false
+        if (stopping || (streamState == LiveStream.State.IDLE && stream.state == LiveStream.State.IDLE)) return
+        stopping = true
+        camera.setEncoderSurface(null) {
+            main.post {
+                stopping = false
+                stream.stop()
+                cameraControls.streamStopped()
+                clock?.setLive(false)
+                StreamService.stop(context)
+                streamMessage = reason
+                reason?.let { sendLog("warn", "Stream stopped: $it") }
+                publishState()
+                if (startAfterStop) {
+                    startAfterStop = false
+                    goLive()?.let { sendLog("error", "Go live failed: $it") }
+                }
+            }
+        }
     }
 
+    /** A stop is waiting for the camera to drop the encoder's Surface. */
+    private var stopping = false
+    private var startAfterStop = false
+
+    override fun onStreamFailed(reason: String) = stopLive(reason)
+
     override fun onStreamState(state: LiveStream.State, message: String?) {
-        val wasLive = streamState != LiveStream.State.IDLE
         streamState = state
-        streamMessage = message
-        if (state == LiveStream.State.IDLE && wasLive) {
-            camera.setEncoderSurface(null)
-            cameraControls.streamStopped()
-            clock?.setLive(false)
-            StreamService.stop(context)
-            message?.let { sendLog("warn", "Stream stopped: $it") }
-        }
+        if (state != LiveStream.State.IDLE) streamMessage = message
         publishState()
     }
 
@@ -190,10 +268,14 @@ class AppModel(private val context: Context) : LcpClient.Listener, LiveStream.Li
         sendHello()
         // A server without device keys may say nothing: admitted unless it
         // challenges soon.
-        main.postDelayed({ if (client.isOpen && !admitted && !challengeSeen) admit() }, 3000)
+        val connection = ++connectionSerial
+        main.postDelayed({
+            if (connection == connectionSerial && client.isOpen && !admitted && !challengeSeen) admit()
+        }, 3000)
     }
 
     override fun onClosed(reason: String) {
+        connectionSerial++
         link = if (settings.controlUrl.isEmpty()) Link.NOT_SET_UP else Link.CONNECTING
         admitted = false
         tally = Tally.OFF
@@ -332,8 +414,13 @@ class AppModel(private val context: Context) : LcpClient.Listener, LiveStream.Li
     private fun applySet(id: Any?, values: JSONObject) {
         val errors = mutableListOf<String>()
         // Modes before the values that depend on them, as on iOS, so
-        // {"exposure_mode": "manual", "iso": 400} works in one message.
-        for (key in values.keys().asSequence().sortedBy { MODE_FIRST.indexOf(it).let { i -> if (i < 0) MODE_FIRST.size else i } }) {
+        // {"exposure_mode": "manual", "iso": 400} works in one message, and
+        // `live` last, so it starts with the URL and codecs of the same set.
+        fun order(key: String) = when (key) {
+            "live" -> Int.MAX_VALUE
+            else -> MODE_FIRST.indexOf(key).let { i -> if (i < 0) MODE_FIRST.size else i }
+        }
+        for (key in values.keys().asSequence().sortedBy(::order)) {
             val value = values.get(key)
             val error: String? = when (key) {
                 "camera_name" -> if (value is String) { setCameraName(value); null } else "expected text"

@@ -78,6 +78,7 @@ extern "C" {
     fn lc_ts_audio(mux: *mut LcTsMux, data: *const u8, len: usize, pts_ns: i64, now_ns: i64)
         -> i32;
     fn lc_ts_stats(mux: *const LcTsMux, out: *mut LcTsStats);
+    fn lc_ts_wants_keyframe(mux: *const LcTsMux) -> bool;
 }
 
 /// LC_SRT_BAD_ARGS: returned when a buffer is not direct or too short.
@@ -308,6 +309,18 @@ pub extern "system" fn Java_se_eyevinn_tallycam_core_Hot_tsStats(
         s.pcr_delay_ns,
     ];
     let _ = env.set_long_array_region(&out, 0, &values);
+}
+
+/// True while the stream waits for a keyframe that makes its PCR deadline
+/// (the encoder warming up): ask the encoder for a sync frame.
+#[no_mangle]
+pub extern "system" fn Java_se_eyevinn_tallycam_core_Hot_tsWantsKeyframe(
+    _env: JNIEnv,
+    _class: JClass,
+    mux: jlong,
+) -> jboolean {
+    // SAFETY: a live muxer handle (or 0, which the core treats as none).
+    as_bool(unsafe { lc_ts_wants_keyframe(mux as *const LcTsMux) })
 }
 
 // MARK: Soft genlock (lc_genlock_*)

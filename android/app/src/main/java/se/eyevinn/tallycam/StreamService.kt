@@ -27,6 +27,7 @@ class StreamService : Service() {
         val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java),
                                              PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val text = intent?.getStringExtra(EXTRA_TEXT) ?: "Live"
+        val microphone = intent?.getBooleanExtra(EXTRA_MICROPHONE, false) ?: false
         val notification = Notification.Builder(this, CHANNEL)
             .setContentTitle("TallyCam")
             .setContentText(text)
@@ -34,8 +35,11 @@ class StreamService : Service() {
             .setContentIntent(open)
             .setOngoing(true)
             .build()
+        // Android 14+ refuses a type whose permission is missing: the
+        // microphone only when RECORD_AUDIO is granted.
         val types = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA or
+                (if (microphone) ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE else 0)
         } else 0
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) startForeground(ID, notification, types)
         else startForeground(ID, notification)
@@ -46,9 +50,12 @@ class StreamService : Service() {
         private const val CHANNEL = "stream"
         private const val ID = 1
         private const val EXTRA_TEXT = "text"
+        private const val EXTRA_MICROPHONE = "microphone"
 
-        fun start(context: Context, text: String) {
-            context.startForegroundService(Intent(context, StreamService::class.java).putExtra(EXTRA_TEXT, text))
+        /** Throws when Android refuses a foreground service now (app in the background). */
+        fun start(context: Context, text: String, microphone: Boolean) {
+            context.startForegroundService(Intent(context, StreamService::class.java)
+                                               .putExtra(EXTRA_TEXT, text).putExtra(EXTRA_MICROPHONE, microphone))
         }
 
         fun stop(context: Context) {

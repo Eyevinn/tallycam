@@ -47,6 +47,7 @@ class AudioEncoder(private val aac: Boolean, private val sink: Sink) {
                     setInteger(MediaFormat.KEY_BIT_RATE, if (aac) 128_000 else 80_000)
                     setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, CHUNK_BYTES * 4)
                     if (aac) setInteger(MediaFormat.KEY_AAC_PROFILE, android.media.MediaCodecInfo.CodecProfileLevel.AACObjectLC)
+                    setInteger(MediaFormat.KEY_PRIORITY, 0)
                 }, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
                 start()
             }
@@ -144,9 +145,10 @@ class AudioEncoder(private val aac: Boolean, private val sink: Sink) {
         /** Opus's usual pre-skip, 312 samples, until the encoder says. */
         private const val OPUS_DELAY_NS = 312L * 1_000_000_000L / RATE
         /**
-         * AAC-LC priming of Android's AAC encoder (FDK), 2048 samples, until the
-         * encoder reports one. Not measured yet: check with sync-probe --av.
+         * AAC-LC priming, 2112 samples as docs/PROTOCOL.md ("MPEG-TS timing")
+         * gives it, until the encoder reports its own. Not measured on Android
+         * yet: check with sync-probe --av.
          */
-        private const val AAC_DELAY_NS = 2048L * 1_000_000_000L / RATE
+        private const val AAC_DELAY_NS = 2112L * 1_000_000_000L / RATE
     }
 }

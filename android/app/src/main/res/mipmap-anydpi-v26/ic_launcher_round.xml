@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The iOS app icon (ios/TallyCam/Assets.xcassets/AppIcon.appiconset), at
+     two thirds of the canvas so the tally dot stays inside every launcher's
+     mask; the background is the icon's own dark. -->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/ic_launcher_background" />
+    <foreground android:drawable="@mipmap/ic_launcher_foreground" />
+</adaptive-icon>

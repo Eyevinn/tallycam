@@ -26,7 +26,6 @@ import android.util.Log
 import android.util.Range
 import android.util.Size
 import android.view.Surface
-import se.eyevinn.tallycam.core.ClockMapping
 import se.eyevinn.tallycam.core.Hot
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.Executor
@@ -102,8 +101,18 @@ class CameraCapture(context: Context) {
         ?: manager.cameraIdList.firstOrNull()
         private set
 
+    /** The active camera's characteristics, cached (a binder call each otherwise; read per frame). */
+    @Volatile private var cachedCharacteristics: Pair<String, CameraCharacteristics>? = null
+
     val characteristics: CameraCharacteristics?
-        get() = cameraId?.let { manager.getCameraCharacteristics(it) }
+        get() {
+            val id = cameraId ?: return null
+            cachedCharacteristics?.let { (cached, c) -> if (cached == id) return c }
+            return manager.getCameraCharacteristics(id).also { cachedCharacteristics = id to it }
+        }
+
+    /** Run once the session no longer uses the surfaces it dropped (camera thread). */
+    private val afterConfigure = mutableListOf<() -> Unit>()
 
     @Volatile var settings = Settings()
         private set
@@ -130,8 +139,30 @@ class CameraCapture(context: Context) {
 
     /** At most every this many ns a JPEG goes to `onThumbnail`; 0 for none. */
     @Volatile var thumbnailIntervalNs = 0L
+
+    /**
+     * Receives preview JPEGs (on the preview thread). null stops them, and
+     * the camera then stops producing the small YUV stream at all (power).
+     */
     @Volatile var onThumbnail: ((ByteArray, Int, Int) -> Unit)? = null
+        set(value) {
+            val changed = (field == null) != (value == null)
+            field = value
+            if (changed) handler.post { repeat() }
+        }
     private var lastThumbNs = 0L
+    /** JPEG compression runs here, off the camera thread. */
+    private val previewThread = HandlerThread("preview-jpeg").also { it.start() }
+    private val previewHandler = Handler(previewThread.looper)
+    /** Reused NV21 frame; busy while the preview thread compresses it. */
+    private var nv21 = ByteArray(0)
+    private val nv21Busy = java.util.concurrent.atomic.AtomicBoolean(false)
+    /** Every Nth result updates [measured] (read four times a second). */
+    private var resultCount = 0
+    /** Two status arrays, alternated, so a reader never sees one being written. */
+    private val genlockArrays = arrayOf(DoubleArray(5), DoubleArray(5))
+    private var genlockArrayIndex = 0
+    private val genlockMapping = LongArray(5)
 
     @Volatile var onError: ((String) -> Unit)? = null
 
@@ -267,7 +298,8 @@ class CameraCapture(context: Context) {
             device = null
             cameraId = id
             change { it.copy(zoom = 1f, meteringPoint = null) }
-            texture?.let { openOnThread(it) }
+            // Also without a preview (streaming in the background).
+            if (texture != null || encoderSurface != null) openDevice()
             onControlsChanged?.invoke()
         }
     }
@@ -287,20 +319,33 @@ class CameraCapture(context: Context) {
         handler.post { openOnThread(texture) }
     }
 
-    /** The preview went away (app in the background): keep streaming without it. */
-    fun detachPreview() {
+    /**
+     * The preview went away (app in the background): keep streaming without
+     * it, or close the camera when not streaming. `released` runs once the
+     * camera no longer renders into the texture, which may then be freed.
+     */
+    fun detachPreview(released: () -> Unit = {}) {
         handler.post {
+            val surface = previewSurface
             texture = null
-            previewSurface?.release()
             previewSurface = null
+            afterConfigure += {
+                surface?.release()
+                released()
+            }
             if (encoderSurface != null) configure() else closeDevice()
         }
     }
 
-    /** null: back to preview only. */
-    fun setEncoderSurface(surface: Surface?) {
+    /**
+     * The encoder's Surface, or null to go back to preview only. `done` runs
+     * (camera thread) once the session no longer renders into the surface
+     * it dropped, so the encoder may release it.
+     */
+    fun setEncoderSurface(surface: Surface?, done: () -> Unit = {}) {
         handler.post {
             encoderSurface = surface
+            afterConfigure += done
             configure()
         }
     }
@@ -314,15 +359,28 @@ class CameraCapture(context: Context) {
         session = null
         device?.close()
         device = null
+        runAfterConfigure()
+    }
+
+    private fun runAfterConfigure() {
+        if (afterConfigure.isEmpty()) return
+        val pending = afterConfigure.toList()
+        afterConfigure.clear()
+        pending.forEach { runCatching(it).onFailure { e -> Log.w(TAG, "after configure", e) } }
     }
 
     // MARK: Camera thread
 
-    @SuppressLint("MissingPermission")
     private fun openOnThread(texture: SurfaceTexture) {
         this.texture = texture
         texture.setDefaultBufferSize(streamSize.width, streamSize.height)
         previewSurface = Surface(texture)
+        openDevice()
+    }
+
+    /** Opens the camera, or reconfigures it when open (with or without a preview). */
+    @SuppressLint("MissingPermission")
+    private fun openDevice() {
         val id = cameraId ?: run {
             onError?.invoke("No camera")
             return
@@ -339,13 +397,23 @@ class CameraCapture(context: Context) {
                 }
 
                 override fun onDisconnected(camera: CameraDevice) {
+                    // Another app took the camera, or it went away: say so,
+                    // and while streaming try to get it back.
                     camera.close()
                     if (device === camera) device = null
+                    session = null
+                    runAfterConfigure()
+                    if (encoderSurface != null) {
+                        onError?.invoke("Camera taken by another app, retrying")
+                        handler.postDelayed({ if (device == null && encoderSurface != null) openDevice() }, 1000)
+                    }
                 }
 
                 override fun onError(camera: CameraDevice, error: Int) {
                     camera.close()
                     if (device === camera) device = null
+                    session = null
+                    runAfterConfigure()
                     onError?.invoke("Camera error $error")
                 }
             })
@@ -355,7 +423,7 @@ class CameraCapture(context: Context) {
     }
 
     private fun configure() {
-        val device = device ?: return
+        val device = device ?: return runAfterConfigure()
         session?.close()
         session = null
         val thumbSize = thumbSize()
@@ -371,15 +439,19 @@ class CameraCapture(context: Context) {
                     override fun onConfigured(s: CameraCaptureSession) {
                         session = s
                         repeat()
+                        // The previous session is closed: dropped surfaces are free.
+                        runAfterConfigure()
                     }
 
                     override fun onConfigureFailed(s: CameraCaptureSession) {
                         onError?.invoke("Camera session failed")
+                        runAfterConfigure()
                     }
                 }))
         } catch (e: Exception) {
             Log.e(TAG, "Camera session failed (${outputs.size} outputs, stream $streamSize, preview images $thumbSize)", e)
             onError?.invoke("Camera session failed: ${e.message}")
+            runAfterConfigure()
         }
     }
 
@@ -394,7 +466,9 @@ class CameraCapture(context: Context) {
         } catch (e: Exception) {
             return
         }
-        listOfNotNull(previewSurface, encoderSurface, thumbnails?.surface).forEach(builder::addTarget)
+        // The small YUV stream only while someone looks at preview images.
+        val thumbs = thumbnails?.surface?.takeIf { onThumbnail != null && thumbnailIntervalNs > 0 }
+        listOfNotNull(previewSurface, encoderSurface, thumbs).forEach(builder::addTarget)
         builder.apply(s)
         try {
             if (afTrigger) {
@@ -483,13 +557,17 @@ class CameraCapture(context: Context) {
 
     private val resultCallback = object : CameraCaptureSession.CaptureCallback() {
         override fun onCaptureCompleted(s: CameraCaptureSession, request: CaptureRequest, result: TotalCaptureResult) {
-            measured = Measured(
-                result.get(CaptureResult.SENSOR_SENSITIVITY),
-                result.get(CaptureResult.SENSOR_EXPOSURE_TIME),
-                result.get(CaptureResult.LENS_FOCUS_DISTANCE),
-                result.get(CaptureResult.SENSOR_FRAME_DURATION),
-            )
-            result.get(CaptureResult.SENSOR_TIMESTAMP)?.let(::genlockFrame)
+            if (resultCount++ % 4 == 0) {
+                measured = Measured(
+                    result.get(CaptureResult.SENSOR_SENSITIVITY),
+                    result.get(CaptureResult.SENSOR_EXPOSURE_TIME),
+                    result.get(CaptureResult.LENS_FOCUS_DISTANCE),
+                    result.get(CaptureResult.SENSOR_FRAME_DURATION),
+                )
+            }
+            if (genlockLoop != 0L || settings.genlock) {
+                result.get(CaptureResult.SENSOR_TIMESTAMP)?.let(::genlockFrame)
+            }
         }
     }
 
@@ -522,9 +600,12 @@ class CameraCapture(context: Context) {
             Hot.genlockSetTargetOffset(genlockLoop, s.genlockOffsetNs)
             lastGenlockOffsetNs = s.genlockOffsetNs
         }
-        val mapping = ClockMapping.at(sensorNs + timestampOffsetNs())
-        val duration = Hot.genlockOnFrame(genlockLoop, mapping.taiNs, mapping.synced)
-        genlockStatus = DoubleArray(5).also { Hot.genlockStatus(genlockLoop, it) }
+        Hot.clockMap(sensorNs + timestampOffsetNs(), genlockMapping)
+        val duration = Hot.genlockOnFrame(genlockLoop, genlockMapping[0], genlockMapping[4] and 1L != 0L)
+        genlockArrayIndex = 1 - genlockArrayIndex
+        val status = genlockArrays[genlockArrayIndex]
+        Hot.genlockStatus(genlockLoop, status)
+        genlockStatus = status
         if (duration > 0) {
             genlockDurationNs = duration.toLong()
             repeat()
@@ -538,6 +619,12 @@ class CameraCapture(context: Context) {
             ?: Size(640, 480)
     }
 
+    /**
+     * Camera thread: copies the frame into the reused NV21 buffer (bulk row
+     * copies) when a preview image is due, and compresses it on the preview
+     * thread. A frame that comes while the last one is still compressing is
+     * skipped.
+     */
     private fun onThumbnailImage(reader: ImageReader) {
         val image = reader.acquireLatestImage() ?: return
         try {
@@ -545,8 +632,20 @@ class CameraCapture(context: Context) {
             val interval = thumbnailIntervalNs
             val sink = onThumbnail
             if (sink == null || interval <= 0 || now - lastThumbNs < interval) return
+            if (!nv21Busy.compareAndSet(false, true)) return
             lastThumbNs = now
-            sink(Yuv.toJpeg(image), image.width, image.height)
+            val w = image.width
+            val h = image.height
+            if (nv21.size != w * h * 3 / 2) nv21 = ByteArray(w * h * 3 / 2)
+            Yuv.toNv21(image, nv21)
+            val frame = nv21
+            previewHandler.post {
+                try {
+                    sink(Yuv.compress(frame, w, h), w, h)
+                } finally {
+                    nv21Busy.set(false)
+                }
+            }
         } finally {
             image.close()
         }
@@ -582,28 +681,40 @@ class CameraCapture(context: Context) {
     }
 }
 
-/** YUV_420_888 to JPEG through NV21 (YuvImage). */
+/** YUV_420_888 to NV21 and JPEG (YuvImage). */
 internal object Yuv {
-    fun toJpeg(image: android.media.Image, quality: Int = 70): ByteArray {
+    /** Into `out` (w * h * 3 / 2 bytes): luma rows in bulk, chroma interleaved V U. */
+    fun toNv21(image: android.media.Image, out: ByteArray) {
         val w = image.width
         val h = image.height
-        val nv21 = ByteArray(w * h * 3 / 2)
         val y = image.planes[0]
         val u = image.planes[1]
         val v = image.planes[2]
+        val yBuf = y.buffer
         var o = 0
-        for (row in 0 until h) {
-            val buf = y.buffer
-            val base = row * y.rowStride
-            for (col in 0 until w) nv21[o++] = buf.get(base + col * y.pixelStride)
+        if (y.pixelStride == 1) {
+            for (row in 0 until h) {
+                yBuf.position(row * y.rowStride)
+                yBuf.get(out, o, w)
+                o += w
+            }
+        } else {
+            for (row in 0 until h) for (col in 0 until w) out[o++] = yBuf.get(row * y.rowStride + col * y.pixelStride)
         }
+        val vBuf = v.buffer
+        val uBuf = u.buffer
         for (row in 0 until h / 2) {
+            val vBase = row * v.rowStride
+            val uBase = row * u.rowStride
             for (col in 0 until w / 2) {
-                nv21[o++] = v.buffer.get(row * v.rowStride + col * v.pixelStride)
-                nv21[o++] = u.buffer.get(row * u.rowStride + col * u.pixelStride)
+                out[o++] = vBuf.get(vBase + col * v.pixelStride)
+                out[o++] = uBuf.get(uBase + col * u.pixelStride)
             }
         }
-        val out = ByteArrayOutputStream()
+    }
+
+    fun compress(nv21: ByteArray, w: Int, h: Int, quality: Int = 70): ByteArray {
+        val out = ByteArrayOutputStream(w * h / 4)
         YuvImage(nv21, ImageFormat.NV21, w, h, null).compressToJpeg(Rect(0, 0, w, h), quality, out)
         return out.toByteArray()
     }

@@ -38,6 +38,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.input.pointer.pointerInput
 import se.eyevinn.tallycam.AppModel
 import se.eyevinn.tallycam.media.LiveStream
 
@@ -73,7 +75,7 @@ fun TallyCamScreen(model: AppModel?, permitted: Boolean, onScan: () -> Unit) {
             if (model.link == AppModel.Link.NOT_SET_UP && !showSettings) {
                 ConnectCard(onScan, Modifier.align(Alignment.Center))
             }
-            if (showSettings) SettingsDialog(model, onScan) { showSettings = false }
+            if (showSettings) SettingsScreen(model, onScan = { showSettings = false; onScan() }) { showSettings = false }
         }
     }
 }
@@ -81,7 +83,11 @@ fun TallyCamScreen(model: AppModel?, permitted: Boolean, onScan: () -> Unit) {
 @Composable
 private fun Preview(model: AppModel, modifier: Modifier) {
     AndroidView(
-        modifier = modifier.fillMaxSize().aspectRatio(16f / 9f, matchHeightConstraintsFirst = true),
+        // Tap to focus and expose there, as on iOS (the `focus_at` command).
+        modifier = modifier.fillMaxSize().aspectRatio(16f / 9f, matchHeightConstraintsFirst = true)
+            .pointerInput(Unit) {
+                detectTapGestures { p -> model.focusAt(p.x / size.width, p.y / size.height) }
+            },
         factory = { context ->
             TextureView(context).apply {
                 surfaceTextureListener = object : TextureView.SurfaceTextureListener {
@@ -89,8 +95,9 @@ private fun Preview(model: AppModel, modifier: Modifier) {
                         model.attachPreview(texture)
                     override fun onSurfaceTextureSizeChanged(texture: SurfaceTexture, w: Int, h: Int) = Unit
                     override fun onSurfaceTextureDestroyed(texture: SurfaceTexture): Boolean {
-                        model.detachPreview()
-                        return true
+                        // Freed only once the camera no longer renders into it.
+                        model.detachPreview { texture.release() }
+                        return false
                     }
                     override fun onSurfaceTextureUpdated(texture: SurfaceTexture) = Unit
                 }
@@ -163,7 +170,24 @@ private fun StatusStrip(model: AppModel, onSettings: () -> Unit, modifier: Modif
                  modifier = Modifier.weight(1f, fill = false))
         }
         Spacer(Modifier.weight(1f))
+        // As iOS: link, clock and battery, refreshed every second.
+        var tick by remember { mutableStateOf(0) }
+        androidx.compose.runtime.LaunchedEffect(Unit) {
+            while (true) {
+                kotlinx.coroutines.delay(1000)
+                tick++
+            }
+        }
+        val clockHealth = remember(tick) { model.clockSummary()?.health }
+        val battery = remember(tick) { model.batteryPercent() }
         Box(Modifier.size(9.dp).background(linkColor, CircleShape))
+        Box(Modifier.size(9.dp).background(when (clockHealth) {
+            "healthy" -> Color(0xFF34C759)
+            "degraded" -> Color(0xFFFF9F0A)
+            null -> Color.Gray
+            else -> Color(0xFFFF453A)
+        }, CircleShape))
+        battery?.let { Text("$it%", color = Color.White, fontSize = 13.sp) }
         Text("⚙", color = Color.White, fontSize = 18.sp, modifier = Modifier.clickable(onClick = onSettings).padding(4.dp))
     }
 }
@@ -171,9 +195,24 @@ private fun StatusStrip(model: AppModel, onSettings: () -> Unit, modifier: Modif
 @Composable
 private fun LiveButton(model: AppModel, modifier: Modifier) {
     val live = model.streamState != LiveStream.State.IDLE
+    // As iOS: a haptic when the stream goes live or stops; orange while connecting.
+    val haptics = androidx.compose.ui.platform.LocalHapticFeedback.current
+    var wasLive by remember { mutableStateOf(model.streamState == LiveStream.State.LIVE) }
+    androidx.compose.runtime.LaunchedEffect(model.streamState) {
+        val isLive = model.streamState == LiveStream.State.LIVE
+        if (isLive != wasLive && model.streamState != LiveStream.State.CONNECTING) {
+            haptics.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+        }
+        if (model.streamState != LiveStream.State.CONNECTING) wasLive = isLive
+    }
+    val fill = when (model.streamState) {
+        LiveStream.State.IDLE -> Color.Black.copy(alpha = 0.35f)
+        LiveStream.State.CONNECTING -> Color(0xFFFF9F0A).copy(alpha = 0.85f)
+        LiveStream.State.LIVE -> Color(0xFFE5322D)
+    }
     Box(
         modifier.size(76.dp).border(4.dp, Color.White, CircleShape).padding(8.dp)
-            .background(if (live) Color(0xFFE5322D) else Color.White.copy(alpha = 0.25f), CircleShape)
+            .background(fill, CircleShape)
             .clickable { model.toggleLive() },
         contentAlignment = Alignment.Center,
     ) {
@@ -193,36 +232,4 @@ private fun ConnectCard(onScan: () -> Unit, modifier: Modifier) {
              fontSize = 14.sp, modifier = Modifier.width(300.dp))
         TextButton(onClick = onScan) { Text("Scan QR code") }
     }
-}
-
-@Composable
-private fun SettingsDialog(model: AppModel, onScan: () -> Unit, onDismiss: () -> Unit) {
-    var name by remember { mutableStateOf(model.cameraNameSetting) }
-    var control by remember { mutableStateOf(model.settings.controlUrl) }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        confirmButton = {
-            TextButton(onClick = {
-                model.setCameraName(name)
-                if (control != model.settings.controlUrl) model.setControlUrl(control)
-                onDismiss()
-            }) { Text("Done") }
-        },
-        dismissButton = { TextButton(onClick = { onDismiss(); onScan() }) { Text("Scan QR code") } },
-        title = { Text("Settings") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                OutlinedTextField(name, { name = it }, label = { Text("Camera name") },
-                                  placeholder = { Text(model.displayName) }, singleLine = true)
-                OutlinedTextField(control, { control = it }, label = { Text("Control hub") },
-                                  placeholder = { Text("ws://host:8090/lcp/v0/device") }, singleLine = true)
-                Text("SRT: ${model.settings.srtUrl.ifEmpty { "set by the QR code" }}", fontSize = 13.sp)
-                Text("Model: ${model.model}", fontSize = 13.sp)
-                Text("Device key: ${model.fingerprint?.take(16)?.chunked(4)?.joinToString(" ") ?: "none"}",
-                     fontSize = 13.sp)
-                Text("To connect, scan the hub's QR code with the phone's camera.", fontSize = 12.sp,
-                     color = Color.Gray, modifier = Modifier.width(320.dp))
-            }
-        },
-    )
 }

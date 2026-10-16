@@ -207,6 +207,7 @@ offset, codecs, A/V measurement with `--av`, summaries with `--duration-s`).
 | [STROM_INTEGRATION](docs/STROM_INTEGRATION.md) | The design for TallyCam cameras in Strom |
 | [DEVICE_CAPABILITIES](docs/DEVICE_CAPABILITIES.md) | Phone capabilities worth using (HDR, gyro, timecode and more) |
 | [IDEAS](docs/IDEAS.md) | Direction notes, not decisions |
+| [APPS](docs/APPS.md) | One design and one feature set on every platform, and where the apps differ today |
 
 ## License
 

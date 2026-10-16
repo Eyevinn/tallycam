@@ -66,7 +66,13 @@ android {
 val buildCore by tasks.registering(Exec::class) {
     workingDir = rootDir.parentFile
     commandLine("scripts/build-core-android.sh", "arm64-v8a")
-    // -PskipCore: use the library and bindings already built.
+    // Up to date unless the core changed, so Kotlin does not recompile on
+    // every build. -PskipCore: use the library and bindings already built.
+    val repo = rootDir.parentFile
+    inputs.files(fileTree(repo.resolve("core")) { include("**/*.rs", "**/Cargo.toml", "**/uniffi.toml") })
+    inputs.files(repo.resolve("Cargo.toml"), repo.resolve("Cargo.lock"), repo.resolve("scripts/build-core-android.sh"))
+    outputs.dir("src/main/jniLibs")
+    outputs.dir("build/generated/uniffi")
     onlyIf { !project.hasProperty("skipCore") }
 }
 tasks.named("preBuild") { dependsOn(buildCore) }

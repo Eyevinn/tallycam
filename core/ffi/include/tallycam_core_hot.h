@@ -96,7 +96,8 @@ typedef struct LcTsMux LcTsMux;
 #define LC_TS_PCR_DELAY_AAC_NS 150000000
 #define LC_TS_PCR_DELAY_VIDEO_NS 80000000
 /// lc_ts_video / lc_ts_audio: not muxed (no format yet, or the stream has
-/// not started: it starts on a keyframe once the audio format is known).
+/// not started: it starts on a keyframe muxed before its PCR deadline, once
+/// the audio format is known).
 #define LC_TS_SKIPPED 0
 
 typedef struct LcTsVideoFrame {
@@ -146,11 +147,16 @@ bool lc_ts_set_video_format(LcTsMux *mux, const uint8_t *parameter_sets, size_t 
 /// a rate with an ADTS index).
 bool lc_ts_set_audio_format(LcTsMux *mux, uint32_t sample_rate, uint8_t channels);
 /// Returns LC_TS_SKIPPED, the SRT payloads queued (>= 1), or the first
-/// LC_SRT_* error (the frame was muxed, but not all of it queued).
+/// LC_SRT_* error (the frame was muxed, but not all of it queued). now_ns:
+/// host ns now (lc_host_now_ns); unlike lc_srt_send, 0 is not "read it here".
 int32_t lc_ts_video(LcTsMux *mux, const LcTsVideoFrame *frame, int64_t now_ns);
 /// One Opus packet or one raw AAC frame (no ADTS header); pts_ns: capture
 /// time of its first sample minus the encoder delay. Returns as lc_ts_video.
 int32_t lc_ts_audio(LcTsMux *mux, const uint8_t *data, size_t len, int64_t pts_ns, int64_t now_ns);
+/// True while the stream has not started because its first keyframe came
+/// after its PCR deadline (the encoder warming up): make the next frame a
+/// keyframe.
+bool lc_ts_wants_keyframe(const LcTsMux *mux);
 void lc_ts_stats(const LcTsMux *mux, LcTsStats *out);
 
 /// Soft genlock: a PI loop that locks frame timing to the TAI frame grid.

@@ -306,6 +306,17 @@ pub unsafe extern "C" fn lc_ts_audio(
     }
 }
 
+/// True while the stream has not started because its first keyframe came
+/// after its PCR deadline (the encoder warming up): the encoder should make
+/// its next frame a keyframe.
+///
+/// # Safety
+/// `mux` from `lc_ts_new`.
+#[no_mangle]
+pub unsafe extern "C" fn lc_ts_wants_keyframe(mux: *const LcTsMux) -> bool {
+    unsafe { mux.as_ref() }.is_some_and(|m| m.muxer.wants_keyframe())
+}
+
 /// # Safety
 /// `mux` from `lc_ts_new`, `out` writable.
 #[no_mangle]
@@ -367,8 +378,16 @@ mod ts_ffi_tests {
             sei_frame_counter: 7,
             sei_uncertainty_us: 5,
         };
+        // Muxed after its PCR deadline (80 ms): the stream does not start
+        // on it, and the muxer asks for another keyframe.
+        assert_eq!(
+            unsafe { lc_ts_video(m, &frame, 1_081_000_000) },
+            LC_TS_SKIPPED
+        );
+        assert!(unsafe { lc_ts_wants_keyframe(m) });
         // Tables (1 payload) + video (1 payload).
         assert_eq!(unsafe { lc_ts_video(m, &frame, 1_030_000_000) }, 2);
+        assert!(!unsafe { lc_ts_wants_keyframe(m) });
         assert_eq!(out[0].0, 0);
         assert_eq!((out[1].0, out[1].1), (1, 999_000_000));
         let es = &out[1].2;

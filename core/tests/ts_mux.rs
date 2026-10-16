@@ -446,7 +446,11 @@ fn real_h264_with_ffprobe_and_gstreamer() {
     assert_eq!(units.len(), 10);
     let sps = units[0].iter().find(|n| n[0] & 0x1F == 7).unwrap();
     let pps = units[0].iter().find(|n| n[0] & 0x1F == 8).unwrap();
-    let mut m = Muxer::new(VideoCodec::H264, Some(AudioCodec::Aac), 0);
+    let mut m = Muxer::new(
+        VideoCodec::H264,
+        Some(AudioCodec::Aac),
+        AudioCodec::pcr_delay_ns(Some(AudioCodec::Aac)),
+    );
     m.set_video_format([*sps, *pps], 4).unwrap();
     m.set_audio_format(48_000, 1).unwrap();
     let mut out = Out::default();
@@ -549,4 +553,32 @@ fn real_h264_with_ffprobe_and_gstreamer() {
     } else {
         println!("gst-launch-1.0 not installed: skipped");
     }
+}
+
+/// The stream starts on a keyframe muxed before its PCR deadline: a late
+/// first keyframe (the encoder warming up) is passed over, the muxer asks for
+/// another, and the next keyframe in time starts the stream.
+#[test]
+fn a_late_first_keyframe_does_not_start_the_stream() {
+    let mut m = h264_muxer(None, 60 * MS);
+    let mut out = Out::default();
+    let key = slice(true);
+    let frame = |pts_ns| VideoFrame {
+        data: &key,
+        keyframe: true,
+        pts_ns,
+        sei: None,
+    };
+    let t = 1_000 * MS;
+    // Muxed 61 ms after capture with a 60 ms delay: late.
+    assert!(!m.write_video(&frame(t), t + 61 * MS, &mut out.sink()));
+    assert!(m.wants_keyframe());
+    assert_eq!((m.start_ns(), m.late_start_keyframes()), (None, 1));
+    assert!(out.bytes.is_empty());
+    // The next keyframe is in time.
+    let t2 = t + 33 * MS;
+    assert!(m.write_video(&frame(t2), t2 + 45 * MS, &mut out.sink()));
+    assert_eq!(m.start_ns(), Some(t2));
+    assert!(!m.wants_keyframe());
+    assert_eq!(m.late_video_frames(), 0);
 }

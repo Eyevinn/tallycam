@@ -59,6 +59,8 @@ final class VideoEncoder: @unchecked Sendable {
     private let lock = NSLock()
     /// Capture queue only.
     private var loggedSizeMismatch = false
+    /// The next frame is encoded as a keyframe; guarded by `lock`.
+    private var forceKeyframe = false
 
     init(settings: VideoEncoderSettings) {
         self.settings = settings
@@ -181,8 +183,19 @@ final class VideoEncoder: @unchecked Sendable {
                              value: Int(Double(frameRate) * settings.keyframeIntervalSeconds) as CFNumber)
     }
 
+    /// Makes the next frame a keyframe (any thread).
+    func requestKeyframe() {
+        lock.withLock {
+            forceKeyframe = true
+        }
+    }
+
     func encode(_ sampleBuffer: CMSampleBuffer) {
-        guard let session = lock.withLock({ self.session }),
+        let (session, keyframe) = lock.withLock {
+            defer { forceKeyframe = false }
+            return (self.session, forceKeyframe)
+        }
+        guard let session,
               let imageBuffer = sampleBuffer.imageBuffer
         else {
             return
@@ -207,7 +220,7 @@ final class VideoEncoder: @unchecked Sendable {
             imageBuffer: imageBuffer,
             presentationTimeStamp: sampleBuffer.presentationTimeStamp,
             duration: sampleBuffer.duration,
-            frameProperties: nil,
+            frameProperties: keyframe ? Self.forceKeyframeProperties : nil,
             sourceFrameRefcon: UnsafeMutableRawPointer(bitPattern: Int(encodeInNs)),
             infoFlagsOut: nil
         )
@@ -215,6 +228,8 @@ final class VideoEncoder: @unchecked Sendable {
             log.error("EncodeFrame failed: \(status)")
         }
     }
+
+    private static let forceKeyframeProperties = [kVTEncodeFrameOptionKey_ForceKeyFrame: kCFBooleanTrue] as CFDictionary
 
     /// On a VideoToolbox thread.
     fileprivate func output(status: OSStatus, encoded: CMSampleBuffer?, encodeInNs: Int64) {

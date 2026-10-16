@@ -170,6 +170,8 @@ pub struct Muxer {
     ts: Vec<u8>,
     late_video_frames: u64,
     late_audio_frames: u64,
+    /// Keyframes not used to start the stream because they were late.
+    late_start_keyframes: u64,
 }
 
 impl Muxer {
@@ -198,6 +200,7 @@ impl Muxer {
             ts: Vec::with_capacity(256 * 1024 / 184 * PACKET_SIZE + 2 * PACKET_SIZE),
             late_video_frames: 0,
             late_audio_frames: 0,
+            late_start_keyframes: 0,
         };
         m.build_tables();
         m
@@ -223,6 +226,17 @@ impl Muxer {
 
     pub fn late_audio_frames(&self) -> u64 {
         self.late_audio_frames
+    }
+
+    /// True before the stream started when a keyframe came too late to start
+    /// it: the encoder should make the next frame a keyframe.
+    pub fn wants_keyframe(&self) -> bool {
+        self.start_ns.is_none() && self.late_start_keyframes > 0
+    }
+
+    /// Keyframes passed over at the start because they were late.
+    pub fn late_start_keyframes(&self) -> u64 {
+        self.late_start_keyframes
     }
 
     /// Host ns of the first muxed video frame, once the stream started.
@@ -324,7 +338,16 @@ impl Muxer {
             return false;
         }
         if self.start_ns.is_none() {
+            // The stream starts on a keyframe that is in time: the
+            // encoder's first frames take longer (up to 35 ms more measured
+            // on an iPhone), and a first keyframe muxed after its PCR
+            // deadline reaches a syncing receiver late. The caller asks the
+            // encoder for another keyframe ([`Self::wants_keyframe`]).
             if !frame.keyframe || (self.audio.is_some() && !self.audio_ready) {
+                return false;
+            }
+            if self.clock.slack_ns(frame.pts_ns, now_ns) < 0 {
+                self.late_start_keyframes += 1;
                 return false;
             }
             self.start_ns = Some(frame.pts_ns);

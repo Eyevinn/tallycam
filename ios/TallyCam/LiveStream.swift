@@ -138,7 +138,8 @@ final class LiveStream: @unchecked Sendable {
         let codec = mic == nil ? nil : audioCodec
         // The PCR delay follows the audio codec (the core's default).
         guard let handle = connection?.hotHandle, handle != 0,
-              let muxer = CoreTsMuxer(srtHandle: handle, videoCodec: videoSettings.codec, audioCodec: codec)
+              let muxer = CoreTsMuxer(srtHandle: handle, videoCodec: videoSettings.codec, audioCodec: codec,
+                                      pcrDelayNs: PcrDelay.ns(video: videoSettings, audio: codec))
         else {
             stopOnQueue(reason: "Could not start the MPEG-TS muxer")
             return
@@ -148,6 +149,9 @@ final class LiveStream: @unchecked Sendable {
         // VideoToolbox and microphone threads mux their own output.
         let mux = mux
         let videoEncoder = VideoEncoder(settings: videoSettings)
+        mux.onWantsKeyframe = { [weak videoEncoder] in
+            videoEncoder?.requestKeyframe()
+        }
         videoEncoder.onFormat = { format in
             mux.setVideoFormat(format)
         }
@@ -221,6 +225,8 @@ private final class MuxPath: @unchecked Sendable {
     private var loggedStart = false
     private var audioBufferFrames = 0
     private var queueFullCount = 0
+    /// Asks the encoder for a keyframe; set before the encoder starts.
+    var onWantsKeyframe: (@Sendable () -> Void)?
 
     func start(_ muxer: CoreTsMuxer, audioCodec: AudioCodec) {
         lock.withLockUnchecked {
@@ -312,6 +318,7 @@ private final class MuxPath: @unchecked Sendable {
             : TimestampSei.uncertaintyUnknown
         // The core builds the SEI and puts it before the first slice.
         let flags = UInt8((mapping.synced ? LC_SEI_FLAG_SYNCED : 0) | LC_SEI_FLAG_TAI)
+        var wantsKeyframe = false
         let (result, startNs) = lock.withLockUnchecked { () -> (CoreTsMuxer.Result, Int64?) in
             guard let muxer else {
                 return (CoreTsMuxer.Result(LC_TS_SKIPPED), nil)
@@ -324,6 +331,7 @@ private final class MuxPath: @unchecked Sendable {
                                           sei: (UInt64(clamping: mapping.taiNs), flags, counter, uncertaintyUs),
                                           nowNs: HostClock.nowNs())
             guard result != LC_TS_SKIPPED else {
+                wantsKeyframe = muxer.wantsKeyframe
                 return (result, nil)
             }
             // Muxing and queueing onto the SRT caller.
@@ -333,6 +341,9 @@ private final class MuxPath: @unchecked Sendable {
             }
             loggedStart = true
             return (result, startNs)
+        }
+        if wantsKeyframe {
+            onWantsKeyframe?()
         }
         if let startNs {
             log.info("Stream starts at host time \(startNs)")

@@ -29,9 +29,11 @@ final class CoreTsMuxer {
     private var output: OutputBox?
 
     /// Sends on the SRT caller behind `srtHandle` (`SrtCaller.hotHandle()`).
-    /// The muxer keeps that caller's sender alive.
-    init?(srtHandle: UInt64, videoCodec: VideoCodec, audioCodec: AudioCodec?) {
-        guard let mux = lc_ts_new(srtHandle, videoCodec.coreCode, audioCodec?.coreCode ?? UInt8(LC_TS_AUDIO_NONE), 0)
+    /// The muxer keeps that caller's sender alive. `pcrDelayNs` 0: the
+    /// core's default for the audio codec.
+    init?(srtHandle: UInt64, videoCodec: VideoCodec, audioCodec: AudioCodec?, pcrDelayNs: Int64 = 0) {
+        guard let mux = lc_ts_new(srtHandle, videoCodec.coreCode, audioCodec?.coreCode ?? UInt8(LC_TS_AUDIO_NONE),
+                                  pcrDelayNs)
         else {
             return nil
         }
@@ -141,6 +143,12 @@ final class CoreTsMuxer {
         frame.withUnsafeBytes { writeAudio($0, ptsNs: ptsNs, nowNs: nowNs) }
     }
 
+    /// True while the stream waits for a keyframe in time: its first one
+    /// came after the PCR deadline (the encoder warming up).
+    var wantsKeyframe: Bool {
+        lc_ts_wants_keyframe(mux)
+    }
+
     var stats: Stats {
         var s = LcTsStats()
         lc_ts_stats(mux, &s)
@@ -154,6 +162,26 @@ final class CoreTsMuxer {
         init(_ output: @escaping (Data, UInt8) -> Void) {
             self.output = output
         }
+    }
+}
+
+/// The PCR delay for a stream: what a syncing receiver buffers on top of the
+/// slowest stream's capture-to-mux time, so it is latency. Measured on an
+/// iPhone 16 with Opus (steady state, 30 s per format, max capture to the
+/// first SRT packet): 720p to 1080p at 24 to 60 fps 39 to 46 ms, 120 and
+/// 240 fps 36 and 29 ms, 2160p 53 to 57 ms. Up to 1080p the delay is 60 ms
+/// (the worst plus 14 ms); larger frames and AAC keep the core's default
+/// (80 and 150 ms). The encoder's first frames are slower still; the core
+/// starts the stream on a keyframe in time (`onWantsKeyframe`).
+enum PcrDelay {
+    static let upTo1080pNs: Int64 = 60_000_000
+
+    /// 0: the core's default.
+    static func ns(video: VideoEncoderSettings, audio: AudioCodec?) -> Int64 {
+        guard audio != .aac, Int(video.width) * Int(video.height) <= 1920 * 1080 else {
+            return 0
+        }
+        return upTo1080pNs
     }
 }
 

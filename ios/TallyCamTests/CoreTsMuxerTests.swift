@@ -64,6 +64,42 @@ final class CoreTsMuxerTests: XCTestCase {
 
     // MARK: Synthetic frames
 
+    /// A first keyframe muxed after its PCR deadline (80 ms, the default with
+    /// Opus) does not start the stream: the wrapper reports that the encoder
+    /// should send another keyframe, and the next one in time starts it.
+    func testLateFirstKeyframeAsksForAnother() throws {
+        let rec = try Recorder(video: .h264, audio: .opus)
+        let format = try Self.h264Format()
+        XCTAssertTrue(rec.muxer.setVideoFormat(format))
+        XCTAssertTrue(rec.muxer.setAudioFormat(sampleRate: 48000, channels: 1))
+        let key = try Self.sample(format, keyframe: true, sliceLength: 100)
+        let t0: Int64 = 3_600_000 * Self.ms
+        XCTAssertFalse(rec.muxer.wantsKeyframe)
+        XCTAssertEqual(rec.video(key, captureNs: t0, nowNs: t0 + 81 * Self.ms, counter: 0), Int32(LC_TS_SKIPPED))
+        XCTAssertTrue(rec.muxer.wantsKeyframe)
+        XCTAssertTrue(rec.chunks.isEmpty)
+        let t1 = t0 + 33 * Self.ms
+        XCTAssertGreaterThan(rec.video(key, captureNs: t1, nowNs: t1 + 50 * Self.ms, counter: 1), 0)
+        XCTAssertFalse(rec.muxer.wantsKeyframe)
+        XCTAssertEqual(rec.muxer.stats.startNs, t1)
+    }
+
+    /// 60 ms up to 1080p with Opus or no audio; the core's default (0) for
+    /// larger frames and for AAC.
+    func testPcrDelayPerFormat() {
+        func settings(_ width: Int32, _ height: Int32) -> VideoEncoderSettings {
+            var s = VideoEncoderSettings()
+            s.width = width
+            s.height = height
+            return s
+        }
+        XCTAssertEqual(PcrDelay.ns(video: settings(1920, 1080), audio: .opus), 60_000_000)
+        XCTAssertEqual(PcrDelay.ns(video: settings(1080, 1920), audio: nil), 60_000_000)
+        XCTAssertEqual(PcrDelay.ns(video: settings(1280, 720), audio: .opus), 60_000_000)
+        XCTAssertEqual(PcrDelay.ns(video: settings(3840, 2160), audio: .opus), 0)
+        XCTAssertEqual(PcrDelay.ns(video: settings(1920, 1080), audio: .aac), 0)
+    }
+
     /// The start rules and the frame bytes through the wrapper: nothing
     /// before the formats and the first keyframe, tables before keyframes,
     /// the slice bytes intact (non-contiguous block buffers too), the SEI

@@ -36,7 +36,7 @@ fn no_allocation_per_frame_after_warm_up() {
         (VideoCodec::H264, AudioCodec::Opus),
         (VideoCodec::Hevc, AudioCodec::Aac),
     ] {
-        let mut m = Muxer::new(video, Some(audio), 0);
+        let mut m = Muxer::new(video, Some(audio), AudioCodec::pcr_delay_ns(Some(audio)));
         match video {
             VideoCodec::H264 => m
                 .set_video_format([&[0x67, 1, 2][..], &[0x68, 3][..]], 4)

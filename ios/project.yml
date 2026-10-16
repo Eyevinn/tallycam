@@ -49,6 +49,15 @@ targets:
         # Measurement output (Documents/torch-probe) in the Files app and Finder.
         UIFileSharingEnabled: true
         LSSupportsOpeningDocumentsInPlace: true
+        # From Config/Base.xcconfig; scripts/testflight.sh sets the build
+        # number for each upload.
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        # SRT is encrypted with AES (standard algorithms, protecting the
+        # stream in transit), which is exempt from the export documentation
+        # App Store Connect asks for. Without this key every upload asks.
+        # To be confirmed by Eyevinn before the first external release.
+        ITSAppUsesNonExemptEncryption: false
     preBuildScripts:
       - name: Build Rust core
         script: '"$PROJECT_DIR/../scripts/build-core-apple.sh" "$PLATFORM_NAME"'

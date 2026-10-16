@@ -6,7 +6,7 @@ CODE_SIGN_STYLE = Automatic
 // The app version (CFBundleShortVersionString) and build number
 // (CFBundleVersion). scripts/testflight.sh overrides the build number with
 // the commit count, so each upload is higher than the last.
-MARKETING_VERSION = 0.1.0
+MARKETING_VERSION = 0.2.0
 CURRENT_PROJECT_VERSION = 1
 
 #include? "Local.xcconfig"

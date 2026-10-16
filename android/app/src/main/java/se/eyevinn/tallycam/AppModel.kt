@@ -25,6 +25,13 @@ import se.eyevinn.tallycam.control.DeviceKey
 import se.eyevinn.tallycam.control.LcpClient
 import se.eyevinn.tallycam.control.ProvisioningLink
 import se.eyevinn.tallycam.control.Settings
+import se.eyevinn.tallycam.control.Shading
+import se.eyevinn.tallycam.control.capitalizedFirst
+import se.eyevinn.tallycam.control.isRemote
+import se.eyevinn.tallycam.control.title
+import se.eyevinn.tallycam.core.shadingCommandGroup
+import se.eyevinn.tallycam.core.shadingControlGroup
+import se.eyevinn.tallycam.media.CameraCapture.Shutter
 import se.eyevinn.tallycam.core.ClockMode
 import se.eyevinn.tallycam.core.ClockOptions
 import se.eyevinn.tallycam.core.ClockService
@@ -50,6 +57,7 @@ class AppModel(private val context: Context) : LcpClient.Listener, LiveStream.Li
     private val cameraControls = CameraControls(camera, { streamState != LiveStream.State.IDLE },
                                                 { settings.mainsHz = it })
     private val stream = LiveStream(this)
+    val shading = Shading(context)
     private val client = LcpClient(this)
     private val main = Handler(Looper.getMainLooper())
     private var clock: ClockService? = null
@@ -81,6 +89,9 @@ class AppModel(private val context: Context) : LcpClient.Listener, LiveStream.Li
     var lastStats by mutableStateOf<LiveStream.Stats?>(null)
         private set
     private var sentValues: String? = null
+    /** The server asked for `image_stats`, at most this often (ns); null: not asked. */
+    private var statsIntervalNs: Long? = null
+    private var lastStatsSentNs = 0L
 
     val model: String = CameraName.model(Build.MANUFACTURER, Build.MODEL)
     val deviceId: String? get() = key?.deviceId
@@ -89,12 +100,24 @@ class AppModel(private val context: Context) : LcpClient.Listener, LiveStream.Li
     init {
         camera.onError = { message -> main.post { showBanner(message); sendLog("error", message) } }
         // A new lens or size changes the controls' ranges: hello again.
-        camera.onControlsChanged = { main.post { if (admitted) sendHello() } }
+        camera.onControlsChanged = { main.post { shadingGroups(); if (admitted) sendHello() } }
+        shading.onChange = { message -> if (admitted) client.send(message) }
+        camera.onStats = { stats -> main.post { statsMeasured(stats) } }
+        camera.onAutoIsoLimit = { limit, iso ->
+            if (limit != se.eyevinn.tallycam.core.Hot.AUTO_ISO_LIMIT_NONE) {
+                val hint = if (limit == se.eyevinn.tallycam.core.Hot.AUTO_ISO_LIMIT_TOO_DARK) "too dark: use a longer shutter or more light"
+                    else if (camera.settings.mainsHz == 0) "too bright: use less light or an ND filter"
+                    else "too bright: the shutter is held flicker-free for mains light; outdoors set mains_hz off"
+                main.post { sendLog("warn", "Auto ISO at ISO $iso, $hint") }
+            }
+        }
         displayName = CameraName.display(settings.cameraName, model, deviceId)
         // Mains frequency: as set, else the region's (the core's table, as on iOS).
         val hz = settings.mainsHz.takeIf { it >= 0 }
             ?: runCatching { mainsHzForRegion(java.util.Locale.getDefault().country).toInt() }.getOrDefault(50)
         cameraControls.setMainsHz(hz)
+        shadingGroups()
+        restoreShading()
         startClock()
         if (settings.controlUrl.isNotEmpty()) client.connect(settings.controlUrl)
         // Through a lambda: statusTick is declared below.
@@ -106,6 +129,7 @@ class AppModel(private val context: Context) : LcpClient.Listener, LiveStream.Li
 
     /** A tallycam:// link: saves the URLs and reconnects. */
     fun provision(link: ProvisioningLink) {
+        if (server(link.controlUrl) != server(settings.controlUrl)) newProduction()
         settings.controlUrl = link.controlUrl
         link.srtUrl?.let { settings.srtUrl = it }
         this.link = Link.CONNECTING
@@ -114,6 +138,7 @@ class AppModel(private val context: Context) : LcpClient.Listener, LiveStream.Li
     }
 
     fun setControlUrl(url: String) {
+        if (server(url) != server(settings.controlUrl)) newProduction()
         settings.controlUrl = url.trim()
         if (settings.controlUrl.isEmpty()) {
             client.close()
@@ -169,6 +194,7 @@ class AppModel(private val context: Context) : LcpClient.Listener, LiveStream.Li
 
     /** Disconnects and forgets the hub, as "Disconnect and forget server" on iOS. */
     fun forgetServer() {
+        newProduction()
         client.close()
         settings.controlUrl = ""
         settings.srtUrl = ""
@@ -188,8 +214,29 @@ class AppModel(private val context: Context) : LcpClient.Listener, LiveStream.Li
 
     fun attachPreview(texture: SurfaceTexture) = camera.open(texture)
 
-    /** A tap on the preview, normalised 0..1. */
-    fun focusAt(x: Float, y: Float) = camera.focusAt(x, y)
+    /**
+     * A tap on the preview, normalised 0..1: continuous autofocus there
+     * (focus back to auto), and the metering point while exposure is auto.
+     * Never changes the exposure owner or mode. Refused while focus is remote.
+     */
+    fun focusAt(x: Float, y: Float) {
+        if (shading.view("focus")?.isRemote == true) {
+            showBanner("Focus is under remote control")
+            return
+        }
+        if (shading.machine.localAuto("focus") == se.eyevinn.tallycam.core.OwnershipChange.Changed) shading.changed()
+        camera.focusAt(x, y)
+    }
+
+    /** Long press: focus at a point, then lock it there (focus local). */
+    fun focusLockAt(x: Float, y: Float) {
+        if (shading.view("focus")?.isRemote == true) {
+            showBanner("Focus is under remote control")
+            return
+        }
+        camera.focusAt(x, y)
+        main.postDelayed({ localSet("focus", JSONObject().put("focus_mode", "locked")) }, 700)
+    }
 
     /** The preview is gone (app in the background): the camera stays only while streaming. */
     fun detachPreview(released: () -> Unit) = camera.detachPreview(released)
@@ -292,6 +339,9 @@ class AppModel(private val context: Context) : LcpClient.Listener, LiveStream.Li
         admitted = false
         tally = Tally.OFF
         camera.onThumbnail = null
+        statsIntervalNs = null
+        shading.machine.setConnected(false)
+        shading.changed(notify = false)
     }
 
     override fun onMessage(message: JSONObject) {
@@ -319,15 +369,67 @@ class AppModel(private val context: Context) : LcpClient.Listener, LiveStream.Li
             }
             "preview" -> setPreview(message.optBoolean("enabled"), message.optDouble("fps", 1.0))
             "set" -> applySet(message.opt("id"), message.optJSONObject("values") ?: JSONObject())
-            "command" -> runCommand(message.opt("id"), message.optString("name"), message.optJSONObject("args"))
+            "command" -> {
+                val name = message.optString("name")
+                val refused = shadingCommandGroup(name)?.let { shading.machine.checkRemote(it) }
+                if (refused != null) message.opt("id")?.let { result(it, listOf("$name: $refused")) }
+                else runCommand(message.opt("id"), name, message.optJSONObject("args"))
+            }
+            "own" -> {
+                val holder = message.optJSONObject("holder")
+                val label = holder?.optString("label").orEmpty()
+                val taken = shading.machine.own(strings(message.optJSONArray("groups")),
+                                                holder?.optString("id").orEmpty(), label)
+                if (taken.fromLocal.isNotEmpty()) {
+                    val names = taken.fromLocal.mapNotNull { shading.view(it)?.title }
+                    showBanner("${names.joinToString(" and ")} taken over by ${label.ifEmpty { "the hub" }}")
+                }
+                shading.changed()
+                message.opt("id")?.let { result(it, taken.skipped.map { g -> "$g: no such group on this camera" }) }
+            }
+            "release" -> {
+                val released = shading.machine.release(strings(message.optJSONArray("groups")))
+                shading.changed()
+                val errors = applyAuto(released)
+                message.opt("id")?.let { result(it, errors) }
+            }
+            "production" -> {
+                val hz = message.optDouble("mains_hz", Double.NaN).takeIf { it == 50.0 || it == 60.0 || it == 0.0 }?.toInt()
+                cameraControls.setProduction(hz, shutterPolicy(message.opt("shutter")))?.let { sendLog("warn", it) }
+                publishState()
+            }
+            "stats" -> {
+                val fps = message.optDouble("fps", 1.0).takeIf { it.isFinite() && it > 0 } ?: 1.0
+                statsIntervalNs = if (message.optBoolean("enabled")) (1e9 / fps.coerceIn(0.2, 4.0)).toLong() else null
+                camera.statsIntervalNs = (1e9 / maxOf(fps.coerceIn(0.2, 4.0), 2.0)).toLong()
+            }
         }
+    }
+
+    private fun strings(array: org.json.JSONArray?): List<String> =
+        (0 until (array?.length() ?: 0)).mapNotNull { array?.optString(it)?.takeIf(String::isNotEmpty) }
+
+    /** `"mains"`, `"free"` or a denominator; anything else is mains. */
+    private fun shutterPolicy(value: Any?): Shutter = when {
+        value == "free" -> Shutter.Free
+        value is Number && value.toDouble().let { it >= 1 && it <= 100_000 && it == Math.rint(it) } ->
+            Shutter.Fixed(value.toInt())
+        else -> Shutter.Mains
     }
 
     private fun admit() {
         admitted = true
         client.resetBackoff()
+        shading.machine.setConnected(true)
+        shading.changed(notify = false)
+        // The full state, then ownership (docs/SHADING.md).
         publishState()
+        client.send(shading.machine.messageJson())
         sendStatus()
+        pendingLog?.let {
+            pendingLog = null
+            sendLog("warn", it)
+        }
     }
 
     private fun sendHello() {
@@ -351,13 +453,14 @@ class AppModel(private val context: Context) : LcpClient.Listener, LiveStream.Li
             enumOf("video_codec", "Video codec", buildList {
                 add("h264" to "H.264")
                 if (VideoEncoder.hasEncoder(android.media.MediaFormat.MIMETYPE_VIDEO_HEVC)) add("hevc" to "HEVC")
-            }),
-            enumOf("audio_codec", "Audio codec", listOf("opus" to "Opus", "aac" to "AAC")),
+            }).put("locked_while_live", true),
+            enumOf("audio_codec", "Audio codec", listOf("opus" to "Opus", "aac" to "AAC")).put("locked_while_live", true),
         )
         controls += cameraControls.descriptors()
         client.send(JSONObject()
             .put("type", "hello")
-            .put("protocol", 1)
+            // 2: ownership of exposure, colour and focus, and production settings.
+            .put("protocol", 2)
             .put("public_key", k.identity.publicKey)
             .put("device", device)
             .put("controls", Controls.array(controls))
@@ -386,10 +489,12 @@ class AppModel(private val context: Context) : LcpClient.Listener, LiveStream.Li
 
     /** `force` false: only when a value changed (the poll, 4 times a second). */
     private fun publishState(force: Boolean = true) {
-        if (!admitted) return
         val v = values()
         val text = v.toString()
         if (!force && text == sentValues) return
+        // Also offline: the values of owned groups survive a restart (D3).
+        shading.note(v, shutterFree)
+        if (!admitted) return
         sentValues = text
         client.send(JSONObject().put("type", "state").put("values", v))
     }
@@ -434,8 +539,15 @@ class AppModel(private val context: Context) : LcpClient.Listener, LiveStream.Li
             "live" -> Int.MAX_VALUE
             else -> MODE_FIRST.indexOf(key).let { i -> if (i < 0) MODE_FIRST.size else i }
         }
+        val free = shutterFree
         for (key in values.keys().asSequence().sortedBy(::order)) {
             val value = values.get(key)
+            // Not this server's group (docs/SHADING.md, rule 2).
+            val refused = shadingControlGroup(key, free)?.let { shading.machine.checkRemote(it) }
+            if (refused != null) {
+                errors += "$key: $refused"
+                continue
+            }
             val error: String? = when (key) {
                 "camera_name" -> if (value is String) { setCameraName(value); null } else "expected text"
                 "live" -> when (value) {
@@ -469,15 +581,19 @@ class AppModel(private val context: Context) : LcpClient.Listener, LiveStream.Li
                     }
                 }
                 "adaptive_bitrate" -> if (value is Boolean) { setAdaptiveBitrate(value); null } else "expected a bool"
-                "video_codec" -> if (value == "h264" || (value == "hevc" &&
-                        VideoEncoder.hasEncoder(android.media.MediaFormat.MIMETYPE_VIDEO_HEVC))) {
-                    settings.videoCodec = value as String
-                    if (streamState == LiveStream.State.IDLE) null else "applies the next time the stream starts"
-                } else "expected h264 or hevc"
-                "audio_codec" -> if (value == "opus" || value == "aac") {
-                    settings.audioCodec = value as String
-                    if (streamState == LiveStream.State.IDLE) null else "applies the next time the stream starts"
-                } else "expected opus or aac"
+                "video_codec" -> when {
+                    value != "h264" && !(value == "hevc" && VideoEncoder.hasEncoder(android.media.MediaFormat.MIMETYPE_VIDEO_HEVC)) ->
+                        "expected h264 or hevc"
+                    value == settings.videoCodec -> null
+                    streamState != LiveStream.State.IDLE -> CameraControls.NOT_WHILE_LIVE
+                    else -> { settings.videoCodec = value as String; null }
+                }
+                "audio_codec" -> when {
+                    value != "opus" && value != "aac" -> "expected opus or aac"
+                    value == settings.audioCodec -> null
+                    streamState != LiveStream.State.IDLE -> CameraControls.NOT_WHILE_LIVE
+                    else -> { settings.audioCodec = value as String; null }
+                }
                 "bitrate_kbps" -> {
                     val wanted = (value as? Number)?.toDouble()
                     if (wanted == null || !wanted.isFinite()) "expected a number" else {
@@ -518,6 +634,121 @@ class AppModel(private val context: Context) : LcpClient.Listener, LiveStream.Li
             main.post { if (admitted) client.send(msg) }
         }
     }
+
+    // MARK: Shading (docs/SHADING.md)
+
+    /** The production shutter is free: the shutter is then an exposure control. */
+    private val shutterFree: Boolean get() = camera.settings.effectiveShutter == Shutter.Free
+
+    /** "host:port" of a control URL, to tell a new server from the same one. */
+    private fun server(url: String): String? = runCatching {
+        android.net.Uri.parse(url.trim()).let { u -> u.host?.let { "$it:${u.port}" } }
+    }.getOrNull()
+
+    /** The groups this camera has: focus only with a focus control. */
+    private fun shadingGroups() {
+        val groups = Shading.GROUPS.filter { it != "focus" || camera.minFocusDiopters != null }
+        if (groups != shading.groups.map { it.group }) shading.useGroups(groups)
+    }
+
+    /**
+     * A new control server: its remote groups go back to auto, and the
+     * phone's own production applies until it sends one.
+     */
+    private fun newProduction() {
+        val released = shading.machine.newServer()
+        shading.changed(notify = false)
+        applyAuto(released)
+        cameraControls.setProduction(null, null)
+    }
+
+    /** Puts groups into auto on the camera; returns the errors. */
+    private fun applyAuto(groups: List<String>): List<String> {
+        val values = Shading.autoValues(groups)
+        val errors = mutableListOf<String>()
+        for (key in values.keys().asSequence().sortedBy { MODE_FIRST.indexOf(it).let { i -> if (i < 0) MODE_FIRST.size else i } }) {
+            if (!cameraControls.handles(key)) continue
+            cameraControls.apply(key, values.get(key))?.let { errors += "$key: $it" }
+        }
+        publishState()
+        return errors
+    }
+
+    /** After a relaunch, the groups that were local or remote get their values back (D3). */
+    private fun restoreShading() {
+        val values = shading.restoredValues()
+        val errors = mutableListOf<String>()
+        for (key in values.keys().asSequence().sortedBy { MODE_FIRST.indexOf(it).let { i -> if (i < 0) MODE_FIRST.size else i } }) {
+            if (!cameraControls.handles(key)) continue
+            cameraControls.apply(key, values.get(key))?.let { errors += "$key: $it" }
+        }
+        if (errors.isNotEmpty()) pendingLog = "Restoring exposure, colour and focus: ${errors.joinToString("; ")}"
+    }
+
+    /** Sent once the hub admits the phone. */
+    private var pendingLog: String? = null
+
+    private fun statsMeasured(stats: se.eyevinn.tallycam.core.ImageStatsResult) {
+        shading.update(stats)
+        val interval = statsIntervalNs ?: return
+        val now = android.os.SystemClock.elapsedRealtimeNanos()
+        if (!admitted || now - lastStatsSentNs < interval * 0.9) return
+        lastStatsSentNs = now
+        val measured = runCatching { JSONObject(stats.json) }.getOrNull() ?: return
+        val v = cameraControls.values()
+        val cameraJson = JSONObject()
+        for (key in listOf("iso", "shutter", "wb_temperature", "wb_tint")) if (v.has(key)) cameraJson.put(key, v.get(key))
+        val message = JSONObject().put("type", "image_stats").put("luma", measured.opt("luma")).put("camera", cameraJson)
+        measured.optJSONObject("colour")?.let { message.put("colour", it) }
+        client.send(message)
+    }
+
+    // MARK: Local controls (the camera operator)
+
+    /** The operator locks or sets values in a group. Refused, with a banner, while the group is remote. */
+    fun localSet(group: String, values: JSONObject) {
+        when (val change = shading.machine.localChange(group)) {
+            is se.eyevinn.tallycam.core.OwnershipChange.Refused -> {
+                showBanner(change.reason.capitalizedFirst())
+                return
+            }
+            se.eyevinn.tallycam.core.OwnershipChange.Changed -> shading.changed()
+            se.eyevinn.tallycam.core.OwnershipChange.Unchanged -> Unit
+        }
+        val errors = mutableListOf<String>()
+        for (key in values.keys().asSequence().sortedBy { MODE_FIRST.indexOf(it).let { i -> if (i < 0) MODE_FIRST.size else i } }) {
+            cameraControls.apply(key, values.get(key))?.let { errors += it }
+        }
+        errors.firstOrNull()?.let { showBanner(it.capitalizedFirst()) }
+        publishState()
+    }
+
+    /** The operator puts a group back into auto. */
+    fun localAuto(group: String) {
+        when (val change = shading.machine.localAuto(group)) {
+            is se.eyevinn.tallycam.core.OwnershipChange.Refused -> showBanner(change.reason.capitalizedFirst())
+            else -> {
+                shading.changed()
+                applyAuto(listOf(group))
+            }
+        }
+    }
+
+    /** The escape hatch (D2): a remote group taken local while the hub is away. The values stay. */
+    fun takeLocal(group: String) {
+        when (val change = shading.machine.takeLocal(group)) {
+            is se.eyevinn.tallycam.core.OwnershipChange.Refused -> showBanner(change.reason.capitalizedFirst())
+            else -> shading.changed()
+        }
+    }
+
+    /** White balance once, from the operator's controls (after [localSet]). */
+    fun localWhiteBalanceOnce() = camera.whiteBalanceOnce { main.post { publishState() } }
+
+    /** The camera's descriptors and values, for the operator's group controls. */
+    fun cameraDescriptors(): List<JSONObject> = cameraControls.descriptors()
+
+    fun cameraValues(): JSONObject = cameraControls.values()
 
     // MARK: Status
 

@@ -75,6 +75,36 @@ object Hot {
 
     /** Frames land offset ns after each grid point (per-model calibration). */
     @JvmStatic external fun genlockSetTargetOffset(g: Long, offsetNs: Long)
+
+    const val AUTO_ISO_LIMIT_NONE = 0
+    const val AUTO_ISO_LIMIT_TOO_DARK = 1
+    const val AUTO_ISO_LIMIT_TOO_BRIGHT = 2
+
+    /** Auto ISO at a fixed shutter (core/src/exposure.rs); mains 50 or 60 rounds the shutter, 0 leaves it. */
+    @JvmStatic external fun autoIsoNew(mainsHz: Int): Long
+
+    @JvmStatic external fun autoIsoFree(a: Long)
+
+    @JvmStatic external fun autoIsoReset(a: Long)
+
+    @JvmStatic external fun autoIsoSetBias(a: Long, biasEv: Double)
+
+    @JvmStatic external fun autoIsoSetMains(a: Long, mainsHz: Int)
+
+    /** Free shutter: hold baseNs, shorten only at the lowest ISO; 0 turns it off. */
+    @JvmStatic external fun autoIsoSetFreeShutter(a: Long, baseNs: Double)
+
+    /**
+     * input: t ns, metered offset EV, ISO, exposure ns, min ISO, max ISO,
+     * min exposure ns, max exposure ns. True: out holds the ISO and exposure ns to apply.
+     */
+    @JvmStatic external fun autoIsoOnSample(a: Long, input: DoubleArray, out: DoubleArray): Boolean
+
+    /** error EV, gain, limit (AUTO_ISO_LIMIT_*), settling (0/1). */
+    @JvmStatic external fun autoIsoStatus(a: Long, out: DoubleArray)
+
+    /** The longest exposure for a frame period: the format's maximum, the frame, room for genlock. */
+    @JvmStatic external fun longestExposureNs(framePeriodNs: Double, formatMaxNs: Double, genlock: Boolean): Double
 }
 
 /** One mapped host instant (lc_clock_map). */

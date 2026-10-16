@@ -69,8 +69,12 @@ fun TallyCamScreen(model: AppModel?, permitted: Boolean, onScan: () -> Unit) {
             var showSettings by remember { mutableStateOf(false) }
             Preview(model, Modifier.align(Alignment.Center))
             TallyOverlay(model)
-            StatusStrip(model, onSettings = { showSettings = true },
-                        modifier = Modifier.align(Alignment.TopCenter).padding(top = 12.dp, start = 16.dp, end = 16.dp))
+            Column(Modifier.align(Alignment.TopCenter).padding(top = 12.dp, start = 16.dp, end = 16.dp),
+                   verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                StatusStrip(model, onSettings = { showSettings = true }, modifier = Modifier)
+                // Who owns exposure, colour and focus, as on iOS.
+                GroupChips(model, Modifier.padding(start = 4.dp))
+            }
             LiveButton(model, Modifier.align(Alignment.CenterEnd).padding(end = 28.dp))
             if (model.link == AppModel.Link.NOT_SET_UP && !showSettings) {
                 ConnectCard(onScan, Modifier.align(Alignment.Center))
@@ -86,7 +90,11 @@ private fun Preview(model: AppModel, modifier: Modifier) {
         // Tap to focus and expose there, as on iOS (the `focus_at` command).
         modifier = modifier.fillMaxSize().aspectRatio(16f / 9f, matchHeightConstraintsFirst = true)
             .pointerInput(Unit) {
-                detectTapGestures { p -> model.focusAt(p.x / size.width, p.y / size.height) }
+                detectTapGestures(
+                    onTap = { p -> model.focusAt(p.x / size.width, p.y / size.height) },
+                    // Long press: focus there and lock it (docs/SHADING.md).
+                    onLongPress = { p -> model.focusLockAt(p.x / size.width, p.y / size.height) },
+                )
             },
         factory = { context ->
             TextureView(context).apply {
@@ -120,7 +128,7 @@ private fun TallyOverlay(model: AppModel) {
     }
     Box(Modifier.fillMaxSize()) {
         if (color != null) Box(Modifier.fillMaxSize().border(14.dp, color))
-        Column(Modifier.align(Alignment.TopCenter).padding(top = 60.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        Column(Modifier.align(Alignment.TopCenter).padding(top = 84.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             // The camera's name, always large: the person at the camera
             // knows which camera they are.
             Row(

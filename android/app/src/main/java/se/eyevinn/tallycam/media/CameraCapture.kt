@@ -46,7 +46,22 @@ class CameraCapture(context: Context) {
     enum class WhiteBalanceMode { AUTO, LOCKED, MANUAL }
     enum class FocusMode { AUTO, LOCKED, MANUAL }
 
-    /** What the operator set. Copied, changed and applied through [update]. */
+    /** The production's shutter (docs/SHADING.md, "Shutter"). */
+    sealed interface Shutter {
+        /** One mains period: 1/50 at 50 Hz, 1/60 at 60 Hz (free when mains is off). */
+        data object Mains : Shutter
+        /** No mains-lit light: the shutter is an exposure control. */
+        data object Free : Shutter
+        /** A fixed shutter, 1/denominator s. */
+        data class Fixed(val denominator: Int) : Shutter
+    }
+
+    /**
+     * What the operator set. Copied, changed and applied through [update].
+     * With a manual sensor the auto exposure of Camera2 is never used: auto
+     * is the core's auto ISO loop at the production shutter, writing [iso]
+     * and [exposureNs], so locked and manual start from what auto had.
+     */
     data class Settings(
         val exposureMode: ExposureMode = ExposureMode.AUTO,
         val iso: Int = 400,
@@ -70,11 +85,15 @@ class CameraCapture(context: Context) {
         val genlock: Boolean = false,
         /** Where frames land after each grid point, ns (per-model calibration). */
         val genlockOffsetNs: Long = 0,
-        /** CONTROL_AE_ANTIBANDING_MODE_*: the `mains_hz` control. */
-        val antibanding: Int = CameraMetadata.CONTROL_AE_ANTIBANDING_MODE_AUTO,
+        /** Mains frequency, 50 or 60 Hz, 0 for no mains-lit light (`mains_hz`). */
+        val mainsHz: Int = 50,
+        val shutter: Shutter = Shutter.Mains,
         /** Normalised point (0..1) for focus and exposure, or null for the whole frame. */
         val meteringPoint: Pair<Float, Float>? = null,
-    )
+    ) {
+        /** What the shutter follows now: mains without mains is free. */
+        val effectiveShutter: Shutter get() = if (shutter == Shutter.Mains && mainsHz == 0) Shutter.Free else shutter
+    }
 
     /** From the latest capture result. */
     data class Measured(val iso: Int?, val exposureNs: Long?, val focusDiopters: Float?, val frameDurationNs: Long?)
@@ -140,16 +159,8 @@ class CameraCapture(context: Context) {
     /** At most every this many ns a JPEG goes to `onThumbnail`; 0 for none. */
     @Volatile var thumbnailIntervalNs = 0L
 
-    /**
-     * Receives preview JPEGs (on the preview thread). null stops them, and
-     * the camera then stops producing the small YUV stream at all (power).
-     */
+    /** Receives preview JPEGs (on the preview thread); null stops them. */
     @Volatile var onThumbnail: ((ByteArray, Int, Int) -> Unit)? = null
-        set(value) {
-            val changed = (field == null) != (value == null)
-            field = value
-            if (changed) handler.post { repeat() }
-        }
     private var lastThumbNs = 0L
     /** JPEG compression runs here, off the camera thread. */
     private val previewThread = HandlerThread("preview-jpeg").also { it.start() }
@@ -165,6 +176,36 @@ class CameraCapture(context: Context) {
     private val genlockMapping = LongArray(5)
 
     @Volatile var onError: ((String) -> Unit)? = null
+
+    /** Auto ISO (camera thread): the core's loop, its shutter setup, and the latest frame's sensor values. */
+    private var autoIso = 0L
+    private var autoIsoSetup: Pair<Shutter, Int>? = null
+    private var autoIsoBias = Double.NaN
+    private var autoIsoOn = false
+    private var lastAutoIsoNs = 0L
+    private var frameIso = 0
+    private var frameExposureNs = 0L
+    private val autoIsoInput = DoubleArray(8)
+    private val autoIsoOutput = DoubleArray(2)
+    private val autoIsoState = DoubleArray(4)
+
+    /** AUTO_ISO_LIMIT_* of the auto ISO loop; [onAutoIsoLimit] runs when it changes (camera thread). */
+    @Volatile var autoIsoLimit = Hot.AUTO_ISO_LIMIT_NONE
+        private set
+    @Volatile var onAutoIsoLimit: ((Int, Int) -> Unit)? = null
+
+    /**
+     * Image statistics (docs/SHADING.md) at most every this many ns, from
+     * the small YUV stream: a grid sampled on the camera thread, measured by
+     * the core on the analysis thread, handed to [onStats] there.
+     */
+    @Volatile var statsIntervalNs = 500_000_000L
+    @Volatile var onStats: ((se.eyevinn.tallycam.core.ImageStatsResult) -> Unit)? = null
+    private var lastStatsNs = 0L
+    private val analysisThread = HandlerThread("analysis").also { it.start() }
+    private val analysisHandler = Handler(analysisThread.looper)
+    private val statsGrid = StatsGrid()
+    private val statsBusy = java.util.concurrent.atomic.AtomicBoolean(false)
 
     // MARK: Capabilities of the active camera
 
@@ -263,7 +304,50 @@ class CameraCapture(context: Context) {
     }
 
     private fun change(change: (Settings) -> Settings) {
-        synchronized(this) { settings = change(settings) }
+        synchronized(this) { settings = fitShutter(change(settings)) }
+    }
+
+    /**
+     * With a manual sensor, keeps the exposure at the production shutter,
+     * moving the ISO so the picture keeps its brightness; under a free
+     * shutter only within the frame.
+     */
+    private fun fitShutter(s: Settings): Settings {
+        if (!hasManualSensor) return s
+        val target = productionExposureNs(s)
+        if (target == null) {
+            val longest = longestExposureNs(s).toLong()
+            return if (s.exposureNs > longest) s.copy(exposureNs = longest) else s
+        }
+        if (kotlin.math.abs(target.toDouble() / s.exposureNs - 1) <= 0.005) return s
+        val range = isoRange
+        val iso = (s.iso.toDouble() * s.exposureNs / target).toInt()
+        return s.copy(exposureNs = target, iso = range?.let { iso.coerceIn(it.lower, it.upper) } ?: iso)
+    }
+
+    private fun longestExposureNs(s: Settings): Double =
+        Hot.longestExposureNs(1e9 / s.frameRate, (exposureRange?.upper ?: 1_000_000_000L).toDouble(), s.genlock)
+
+    /**
+     * The production's exposure for the frame rate, or null under a free
+     * shutter. A shutter longer than the frame becomes the longest
+     * flicker-free one that fits (1/100 for 1/50 at 60 fps), as on iOS.
+     */
+    fun productionExposureNs(s: Settings = settings): Long? {
+        val wanted = when (val shutter = s.effectiveShutter) {
+            Shutter.Free -> return null
+            Shutter.Mains -> 1e9 / s.mainsHz
+            is Shutter.Fixed -> 1e9 / shutter.denominator
+        }
+        val shortest = (exposureRange?.lower ?: 0L).toDouble()
+        val longest = longestExposureNs(s)
+        if (wanted <= longest) return maxOf(wanted, shortest).toLong()
+        if (s.mainsHz > 0) {
+            val pulse = 1e9 / (2 * s.mainsHz)
+            val pulses = kotlin.math.floor(longest / pulse)
+            if (pulses >= 1) return maxOf(pulses * pulse, shortest).toLong()
+        }
+        return maxOf(longest, shortest).toLong()
     }
 
     /** One autofocus (and exposure metering) at a point, then continuous focus there. */
@@ -466,9 +550,7 @@ class CameraCapture(context: Context) {
         } catch (e: Exception) {
             return
         }
-        // The small YUV stream only while someone looks at preview images.
-        val thumbs = thumbnails?.surface?.takeIf { onThumbnail != null && thumbnailIntervalNs > 0 }
-        listOfNotNull(previewSurface, encoderSurface, thumbs).forEach(builder::addTarget)
+        listOfNotNull(previewSurface, encoderSurface).forEach(builder::addTarget)
         builder.apply(s)
         try {
             if (afTrigger) {
@@ -477,7 +559,22 @@ class CameraCapture(context: Context) {
                 session.capture(builder.build(), null, handler)
                 builder.set(CaptureRequest.CONTROL_AF_TRIGGER, CameraMetadata.CONTROL_AF_TRIGGER_IDLE)
             }
-            session.setRepeatingRequest(builder.build(), resultCallback, handler)
+            // The small YUV stream (auto ISO metering, image statistics,
+            // previews) on about 10 frames a second, not every frame: a
+            // repeating burst where one request in `every` also targets it.
+            val yuv = thumbnails?.surface
+            val every = (s.frameRate / 10).coerceAtLeast(1)
+            if (yuv == null) {
+                session.setRepeatingRequest(builder.build(), resultCallback, handler)
+            } else if (every == 1) {
+                builder.addTarget(yuv)
+                session.setRepeatingRequest(builder.build(), resultCallback, handler)
+            } else {
+                val plain = builder.build()
+                builder.addTarget(yuv)
+                val sampled = builder.build()
+                session.setRepeatingBurst(List(every) { if (it == 0) sampled else plain }, resultCallback, handler)
+            }
         } catch (e: Exception) {
             Log.w(TAG, "Repeating request failed", e)
         }
@@ -486,7 +583,8 @@ class CameraCapture(context: Context) {
     private fun CaptureRequest.Builder.apply(s: Settings) {
         set(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_AUTO)
         set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, Range(s.frameRate, s.frameRate))
-        if (s.antibanding in antibandingModes) set(CaptureRequest.CONTROL_AE_ANTIBANDING_MODE, s.antibanding)
+        antibandingMode(s.mainsHz).takeIf { it in antibandingModes }
+            ?.let { set(CaptureRequest.CONTROL_AE_ANTIBANDING_MODE, it) }
         set(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE,
             if (s.stabilization && hasStabilization) CameraMetadata.CONTROL_VIDEO_STABILIZATION_MODE_ON
             else CameraMetadata.CONTROL_VIDEO_STABILIZATION_MODE_OFF)
@@ -494,15 +592,16 @@ class CameraCapture(context: Context) {
             set(CaptureRequest.CONTROL_ZOOM_RATIO, s.zoom)
         }
         val region = s.meteringPoint?.let { meteringRegion(it) }
-        // Exposure.
-        when (s.exposureMode) {
-            ExposureMode.MANUAL -> if (hasManualSensor) {
-                set(CaptureRequest.CONTROL_AE_MODE, CameraMetadata.CONTROL_AE_MODE_OFF)
-                set(CaptureRequest.SENSOR_SENSITIVITY, s.iso)
-                set(CaptureRequest.SENSOR_EXPOSURE_TIME, s.exposureNs)
-                val duration = if (s.genlock && genlockDurationNs > 0) genlockDurationNs else 1_000_000_000L / s.frameRate
-                set(CaptureRequest.SENSOR_FRAME_DURATION, duration)
-            }
+        // Exposure: with a manual sensor always the sensor values (auto is
+        // the core's auto ISO loop writing them), else Camera2's auto exposure.
+        if (hasManualSensor) {
+            set(CaptureRequest.CONTROL_AE_MODE, CameraMetadata.CONTROL_AE_MODE_OFF)
+            set(CaptureRequest.SENSOR_SENSITIVITY, s.iso)
+            set(CaptureRequest.SENSOR_EXPOSURE_TIME, s.exposureNs)
+            val duration = if (s.genlock && genlockDurationNs > 0) genlockDurationNs else 1_000_000_000L / s.frameRate
+            set(CaptureRequest.SENSOR_FRAME_DURATION, duration)
+        } else when (s.exposureMode) {
+            ExposureMode.MANUAL -> Unit
             ExposureMode.LOCKED -> {
                 set(CaptureRequest.CONTROL_AE_MODE, CameraMetadata.CONTROL_AE_MODE_ON)
                 set(CaptureRequest.CONTROL_AE_LOCK, true)
@@ -557,6 +656,10 @@ class CameraCapture(context: Context) {
 
     private val resultCallback = object : CameraCaptureSession.CaptureCallback() {
         override fun onCaptureCompleted(s: CameraCaptureSession, request: CaptureRequest, result: TotalCaptureResult) {
+            if (autoIsoOn) {
+                frameIso = result.get(CaptureResult.SENSOR_SENSITIVITY) ?: frameIso
+                frameExposureNs = result.get(CaptureResult.SENSOR_EXPOSURE_TIME) ?: frameExposureNs
+            }
             if (resultCount++ % 4 == 0) {
                 measured = Measured(
                     result.get(CaptureResult.SENSOR_SENSITIVITY),
@@ -574,7 +677,7 @@ class CameraCapture(context: Context) {
     /** Camera thread: one frame's start of exposure, sensor clock. */
     private fun genlockFrame(sensorNs: Long) {
         val s = settings
-        val active = s.genlock && s.exposureMode == ExposureMode.MANUAL && hasManualSensor
+        val active = s.genlock && hasManualSensor
         if (!active) {
             if (genlockLoop != 0L) {
                 Hot.genlockFree(genlockLoop)
@@ -629,6 +732,8 @@ class CameraCapture(context: Context) {
         val image = reader.acquireLatestImage() ?: return
         try {
             val now = SystemClock.elapsedRealtimeNanos()
+            stepAutoIso(image, now)
+            sampleStats(image, now)
             val interval = thumbnailIntervalNs
             val sink = onThumbnail
             if (sink == null || interval <= 0 || now - lastThumbNs < interval) return
@@ -648,6 +753,104 @@ class CameraCapture(context: Context) {
             }
         } finally {
             image.close()
+        }
+    }
+
+    /**
+     * Camera thread, 8 times a second: the metered exposure of this frame
+     * to the core's auto ISO loop, and what it returns to the sensor.
+     * Camera2 gives no metered offset with its auto exposure off, so the
+     * metering is the picture's mean luma against a mid grey.
+     */
+    private fun stepAutoIso(image: android.media.Image, now: Long) {
+        val s = settings
+        val on = s.exposureMode == ExposureMode.AUTO && hasManualSensor
+        if (!on) {
+            autoIsoOn = false
+            return
+        }
+        if (autoIso == 0L) autoIso = Hot.autoIsoNew(0)
+        if (!autoIsoOn) {
+            autoIsoOn = true
+            Hot.autoIsoReset(autoIso)
+            frameIso = 0
+        }
+        val setup = s.effectiveShutter to s.mainsHz
+        if (setup != autoIsoSetup) {
+            autoIsoSetup = setup
+            when (setup.first) {
+                Shutter.Mains -> {
+                    Hot.autoIsoSetMains(autoIso, s.mainsHz)
+                    Hot.autoIsoSetFreeShutter(autoIso, 0.0)
+                }
+                // The production chose this value on purpose: no rounding.
+                is Shutter.Fixed -> {
+                    Hot.autoIsoSetMains(autoIso, 0)
+                    Hot.autoIsoSetFreeShutter(autoIso, 0.0)
+                }
+                Shutter.Free -> {
+                    Hot.autoIsoSetMains(autoIso, 0)
+                    Hot.autoIsoSetFreeShutter(autoIso, s.exposureNs.toDouble().takeIf { it > 0 } ?: 1e7)
+                }
+            }
+        }
+        val bias = evRange?.let { (_, step) -> s.evSteps * step.toDouble() } ?: 0.0
+        if (bias != autoIsoBias) {
+            autoIsoBias = bias
+            Hot.autoIsoSetBias(autoIso, bias)
+        }
+        if (now - lastAutoIsoNs < 95_000_000L || frameIso <= 0 || frameExposureNs <= 0) return
+        lastAutoIsoNs = now
+        val isoRange = isoRange ?: return
+        val exposureRange = exposureRange ?: return
+        val mean = Luma.meteredMean(image, s.meteringPoint).coerceAtLeast(0.002)
+        val input = autoIsoInput
+        input[0] = Hot.hostNowNs().toDouble()
+        // EV in light, from gamma-coded luma (about 2.2), against mid grey.
+        input[1] = 2.2 * kotlin.math.log2(mean / Luma.TARGET)
+        input[2] = frameIso.toDouble()
+        input[3] = frameExposureNs.toDouble()
+        input[4] = isoRange.lower.toDouble()
+        input[5] = isoRange.upper.toDouble()
+        input[6] = exposureRange.lower.toDouble()
+        input[7] = longestExposureNs(s)
+        val apply = Hot.autoIsoOnSample(autoIso, input, autoIsoOutput)
+        Hot.autoIsoStatus(autoIso, autoIsoState)
+        val limit = autoIsoState[2].toInt()
+        if (limit != autoIsoLimit) {
+            autoIsoLimit = limit
+            onAutoIsoLimit?.invoke(limit, frameIso)
+        }
+        if (!apply) return
+        val iso = autoIsoOutput[0].toInt().coerceIn(isoRange.lower, isoRange.upper)
+        val exposure = autoIsoOutput[1].toLong()
+        synchronized(this) {
+            // Only while still in auto: the operator may have just locked.
+            if (settings.exposureMode == ExposureMode.AUTO) settings = settings.copy(iso = iso, exposureNs = exposure)
+        }
+        repeat()
+    }
+
+    /** Camera thread: a grid of this frame for the statistics, measured on the analysis thread. */
+    private fun sampleStats(image: android.media.Image, now: Long) {
+        val sink = onStats ?: return
+        if (now - lastStatsNs < statsIntervalNs || !statsBusy.compareAndSet(false, true)) return
+        lastStatsNs = now
+        if (!statsGrid.sample(image)) {
+            statsBusy.set(false)
+            return
+        }
+        analysisHandler.post {
+            try {
+                val g = statsGrid
+                // Camera2's YUV is full range (JFIF).
+                se.eyevinn.tallycam.core.imageStatsCompute(g.y, g.cbcr, g.width.toUInt(), g.height.toUInt(), false)
+                    ?.let(sink)
+            } catch (e: Exception) {
+                Log.w(TAG, "image statistics", e)
+            } finally {
+                statsBusy.set(false)
+            }
         }
     }
 
@@ -677,6 +880,14 @@ class CameraCapture(context: Context) {
 
     companion object {
         private const val TAG = "CameraCapture"
+
+        /** CONTROL_AE_ANTIBANDING_MODE_* for a mains frequency (0: off). */
+        fun antibandingMode(hz: Int) = when (hz) {
+            50 -> CameraMetadata.CONTROL_AE_ANTIBANDING_MODE_50HZ
+            60 -> CameraMetadata.CONTROL_AE_ANTIBANDING_MODE_60HZ
+            0 -> CameraMetadata.CONTROL_AE_ANTIBANDING_MODE_OFF
+            else -> CameraMetadata.CONTROL_AE_ANTIBANDING_MODE_AUTO
+        }
         private val LENS_LABELS = mapOf("ultra_wide" to "Ultra wide", "wide" to "Wide", "tele" to "Tele")
     }
 }

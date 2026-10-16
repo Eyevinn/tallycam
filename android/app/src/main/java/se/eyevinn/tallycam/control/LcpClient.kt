@@ -54,6 +54,9 @@ class LcpClient(private val listener: Listener) {
     /** False when not connected. */
     fun send(message: JSONObject): Boolean = socket?.send(message.toString()) ?: false
 
+    /** A message already in JSON (the core's `ownership`). */
+    fun send(text: String): Boolean = socket?.send(text) ?: false
+
     /** Admitted: the next reconnect starts from a short delay again. */
     fun resetBackoff() {
         backoffMs = 1000L

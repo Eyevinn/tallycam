@@ -439,3 +439,187 @@ pub extern "system" fn Java_se_eyevinn_tallycam_core_Hot_genlockSetTargetOffset(
     // SAFETY: a live handle.
     unsafe { lc_genlock_set_target_offset(g as *mut LcGenlock, offset_ns) }
 }
+
+// MARK: Auto ISO (lc_auto_iso_*)
+
+enum LcAutoIso {}
+
+#[repr(C)]
+struct LcAutoIsoInput {
+    t_ns: i64,
+    offset_ev: f64,
+    iso: f64,
+    exposure_ns: f64,
+    min_iso: f64,
+    max_iso: f64,
+    min_exposure_ns: f64,
+    max_exposure_ns: f64,
+}
+
+#[repr(C)]
+struct LcAutoIsoStatus {
+    error_ev: f64,
+    gain: f64,
+    limit: u8,
+    settling: bool,
+}
+
+extern "C" {
+    fn lc_auto_iso_new(mains_hz: u32) -> *mut LcAutoIso;
+    fn lc_auto_iso_free(a: *mut LcAutoIso);
+    fn lc_auto_iso_reset(a: *mut LcAutoIso);
+    fn lc_auto_iso_set_bias(a: *mut LcAutoIso, bias_ev: f64);
+    fn lc_auto_iso_set_mains(a: *mut LcAutoIso, mains_hz: u32);
+    fn lc_auto_iso_set_free_shutter(a: *mut LcAutoIso, base_ns: f64);
+    fn lc_auto_iso_on_sample(
+        a: *mut LcAutoIso,
+        input: *const LcAutoIsoInput,
+        out_iso: *mut f64,
+        out_exposure_ns: *mut f64,
+    ) -> bool;
+    fn lc_auto_iso_status(a: *const LcAutoIso, out: *mut LcAutoIsoStatus);
+    fn lc_longest_exposure_ns(frame_period_ns: f64, format_max_ns: f64, genlock: bool) -> f64;
+}
+
+#[no_mangle]
+pub extern "system" fn Java_se_eyevinn_tallycam_core_Hot_autoIsoNew(
+    _env: JNIEnv,
+    _class: JClass,
+    mains_hz: jint,
+) -> jlong {
+    // SAFETY: a plain value.
+    unsafe { lc_auto_iso_new(mains_hz.max(0) as u32) as jlong }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_se_eyevinn_tallycam_core_Hot_autoIsoFree(
+    _env: JNIEnv,
+    _class: JClass,
+    a: jlong,
+) {
+    if a != 0 {
+        // SAFETY: a handle from autoIsoNew, freed once by the caller.
+        unsafe { lc_auto_iso_free(a as *mut LcAutoIso) }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_se_eyevinn_tallycam_core_Hot_autoIsoReset(
+    _env: JNIEnv,
+    _class: JClass,
+    a: jlong,
+) {
+    // SAFETY: a live handle.
+    unsafe { lc_auto_iso_reset(a as *mut LcAutoIso) }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_se_eyevinn_tallycam_core_Hot_autoIsoSetBias(
+    _env: JNIEnv,
+    _class: JClass,
+    a: jlong,
+    bias_ev: f64,
+) {
+    // SAFETY: a live handle.
+    unsafe { lc_auto_iso_set_bias(a as *mut LcAutoIso, bias_ev) }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_se_eyevinn_tallycam_core_Hot_autoIsoSetMains(
+    _env: JNIEnv,
+    _class: JClass,
+    a: jlong,
+    mains_hz: jint,
+) {
+    // SAFETY: a live handle.
+    unsafe { lc_auto_iso_set_mains(a as *mut LcAutoIso, mains_hz.max(0) as u32) }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_se_eyevinn_tallycam_core_Hot_autoIsoSetFreeShutter(
+    _env: JNIEnv,
+    _class: JClass,
+    a: jlong,
+    base_ns: f64,
+) {
+    // SAFETY: a live handle.
+    unsafe { lc_auto_iso_set_free_shutter(a as *mut LcAutoIso, base_ns) }
+}
+
+/// `input` (length 8): t ns, offset EV, ISO, exposure ns, min ISO, max ISO,
+/// min exposure ns, max exposure ns. On true, `out` (length 2) holds the ISO
+/// and exposure ns to apply.
+#[no_mangle]
+pub extern "system" fn Java_se_eyevinn_tallycam_core_Hot_autoIsoOnSample(
+    env: JNIEnv,
+    _class: JClass,
+    a: jlong,
+    input: jni::objects::JDoubleArray,
+    out: jni::objects::JDoubleArray,
+) -> jboolean {
+    let mut v = [0.0f64; 8];
+    if env.get_double_array_region(&input, 0, &mut v).is_err() {
+        return JNI_FALSE;
+    }
+    let sample = LcAutoIsoInput {
+        t_ns: v[0] as i64,
+        offset_ev: v[1],
+        iso: v[2],
+        exposure_ns: v[3],
+        min_iso: v[4],
+        max_iso: v[5],
+        min_exposure_ns: v[6],
+        max_exposure_ns: v[7],
+    };
+    let (mut iso, mut exposure) = (0.0, 0.0);
+    // SAFETY: a live handle; plain in- and out-parameters.
+    let apply =
+        unsafe { lc_auto_iso_on_sample(a as *mut LcAutoIso, &sample, &mut iso, &mut exposure) };
+    if !apply {
+        return JNI_FALSE;
+    }
+    if env
+        .set_double_array_region(&out, 0, &[iso, exposure])
+        .is_err()
+    {
+        return JNI_FALSE;
+    }
+    JNI_TRUE
+}
+
+/// Fills `out` (length 4): error EV, gain, limit, settling (0/1).
+#[no_mangle]
+pub extern "system" fn Java_se_eyevinn_tallycam_core_Hot_autoIsoStatus(
+    env: JNIEnv,
+    _class: JClass,
+    a: jlong,
+    out: jni::objects::JDoubleArray,
+) {
+    let mut s = LcAutoIsoStatus {
+        error_ev: 0.0,
+        gain: 0.0,
+        limit: 0,
+        settling: false,
+    };
+    // SAFETY: a live handle; plain out-parameter.
+    unsafe { lc_auto_iso_status(a as *const LcAutoIso, &mut s) };
+    let values = [
+        s.error_ev,
+        s.gain,
+        f64::from(s.limit),
+        f64::from(u8::from(s.settling)),
+    ];
+    let _ = env.set_double_array_region(&out, 0, &values);
+}
+
+#[no_mangle]
+pub extern "system" fn Java_se_eyevinn_tallycam_core_Hot_longestExposureNs(
+    _env: JNIEnv,
+    _class: JClass,
+    frame_period_ns: f64,
+    format_max_ns: f64,
+    genlock: jboolean,
+) -> f64 {
+    // SAFETY: plain values.
+    unsafe { lc_longest_exposure_ns(frame_period_ns, format_max_ns, genlock != JNI_FALSE) }
+}

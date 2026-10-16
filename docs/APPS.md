@@ -28,10 +28,11 @@ cannot tell them apart except by `hello.device.platform`.
 
 | Part | Both apps |
 |---|---|
-| Picture | Full bleed, 16:9; tap to focus and expose at that point (`focus_at`) |
+| Picture | Full bleed, 16:9; tap to focus and expose at that point (`focus_at`, focus back to auto, never the exposure mode); long press to lock focus there |
 | Tally | A 14 pt border, red on program, green on preview; none when off |
 | Camera name | Always shown, large, in a chip at the top under the status line: "ON AIR · Kamera 2" in red, "PREVIEW · …" in green, the name alone in a dark chip when tally is off |
-| Operator message | A yellow banner under the chip, for 8 s |
+| Group chips | Under the status line: `EXP`, `WB`, `FOC`, each `AUTO`, `LOCKED` (yellow), `REMOTE` (cyan) or `REMOTE · OFFLINE` (orange), and "TOO DARK" / "CLIPPING" from the image statistics. Tap: the group's mode and values, read-only while remote. While remote and offline, "Take local control" with a confirmation, also by a long press on the chip (docs/SHADING.md, D2) |
+| Operator message | A yellow banner under the chip, for 8 s ("Exposure taken over by Shader" when a hub takes a group) |
 | Status line | One translucent line on top: a dot and STANDBY / CONNECTING / LIVE (with the bitrate while live), the hub link dot (green connected, orange connecting, grey not set up), the clock dot (green healthy, orange degraded, red bad), the battery, and the Settings button. iOS also shows the thermal state when it matters and an icon while an orientation change waits |
 | Live button | A ringed circle on the right edge in landscape: dark at standby, orange while connecting, red while live; a haptic when it goes live or stops |
 | Not connected | A card: "Not connected", how to scan the hub's QR code |
@@ -59,15 +60,16 @@ its own dark (#16181E), so launchers' masks keep the tally dot.
 |---|---|---|---|
 | Portrait streaming (`orientation`) | Yes | Landscape only | Needs rotating frames before the encoder (a GPU pass); Settings says so |
 | Either landscape side | The picture stays upright | One side only (the app is locked to landscape) | Camera2 hands the encoder sensor frames unrotated; the same GPU pass closes it |
-| Auto ISO (`exposure_mode` `auto_iso`) | Yes | No | Camera2 gives no metered offset with auto exposure off; needs metering from the picture, to build with a real phone |
-| Genlock | With auto ISO or manual exposure | Manual exposure only | Camera2 applies a frame duration only with auto exposure off; follows auto ISO |
-| `mains_hz` | Rounds the auto ISO shutter | The auto exposure's anti-banding | No auto ISO on Android yet |
+| Exposure `auto` (the core's auto ISO at the production shutter) | Metered by AVFoundation (`exposureTargetOffset`) | Metered from the picture: mean luma of the small YUV stream against mid grey (a fifth of the frame around a tapped point at ¾ weight). Cameras without `MANUAL_SENSOR` (the emulator) use Camera2's auto exposure | Camera2 gives no metered offset with its auto exposure off. Not yet run on a phone: the metering needs checking on a Pixel and a Samsung |
+| Genlock | In every exposure mode | In every exposure mode with `MANUAL_SENSOR` | Camera2 applies a frame duration only with its auto exposure off, which it always is there |
 | `wb_temperature` | Any Kelvin | The nearest AWB preset (2700 to 7500 K) | Camera2 offers presets; colour gains per sensor would need calibration |
 | `wb_tint` | Yes | No | As above |
 | QR scanning | The system Camera app | The system camera, or the in-app scanner | Not every Android camera app opens `tallycam://` links |
 | `torch_probe` | Yes | No | A measurement tool (docs/GENLOCK.md); add when Android genlock is measured |
 | `frame_duration` (Debug) | Yes | No | A measurement tool |
-| Protocol 2 (ownership, docs/SHADING.md) | In progress | No (sends 1; the hub accepts it) | Through the core's state machine once iOS has it |
+| Protocol 2 (ownership, production, image statistics, live lock) | Yes | Yes | Same core state machine and statistics; tested on the emulator against the hub |
+| Operator aids (guides, horizon, zoom rocker and lens buttons, focus peaking, audio meter, screen lock) | Yes | No | docs/SHADING.md phase 1 step 3; the Android ones are still to build |
+| Image statistics source | Every frame offered, measured up to 4 per second | The small YUV stream, which Camera2 fills on about 10 frames per second (a repeating burst), measured up to 4 per second | Power: the ISP writes the extra stream only on the frames that are sampled |
 | Device key store | Secure Enclave | Android Keystore (StrongBox where present) | Platform equivalents |
 | Thermal state in the status line | When serious | Not shown (reported in `status.thermal`) | To add |
 | Background streaming | While the app is in front | A foreground service (screen off, other app in front) | iOS stops the camera in the background |

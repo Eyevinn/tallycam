@@ -5,6 +5,7 @@ import org.json.JSONObject
 import se.eyevinn.tallycam.media.CameraCapture
 import se.eyevinn.tallycam.media.CameraCapture.ExposureMode
 import se.eyevinn.tallycam.media.CameraCapture.FocusMode
+import se.eyevinn.tallycam.media.CameraCapture.Shutter
 import se.eyevinn.tallycam.media.CameraCapture.WhiteBalanceMode
 import kotlin.math.roundToInt
 
@@ -20,9 +21,16 @@ class CameraControls(
     /** Persists `mains_hz` (50, 60, 0). */
     private val saveMainsHz: (Int) -> Unit = {},
 ) {
-    /** A resolution set while live; applied when the stream stops. */
-    var pendingResolution: Int? = null
+    /**
+     * The control server's production shutter (docs/SHADING.md, "Shutter"),
+     * or null: none, the phone is its own production (one mains period, free
+     * with mains off).
+     */
+    var serverShutter: Shutter? = null
         private set
+
+    /** A production that came while live, applied when the stream stops. */
+    private var pendingProduction: Pair<Int?, Shutter?>? = null
 
     private fun whenMode(control: String, vararg modes: String) = JSONObject().put(control,
         if (modes.size == 1) modes[0] else JSONArray(modes.toList()))
@@ -43,19 +51,23 @@ class CameraControls(
             list += Controls.range("zoom", "Zoom", "lens", it.lower.toDouble(), it.upper.toDouble(), 0.1, "x")
                 .put("scale", "log")
         }
+        // Not while live (docs/SHADING.md, D11).
         if (c.resolutions.size > 1) {
             list += enumControl("resolution", "Resolution", "image",
                                 options(*c.resolutions.map { "${it}p" to "${it}p" }.toTypedArray()))
+                .put("locked_while_live", true)
         }
         if (c.frameRates.size > 1) {
             list += enumControl("frame_rate", "Frame rate", "image",
                                 options(*c.frameRates.map { it to "$it fps" }.toTypedArray()))
+                .put("locked_while_live", true)
         }
         if (c.hasStabilization) {
             list += enumControl("stabilization", "Stabilization", "image", options("off" to "Off", "standard" to "Standard"))
         }
         if (c.hasTorch) list += Controls.bool("torch", "Torch", "image")
-        // Exposure.
+        // Exposure: auto is the core's auto ISO loop at the production
+        // shutter where the sensor can be set, else Camera2's auto exposure.
         val modes = mutableListOf<Pair<Any, String>>("auto" to "Auto", "locked" to "Locked")
         if (c.hasManualSensor) modes += "manual" to "Manual"
         list += enumControl("exposure_mode", "Exposure", "exposure", options(*modes.toTypedArray()))
@@ -64,12 +76,16 @@ class CameraControls(
                 list += Controls.range("iso", "ISO", "exposure", it.lower.toDouble(), it.upper.toDouble(), 1.0, "")
                     .put("scale", "log").put("enabled_when", whenMode("exposure_mode", "manual"))
             }
-            // Genlock needs manual exposure on Android (docs/GENLOCK.md).
-            list += Controls.bool("genlock", "Genlock", "image").put("enabled_when", whenMode("exposure_mode", "manual"))
+            // Genlock needs Camera2's auto exposure off, which it is with a
+            // manual sensor in every mode (docs/GENLOCK.md).
+            list += Controls.bool("genlock", "Genlock", "image")
             list += Controls.range("genlock_offset_us", "Genlock offset", "image", -50000.0, 50000.0, 10.0, "µs")
             shutters().takeIf { it.isNotEmpty() }?.let { shutters ->
-                list += enumControl("shutter", "Shutter", "exposure", options(*shutters.map { it to "1/$it" }.toTypedArray()))
+                // A production setting: set only under a free shutter, in manual.
+                val shutter = enumControl("shutter", "Shutter", "exposure", options(*shutters.map { it to "1/$it" }.toTypedArray()))
                     .put("enabled_when", whenMode("exposure_mode", "manual"))
+                if (c.settings.effectiveShutter != Shutter.Free) shutter.put("readonly", true)
+                list += shutter
             }
         }
         mainsOptions().takeIf { it.size > 1 }?.let { hz ->
@@ -121,7 +137,7 @@ class CameraControls(
         val v = JSONObject()
         if (c.lenses.size > 1) c.lenses.firstOrNull { it.id == c.cameraId }?.let { v.put("lens", it.key) }
         if (c.zoomRange != null) v.put("zoom", (s.zoom * 100).roundToInt() / 100.0)
-        if (c.resolutions.size > 1) v.put("resolution", "${pendingResolution ?: c.streamSize.height}p")
+        if (c.resolutions.size > 1) v.put("resolution", "${c.streamSize.height}p")
         if (c.frameRates.size > 1) v.put("frame_rate", s.frameRate)
         if (c.hasStabilization) v.put("stabilization", if (s.stabilization) "standard" else "off")
         if (c.hasTorch) v.put("torch", s.torch)
@@ -129,12 +145,11 @@ class CameraControls(
         if (c.hasManualSensor) {
             v.put("genlock", s.genlock)
             v.put("genlock_offset_us", s.genlockOffsetNs / 1000.0)
-            val iso = if (s.exposureMode == ExposureMode.MANUAL) s.iso else m.iso
-            iso?.let { v.put("iso", it) }
-            val ns = if (s.exposureMode == ExposureMode.MANUAL) s.exposureNs else m.exposureNs
-            ns?.let { v.put("shutter", CameraMath.shutterDenominator(it, shutters().ifEmpty { CameraMath.SHUTTERS })) }
+            // The sensor's values in every mode (auto ISO writes them).
+            v.put("iso", s.iso)
+            v.put("shutter", CameraMath.shutterDenominator(s.exposureNs, shutters().ifEmpty { CameraMath.SHUTTERS }))
         }
-        if (mainsOptions().size > 1) v.put("mains_hz", MAINS_OF[s.antibanding] ?: 0)
+        if (mainsOptions().size > 1) v.put("mains_hz", s.mainsHz)
         c.evRange?.let { (_, step) -> v.put("ev_bias", (s.evSteps * step * 100).roundToInt() / 100.0) }
         v.put("wb_mode", s.whiteBalanceMode.name.lowercase())
         if (s.whiteBalanceMode == WhiteBalanceMode.MANUAL) {
@@ -169,16 +184,13 @@ class CameraControls(
             "resolution" -> {
                 val height = (value as? String)?.removeSuffix("p")?.toIntOrNull()?.takeIf { it in c.resolutions }
                     ?: return "expected " + c.resolutions.joinToString(" or ") { "${it}p" }
-                if (isLive()) {
-                    pendingResolution = height
-                    "applies when the stream stops"
-                } else {
-                    c.setResolution(height)
-                    null
-                }
+                if (isLive()) return NOT_WHILE_LIVE
+                c.setResolution(height)
+                null
             }
             "frame_rate" -> {
                 val fps = number()?.toInt()?.takeIf { it in c.frameRates } ?: return "expected " + c.frameRates.joinToString(" or ")
+                if (isLive()) return NOT_WHILE_LIVE
                 c.update { it.copy(frameRate = fps, exposureNs = it.exposureNs.coerceAtMost(1_000_000_000L / fps)) }
                 null
             }
@@ -190,18 +202,15 @@ class CameraControls(
             "torch" -> if (value is Boolean) { c.update { it.copy(torch = value) }; null } else "expected a bool"
             "exposure_mode" -> {
                 val mode = when (value) {
-                    "auto" -> ExposureMode.AUTO
+                    // `auto_iso` is what `auto` was called before protocol 2.
+                    "auto", "auto_iso" -> ExposureMode.AUTO
                     "locked" -> ExposureMode.LOCKED
                     "manual" -> if (c.hasManualSensor) ExposureMode.MANUAL else return "manual exposure not supported"
                     else -> return "expected auto, locked or manual"
                 }
-                // Manual starts from what auto exposure picked.
-                val m = c.measured
-                c.update {
-                    if (mode == ExposureMode.MANUAL && it.exposureMode != ExposureMode.MANUAL)
-                        it.copy(exposureMode = mode, iso = m.iso ?: it.iso, exposureNs = m.exposureNs ?: it.exposureNs)
-                    else it.copy(exposureMode = mode)
-                }
+                // Locked and manual start from what auto had: with a manual
+                // sensor the settings already hold it. Auto starts with no bias.
+                c.update { if (mode == ExposureMode.AUTO) it.copy(exposureMode = mode, evSteps = 0) else it.copy(exposureMode = mode) }
                 null
             }
             "iso" -> {
@@ -213,6 +222,7 @@ class CameraControls(
                 if (clamped.toDouble() == iso) null else "clamped to $clamped"
             }
             "shutter" -> {
+                if (s.effectiveShutter != Shutter.Free) return "the shutter is a production setting"
                 if (s.exposureMode != ExposureMode.MANUAL) return "requires exposure_mode manual"
                 val d = number()?.toInt()?.takeIf { it in shutters() } ?: return "expected one of " + shutters().joinToString()
                 c.update { it.copy(exposureNs = CameraMath.shutterNs(d)) }
@@ -221,7 +231,6 @@ class CameraControls(
             "genlock" -> {
                 if (value !is Boolean) return "expected a bool"
                 if (!c.hasManualSensor) return "needs manual exposure, which this camera lacks"
-                if (value && s.exposureMode != ExposureMode.MANUAL) return "requires exposure_mode manual"
                 c.update { it.copy(genlock = value) }
                 null
             }
@@ -235,6 +244,10 @@ class CameraControls(
                 val hz = number()?.takeIf { it == 50.0 || it == 60.0 || it == 0.0 }?.toInt()
                     ?: return "expected 50, 60 or 0 (off)"
                 if (hz !in mainsOptions()) return "not supported by this camera"
+                if (hz == s.mainsHz) return null
+                // The phone's own production; a hub's wins (docs/SHADING.md).
+                if (serverShutter != null) return "set by the production on the control server"
+                if (isLive()) return NOT_WHILE_LIVE
                 setMainsHz(hz)
                 saveMainsHz(hz)
                 null
@@ -296,37 +309,58 @@ class CameraControls(
     }
 
     /**
-     * Mains frequency for the auto exposure's anti-banding (flicker from
-     * mains-powered light): 50, 60, or 0 for off (no such light, e.g.
-     * outdoors). Camera2 does this itself; there is no auto ISO loop here.
+     * Mains frequency (flicker from mains-powered light): 50, 60, or 0 for
+     * none (outdoors). The production shutter follows it, and without a
+     * manual sensor Camera2's anti-banding.
      */
     fun setMainsHz(hz: Int) {
-        val mode = MAINS_OF.entries.firstOrNull { it.value == hz }?.key ?: return
-        camera.update { it.copy(antibanding = mode) }
+        if (hz != 50 && hz != 60 && hz != 0) return
+        camera.update { it.copy(mainsHz = hz) }
     }
 
+    /** With a manual sensor the app sets the shutter itself: every frequency works. */
     private fun mainsOptions(): List<Int> =
-        listOf(50, 60, 0).filter { hz -> MAINS_OF.entries.any { it.value == hz && it.key in camera.antibandingModes } }
+        if (camera.hasManualSensor) listOf(50, 60, 0)
+        else listOf(50, 60, 0).filter { CameraCapture.antibandingMode(it) in camera.antibandingModes }
+
+    /**
+     * The control server's production (null, null: none, back to the
+     * phone's own). While live it is kept until the stream stops; returns a
+     * warning then.
+     */
+    fun setProduction(mainsHz: Int?, shutter: Shutter?, stopped: Boolean = false): String? {
+        val s = camera.settings
+        if (isLive() && !stopped) {
+            val hz = mainsHz ?: s.mainsHz
+            if (hz != s.mainsHz || shutter != serverShutter) {
+                pendingProduction = mainsHz to shutter
+                return "production shutter changed while live: kept until the stream stops"
+            }
+            pendingProduction = null
+            return null
+        }
+        pendingProduction = null
+        val changed = shutter != serverShutter
+        serverShutter = shutter
+        camera.update { it.copy(mainsHz = mainsHz?.takeIf { hz -> hz == 50 || hz == 60 || hz == 0 } ?: it.mainsHz,
+                                shutter = shutter ?: Shutter.Mains) }
+        // The shutter descriptor's `readonly` follows the production.
+        if (changed) camera.onControlsChanged?.invoke()
+        return null
+    }
 
     /** Ids this table handles. */
     fun handles(id: String) = id in IDS
 
-    /** Called when the stream stops: a resolution set while live. */
+    /** Called when the stream stops: a production that came while live. */
     fun streamStopped() {
-        pendingResolution?.let {
-            pendingResolution = null
-            camera.setResolution(it)
-        }
+        pendingProduction?.let { (hz, shutter) -> setProduction(hz, shutter, stopped = true) }
     }
 
     companion object {
         val IDS = setOf("lens", "zoom", "resolution", "frame_rate", "stabilization", "torch", "exposure_mode", "iso",
                         "shutter", "genlock", "genlock_offset_us", "mains_hz", "ev_bias", "wb_mode", "wb_temperature", "focus_mode", "focus_position")
 
-        private val MAINS_OF = mapOf(
-            android.hardware.camera2.CameraMetadata.CONTROL_AE_ANTIBANDING_MODE_50HZ to 50,
-            android.hardware.camera2.CameraMetadata.CONTROL_AE_ANTIBANDING_MODE_60HZ to 60,
-            android.hardware.camera2.CameraMetadata.CONTROL_AE_ANTIBANDING_MODE_OFF to 0,
-        )
+        const val NOT_WHILE_LIVE = "not while live: stop the stream to change it"
     }
 }

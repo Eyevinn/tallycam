@@ -219,7 +219,7 @@ final class CoreTsMuxerTests: XCTestCase {
         var sampleRate = 0.0
         var channels = 0
         encoder.onFormat = { sampleRate = $0; channels = $1 }
-        encoder.onOutput = { data, pts, _ in packets.append((data, pts)) }
+        encoder.onOutput = { data, pts, _ in packets.append((Data(data), pts)) }
         // 33.3 s after the video's first frame time (1000 / 30 s), in 5 ms
         // buffers, as the microphone delivers them.
         let start: Int64 = 1000 * 1_000_000_000 / 30

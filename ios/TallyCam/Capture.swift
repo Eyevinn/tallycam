@@ -340,9 +340,11 @@ final class CaptureOutputs: NSObject, @unchecked Sendable, AVCaptureVideoDataOut
         let (sink, preview) = lock.withLock {
             (videoSink, previewSink)
         }
+        // The encoder first: what runs before it adds to every frame's
+        // latency.
+        sink?(sampleBuffer)
         genlock?.onFrame(sampleBuffer)
         torchProbe?.onFrame(sampleBuffer)
-        sink?(sampleBuffer)
         preview?(sampleBuffer)
     }
 

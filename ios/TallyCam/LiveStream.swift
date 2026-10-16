@@ -1,6 +1,7 @@
 import CoreMedia
 import Foundation
 import os
+import os.lock
 #if canImport(TallyCamCoreFFI)
     import TallyCamCoreFFI
 #endif
@@ -8,10 +9,11 @@ import os
 private let log = Logger(subsystem: "se.eyevinn.tallycam", category: "live")
 
 /// One live session: camera sample buffers and microphone PCM -> encoders
-/// -> MPEG-TS -> SRT. The muxer and the SRT connection live on `queue`; the
-/// video encoder runs on the capture queue and VideoToolbox threads, the
-/// audio encoder on the microphone's delivery thread, and both hop onto
-/// `queue` with output.
+/// -> MPEG-TS -> SRT. The SRT connection and the session's lifecycle live on
+/// `queue`. The video encoder runs on the capture queue and VideoToolbox
+/// threads, the audio encoder on the microphone's delivery thread; each
+/// muxes its own output on its own thread (`MuxPath`, under a lock) instead
+/// of hopping onto `queue`, which saves a thread switch per frame.
 final class LiveStream: @unchecked Sendable {
     enum Event {
         /// `video`: what the encoder runs, for the log (codec, size, rate
@@ -33,7 +35,7 @@ final class LiveStream: @unchecked Sendable {
         var lateAudioFrames: Int
     }
 
-    private let queue = DispatchQueue(label: "live.stream", qos: .userInitiated)
+    private let queue = DispatchQueue(label: "live.stream", qos: .userInteractive)
     private let url: SrtUrl
     // Owned by `queue` after init.
     private var videoSettings: VideoEncoderSettings
@@ -44,15 +46,10 @@ final class LiveStream: @unchecked Sendable {
     private let onEvent: @Sendable (Event) -> Void
     // Owned by `queue`.
     private var connection: SrtConnection?
-    /// The core's MPEG-TS muxer; it queues onto the SRT caller itself.
-    private var muxer: CoreTsMuxer?
     private var videoEncoder: VideoEncoder?
     private var stopped = false
-    /// LCP SEI frame counter, one per encoded frame; wraps.
-    private var frameCounter: UInt32 = 0
-    private var meter = LatencyMeter()
-    private var audioBufferFrames = 0
-    private var loggedStart = false
+    /// The muxer and the latency meter; any thread.
+    private let mux = MuxPath()
 
     init(url: SrtUrl,
          videoSettings: VideoEncoderSettings,
@@ -76,14 +73,17 @@ final class LiveStream: @unchecked Sendable {
             // still ends the session with its reason (SrtConnection).
             var options = url.options
             options.reconnect = true
-            let connection = SrtConnection(options: options, queue: queue)
+            let mux = mux
+            let connection = SrtConnection(options: options, queue: queue) { captureNs, enqueuedNs, sentNs, last in
+                mux.frameSent(captureNs: captureNs, enqueuedNs: enqueuedNs, sentNs: sentNs, last: last)
+            }
             connection.onEvent = { [weak self] event in
                 guard let self else {
                     return
                 }
                 switch event {
                 case .connected:
-                    if muxer == nil {
+                    if videoEncoder == nil {
                         startMedia()
                     } else {
                         // Reconnected: the listener gets PAT/PMT with the next
@@ -126,11 +126,11 @@ final class LiveStream: @unchecked Sendable {
     func stats(_ completion: @escaping @Sendable (Stats) -> Void) {
         queue.async { [self] in
             let srt = connection?.stats
-            let mux = muxer?.stats
+            let (latency, muxStats) = mux.report()
             completion(Stats(bytesSent: srt?.bytesSent ?? 0, srt: srt,
-                             latency: meter.report(),
-                             lateVideoFrames: mux?.lateVideoFrames ?? 0,
-                             lateAudioFrames: mux?.lateAudioFrames ?? 0))
+                             latency: latency,
+                             lateVideoFrames: muxStats?.lateVideoFrames ?? 0,
+                             lateAudioFrames: muxStats?.lateAudioFrames ?? 0))
         }
     }
 
@@ -143,27 +143,16 @@ final class LiveStream: @unchecked Sendable {
             stopOnQueue(reason: "Could not start the MPEG-TS muxer")
             return
         }
-        self.muxer = muxer
-        connection?.onFrameSent = { [weak self] captureNs, enqueuedNs, sentNs, last in
-            guard let self else {
-                return
-            }
-            if last {
-                meter.record(.sendFrame, ns: sentNs - enqueuedNs)
-            } else {
-                meter.record(.sendQueue, ns: sentNs - enqueuedNs)
-                meter.record(.captureToSend, ns: sentNs - captureNs)
-            }
-        }
+        mux.start(muxer, audioCodec: audioCodec)
 
+        // VideoToolbox and microphone threads mux their own output.
+        let mux = mux
         let videoEncoder = VideoEncoder(settings: videoSettings)
-        videoEncoder.onFormat = { [weak self] format in
-            self?.queue.async { self?.setVideoFormat(format) }
+        videoEncoder.onFormat = { format in
+            mux.setVideoFormat(format)
         }
-        videoEncoder.onOutput = { [weak self] sampleBuffer, capturePts, encodeInNs, encodeOutNs in
-            self?.queue.async {
-                self?.writeVideo(sampleBuffer, capturePts: capturePts, encodeInNs: encodeInNs, encodeOutNs: encodeOutNs)
-            }
+        videoEncoder.onOutput = { sampleBuffer, capturePts, encodeInNs, encodeOutNs in
+            mux.writeVideo(sampleBuffer, capturePts: capturePts, encodeInNs: encodeInNs, encodeOutNs: encodeOutNs)
         }
         do {
             try videoEncoder.start()
@@ -176,15 +165,14 @@ final class LiveStream: @unchecked Sendable {
         if let mic {
             // Used only on the microphone's delivery thread.
             let audioEncoder = AudioEncoder(codec: audioCodec)
-            audioEncoder.onFormat = { [weak self] sampleRate, channels in
-                self?.queue.async { self?.setAudioFormat(sampleRate: sampleRate, channels: channels) }
+            audioEncoder.onFormat = { sampleRate, channels in
+                mux.setAudioFormat(sampleRate: sampleRate, channels: channels)
             }
-            audioEncoder.onOutput = { [weak self] packet, ptsNs, encodeNs in
-                self?.queue.async { self?.writeAudio(packet, ptsNs: ptsNs, encodeNs: encodeNs) }
+            audioEncoder.onOutput = { packet, ptsNs, encodeNs in
+                mux.writeAudio(packet, ptsNs: ptsNs, encodeNs: encodeNs)
             }
-            mic.setSink { [weak self] samples, captureNs, arrivedNs, sampleRate in
-                let frames = samples.count
-                self?.queue.async { self?.audioInput(captureNs: captureNs, frames: frames, arrivedNs: arrivedNs) }
+            mic.setSink { samples, captureNs, arrivedNs, sampleRate in
+                mux.audioInput(captureNs: captureNs, frames: samples.count, arrivedNs: arrivedNs)
                 audioEncoder.encode(samples, captureNs: captureNs, sampleRate: sampleRate)
             }
         }
@@ -200,76 +188,6 @@ final class LiveStream: @unchecked Sendable {
             + (videoEncoder?.lowLatency == true ? ", low-latency rate control" : "")
     }
 
-    /// Host ns of a capture timestamp (host time clock).
-    private static func hostNs(_ time: CMTime) -> Int64 {
-        HostClock.ns(fromTicks: CMClockConvertHostTimeToSystemUnits(time))
-    }
-
-    private func setVideoFormat(_ format: CMFormatDescription) {
-        if let muxer, !muxer.setVideoFormat(format) {
-            log.error("No parameter sets in the \(self.videoSettings.codec.label) format description")
-        }
-    }
-
-    private func setAudioFormat(sampleRate: Double, channels: Int) {
-        if let muxer, !muxer.setAudioFormat(sampleRate: sampleRate, channels: channels) {
-            log.error("\(self.audioCodec.label) at \(sampleRate) Hz, \(channels) ch cannot be muxed")
-        }
-    }
-
-    private func audioInput(captureNs: Int64, frames: Int, arrivedNs: Int64) {
-        meter.record(.audioCaptureToEncode, ns: arrivedNs - captureNs)
-        if frames != audioBufferFrames {
-            audioBufferFrames = frames
-            log.info("Microphone buffers of \(frames) frames")
-        }
-    }
-
-    /// `ptsNs`: the capture time of the frame's first sample minus the
-    /// encoder delay (see `AudioTiming.ptsNs`).
-    private func writeAudio(_ packet: Data, ptsNs: Int64, encodeNs: Int64) {
-        let nowNs = HostClock.nowNs()
-        meter.record(.audioEncode, ns: encodeNs)
-        meter.record(.audioCaptureToMux, ns: nowNs - ptsNs)
-        if let muxer {
-            connection?.noteSendResult(muxer.writeAudio(packet, ptsNs: ptsNs, nowNs: nowNs))
-        }
-    }
-
-    /// Stamps the frame with its capture time: TAI from the phone's own
-    /// disciplined clock (lock free), uncertainty = its maximum error.
-    private func writeVideo(_ sampleBuffer: CMSampleBuffer, capturePts: CMTime, encodeInNs: Int64, encodeOutNs: Int64) {
-        guard let muxer else {
-            return
-        }
-        let hostNs = Self.hostNs(capturePts)
-        meter.record(.captureToEncode, ns: encodeInNs - hostNs)
-        meter.record(.encode, ns: encodeOutNs - encodeInNs)
-        // The stamp on the reference model's timescale: SEI and PTS.
-        let exposureNs = CaptureCalibration.exposureNs(stampNs: hostNs)
-        let mapping = ClockMapping.at(hostNs: exposureNs)
-        let uncertaintyUs = mapping.synced
-            ? TimestampSei.uncertaintyUs(fromNs: mapping.maxErrorNs)
-            : TimestampSei.uncertaintyUnknown
-        let counter = frameCounter
-        frameCounter &+= 1
-        // The core builds the SEI and puts it before the first slice.
-        let flags = UInt8((mapping.synced ? LC_SEI_FLAG_SYNCED : 0) | LC_SEI_FLAG_TAI)
-        let result = muxer.writeVideo(sampleBuffer, ptsNs: exposureNs, sendCaptureNs: hostNs,
-                                      sei: (UInt64(clamping: mapping.taiNs), flags, counter, uncertaintyUs),
-                                      nowNs: HostClock.nowNs())
-        guard result != LC_TS_SKIPPED else {
-            return
-        }
-        // Muxing and queueing onto the SRT caller.
-        meter.record(.mux, ns: HostClock.nowNs() - encodeOutNs)
-        if !loggedStart, let startNs = muxer.stats.startNs {
-            loggedStart = true
-            log.info("Stream starts at host time \(startNs)")
-        }
-        connection?.noteSendResult(result)
-    }
-
     private func stopOnQueue(reason: String?) {
         guard !stopped else {
             return
@@ -279,10 +197,171 @@ final class LiveStream: @unchecked Sendable {
         mic?.setSink(nil)
         videoEncoder?.stop()
         videoEncoder = nil
-        muxer = nil
+        mux.stop()
         connection?.close()
         connection = nil
         log.info("Stopped: \(reason ?? "by user")")
         onEvent(.stopped(reason: reason))
+    }
+}
+
+/// The muxer and the latency meter, shared by the threads that produce
+/// media (VideoToolbox output, microphone delivery) and the SRT thread
+/// (frame-sent reports). Each call takes the lock briefly: muxing a frame
+/// is tens of microseconds, and the core queues the packets onto the SRT
+/// caller without blocking.
+private final class MuxPath: @unchecked Sendable {
+    private let lock = OSAllocatedUnfairLock()
+    // Guarded by `lock`.
+    private var muxer: CoreTsMuxer?
+    private var audioLabel = ""
+    private var meter = LatencyMeter()
+    /// LCP SEI frame counter, one per encoded frame; wraps.
+    private var frameCounter: UInt32 = 0
+    private var loggedStart = false
+    private var audioBufferFrames = 0
+    private var queueFullCount = 0
+
+    func start(_ muxer: CoreTsMuxer, audioCodec: AudioCodec) {
+        lock.withLockUnchecked {
+            self.muxer = muxer
+            audioLabel = audioCodec.label
+        }
+    }
+
+    func stop() {
+        lock.withLockUnchecked {
+            muxer = nil
+        }
+    }
+
+    /// p50/p95/max per stage since the last call, and the muxer's counters.
+    func report() -> (LatencyReport, CoreTsMuxer.Stats?) {
+        lock.withLockUnchecked { (meter.report(), muxer?.stats) }
+    }
+
+    func setVideoFormat(_ format: CMFormatDescription) {
+        let ok = lock.withLockUnchecked { muxer.map { $0.setVideoFormat(format) } ?? true }
+        if !ok {
+            log.error("No parameter sets in the video format description")
+        }
+    }
+
+    func setAudioFormat(sampleRate: Double, channels: Int) {
+        let (ok, label) = lock.withLockUnchecked {
+            (muxer.map { $0.setAudioFormat(sampleRate: sampleRate, channels: channels) } ?? true, audioLabel)
+        }
+        if !ok {
+            log.error("\(label) at \(sampleRate) Hz, \(channels) ch cannot be muxed")
+        }
+    }
+
+    /// On the SRT thread: the first (`last` false) or last packet of a
+    /// video frame went out.
+    func frameSent(captureNs: Int64, enqueuedNs: Int64, sentNs: Int64, last: Bool) {
+        lock.withLockUnchecked {
+            if last {
+                meter.record(.sendFrame, ns: sentNs - enqueuedNs)
+            } else {
+                meter.record(.sendQueue, ns: sentNs - enqueuedNs)
+                meter.record(.captureToSend, ns: sentNs - captureNs)
+            }
+        }
+    }
+
+    /// On the microphone's delivery thread, per buffer.
+    func audioInput(captureNs: Int64, frames: Int, arrivedNs: Int64) {
+        let changed = lock.withLockUnchecked {
+            meter.record(.audioCaptureToEncode, ns: arrivedNs - captureNs)
+            defer { audioBufferFrames = frames }
+            return frames != audioBufferFrames
+        }
+        if changed {
+            log.info("Microphone buffers of \(frames) frames")
+        }
+    }
+
+    /// On the microphone's delivery thread. `ptsNs`: the capture time of
+    /// the frame's first sample minus the encoder delay (see
+    /// `AudioTiming.ptsNs`).
+    func writeAudio(_ packet: UnsafeRawBufferPointer, ptsNs: Int64, encodeNs: Int64) {
+        let result: CoreTsMuxer.Result? = lock.withLockUnchecked {
+            guard let muxer else {
+                return nil
+            }
+            let nowNs = HostClock.nowNs()
+            meter.record(.audioEncode, ns: encodeNs)
+            meter.record(.audioCaptureToMux, ns: nowNs - ptsNs)
+            return muxer.writeAudio(packet, ptsNs: ptsNs, nowNs: nowNs)
+        }
+        if let result {
+            noteSendResult(result)
+        }
+    }
+
+    /// On a VideoToolbox thread. Stamps the frame with its capture time:
+    /// TAI from the phone's own disciplined clock (lock free), uncertainty =
+    /// its maximum error.
+    func writeVideo(_ sampleBuffer: CMSampleBuffer, capturePts: CMTime, encodeInNs: Int64, encodeOutNs: Int64) {
+        let hostNs = HostClock.ns(fromTicks: CMClockConvertHostTimeToSystemUnits(capturePts))
+        // The stamp on the reference model's timescale: SEI and PTS.
+        let exposureNs = CaptureCalibration.exposureNs(stampNs: hostNs)
+        let mapping = ClockMapping.at(hostNs: exposureNs)
+        let uncertaintyUs = mapping.synced
+            ? TimestampSei.uncertaintyUs(fromNs: mapping.maxErrorNs)
+            : TimestampSei.uncertaintyUnknown
+        // The core builds the SEI and puts it before the first slice.
+        let flags = UInt8((mapping.synced ? LC_SEI_FLAG_SYNCED : 0) | LC_SEI_FLAG_TAI)
+        let (result, startNs) = lock.withLockUnchecked { () -> (CoreTsMuxer.Result, Int64?) in
+            guard let muxer else {
+                return (CoreTsMuxer.Result(LC_TS_SKIPPED), nil)
+            }
+            meter.record(.captureToEncode, ns: encodeInNs - hostNs)
+            meter.record(.encode, ns: encodeOutNs - encodeInNs)
+            let counter = frameCounter
+            frameCounter &+= 1
+            let result = muxer.writeVideo(sampleBuffer, ptsNs: exposureNs, sendCaptureNs: hostNs,
+                                          sei: (UInt64(clamping: mapping.taiNs), flags, counter, uncertaintyUs),
+                                          nowNs: HostClock.nowNs())
+            guard result != LC_TS_SKIPPED else {
+                return (result, nil)
+            }
+            // Muxing and queueing onto the SRT caller.
+            meter.record(.mux, ns: HostClock.nowNs() - encodeOutNs)
+            guard !loggedStart, let startNs = muxer.stats.startNs else {
+                return (result, nil)
+            }
+            loggedStart = true
+            return (result, startNs)
+        }
+        if let startNs {
+            log.info("Stream starts at host time \(startNs)")
+        }
+        if result != LC_TS_SKIPPED {
+            noteSendResult(result)
+        }
+    }
+
+    /// Logs runs of a full SRT send queue (packets are dropped while not
+    /// connected, and counted in the SRT stats).
+    private func noteSendResult(_ result: Int32) {
+        let event: (full: Bool, count: Int)? = lock.withLockUnchecked {
+            if result == LC_SRT_QUEUE_FULL {
+                queueFullCount += 1
+                return queueFullCount == 1 ? (true, 0) : nil
+            } else if result > 0, queueFullCount > 0 {
+                defer { queueFullCount = 0 }
+                return (false, queueFullCount)
+            }
+            return nil
+        }
+        switch event {
+        case (true, _)?:
+            log.warning("SRT send queue full, dropping")
+        case let (false, count)?:
+            log.info("SRT send queue drained after \(count) dropped sends")
+        case nil:
+            break
+        }
     }
 }

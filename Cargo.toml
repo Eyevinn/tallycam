@@ -16,3 +16,7 @@ version = "0.1.0"
 
 [profile.release]
 debug = 1
+# The core runs per frame and per packet on the phone; whole-program
+# optimisation across the core, SRT and srt-protocol crates.
+lto = "fat"
+codegen-units = 1

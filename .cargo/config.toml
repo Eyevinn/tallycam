@@ -1,0 +1,14 @@
+# ARMv8 AES instructions for SRT encryption (the `aes` crate uses them only
+# with this cfg, and checks for them at run time). Without it AES-CTR runs
+# in software: 36x slower on Apple silicon, measured.
+[target.aarch64-apple-ios]
+rustflags = ["--cfg", "aes_armv8"]
+
+[target.aarch64-apple-ios-sim]
+rustflags = ["--cfg", "aes_armv8"]
+
+[target.aarch64-apple-darwin]
+rustflags = ["--cfg", "aes_armv8"]
+
+[target.aarch64-linux-android]
+rustflags = ["--cfg", "aes_armv8"]

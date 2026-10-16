@@ -7,8 +7,8 @@
 //! it keeps the binary small and the timing predictable on iOS.
 //!
 //! - [`CallerConfig`]: host, port, streamid, latency, passphrase, pbkeylen.
-//! - [`SrtSender`]: `start`, `send` (lock- and allocation-free), `stats`,
-//!   `close`; events through [`SrtObserver`].
+//! - [`SrtSender`]: `start`, `send` (lock-free; one allocation per 64
+//!   payloads), `stats`, `close`; events through [`SrtObserver`].
 
 mod config;
 mod queue;

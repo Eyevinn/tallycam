@@ -42,10 +42,8 @@ pub fn pcr(base: u64) -> [u8; 6] {
 /// [`finish_pes`] once the payload is appended.
 pub fn begin_pes(pes: &mut Vec<u8>, stream_id: u8, pts: u64) {
     pes.clear();
-    pes.extend_from_slice(&[0x00, 0x00, 0x01, stream_id, 0, 0]);
     // Marker bits '10', data alignment indicator; PTS only; 5 header bytes.
-    pes.extend_from_slice(&[0x80 | 0x04, 0x80, 5]);
-    pes.extend_from_slice(&timestamp(pts, 0x2));
+    pes.extend_from_slice(&pes_header(stream_id, pts, 0));
 }
 
 /// Sets PES_packet_length; 0 (unbounded) when the packet is too long for
@@ -92,45 +90,175 @@ pub fn packetize(
     cc: &mut u8,
     ts: &mut Vec<u8>,
 ) {
-    // First packet.
-    let field = 2 + if pcr_base.is_some() { 6 } else { 0 };
-    let max = FULL_PAYLOAD - field;
-    let take = max.min(pes.len());
-    let stuffing = max - take;
-    header(ts, pid, true, true, cc);
-    ts.push((field - 1 + stuffing) as u8);
-    ts.push(if random_access { 0x40 } else { 0 } | if pcr_base.is_some() { 0x10 } else { 0 });
-    if let Some(base) = pcr_base {
-        ts.extend_from_slice(&pcr(base));
-    }
-    ts.resize(ts.len() + stuffing, 0xFF);
-    ts.extend_from_slice(&pes[..take]);
-    let mut rest = &pes[take..];
+    let mut w = PesWriter::new(ts, pid, random_access, pcr_base, cc, pes.len());
+    w.write(pes);
+}
 
-    // Full packets.
-    while rest.len() >= FULL_PAYLOAD {
-        header(ts, pid, false, false, cc);
-        ts.extend_from_slice(&rest[..FULL_PAYLOAD]);
-        rest = &rest[FULL_PAYLOAD..];
+/// Writes a PES packet of a known length straight into TS packets as its
+/// bytes arrive, laid out as [`packetize`] lays them out, so the PES never
+/// has to be assembled in a buffer of its own.
+pub struct PesWriter<'a> {
+    ts: &'a mut Vec<u8>,
+    pid: u16,
+    cc: &'a mut u8,
+    /// PES bytes still to come.
+    left: usize,
+    /// Payload bytes left in the current TS packet.
+    room: usize,
+}
+
+impl<'a> PesWriter<'a> {
+    /// Starts the first TS packet of a PES of `pes_len` bytes.
+    pub fn new(
+        ts: &'a mut Vec<u8>,
+        pid: u16,
+        random_access: bool,
+        pcr_base: Option<u64>,
+        cc: &'a mut u8,
+        pes_len: usize,
+    ) -> Self {
+        let field = 2 + if pcr_base.is_some() { 6 } else { 0 };
+        let max = FULL_PAYLOAD - field;
+        let take = max.min(pes_len);
+        let stuffing = max - take;
+        header(ts, pid, true, true, cc);
+        ts.push((field - 1 + stuffing) as u8);
+        ts.push(if random_access { 0x40 } else { 0 } | if pcr_base.is_some() { 0x10 } else { 0 });
+        if let Some(base) = pcr_base {
+            ts.extend_from_slice(&pcr(base));
+        }
+        ts.resize(ts.len() + stuffing, 0xFF);
+        PesWriter {
+            ts,
+            pid,
+            cc,
+            left: pes_len,
+            room: take,
+        }
     }
 
-    // Last packets.
-    if rest.len() == FULL_PAYLOAD - 1 {
-        header(ts, pid, false, true, cc);
-        stuffing_field(ts, 0);
-        ts.extend_from_slice(&rest[..FULL_PAYLOAD - 2]);
-        rest = &rest[FULL_PAYLOAD - 2..];
+    /// Appends PES bytes. Bytes past the length given to [`Self::new`] are
+    /// dropped.
+    pub fn write(&mut self, data: &[u8]) {
+        debug_assert!(data.len() <= self.left, "PES longer than announced");
+        let mut data = &data[..data.len().min(self.left)];
+        while !data.is_empty() {
+            if self.room == 0 {
+                self.next_packet();
+            }
+            let n = self.room.min(data.len());
+            self.ts.extend_from_slice(&data[..n]);
+            self.room -= n;
+            self.left -= n;
+            data = &data[n..];
+        }
     }
-    if !rest.is_empty() {
-        header(ts, pid, false, true, cc);
-        stuffing_field(ts, FULL_PAYLOAD - 2 - rest.len());
-        ts.extend_from_slice(rest);
+
+    /// Bytes still to be written.
+    pub fn left(&self) -> usize {
+        self.left
     }
+
+    /// Starts the packet after a full one: full 184-byte payloads while at
+    /// least that much is left, then the padded last packet(s).
+    fn next_packet(&mut self) {
+        let rest = self.left;
+        if rest >= FULL_PAYLOAD {
+            header(self.ts, self.pid, false, false, self.cc);
+            self.room = FULL_PAYLOAD;
+        } else if rest == FULL_PAYLOAD - 1 {
+            header(self.ts, self.pid, false, true, self.cc);
+            stuffing_field(self.ts, 0);
+            self.room = FULL_PAYLOAD - 2;
+        } else {
+            header(self.ts, self.pid, false, true, self.cc);
+            stuffing_field(self.ts, FULL_PAYLOAD - 2 - rest);
+            self.room = rest;
+        }
+    }
+}
+
+impl super::annexb::ByteSink for PesWriter<'_> {
+    fn put(&mut self, bytes: &[u8]) {
+        self.write(bytes);
+    }
+}
+
+/// The PES header [`begin_pes`] and [`finish_pes`] write, for a PES of
+/// `payload_len` bytes after the header.
+pub fn pes_header(stream_id: u8, pts: u64, payload_len: usize) -> [u8; PES_HEADER_SIZE] {
+    let length = PES_HEADER_SIZE - 6 + payload_len;
+    let field = if length < usize::from(u16::MAX) {
+        length as u16
+    } else {
+        0
+    };
+    let [l0, l1] = field.to_be_bytes();
+    let t = timestamp(pts, 0x2);
+    [
+        0x00,
+        0x00,
+        0x01,
+        stream_id,
+        l0,
+        l1,
+        0x80 | 0x04,
+        0x80,
+        5,
+        t[0],
+        t[1],
+        t[2],
+        t[3],
+        t[4],
+    ]
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Written in pieces as an access unit arrives, a PES comes out exactly
+    /// as `packetize` lays out the whole PES, at every length around the
+    /// packet boundaries (including the 183-byte remainder).
+    #[test]
+    fn pes_writer_in_pieces_matches_packetize() {
+        let pes: Vec<u8> = (0..5 * FULL_PAYLOAD + 7).map(|i| i as u8).collect();
+        for len in 0..pes.len() {
+            for pcr_base in [None, Some(12_345)] {
+                let (mut cc_a, mut cc_b) = (3, 3);
+                let (mut whole, mut pieces) = (Vec::new(), Vec::new());
+                packetize(&pes[..len], 256, true, pcr_base, &mut cc_a, &mut whole);
+                let mut w = PesWriter::new(&mut pieces, 256, true, pcr_base, &mut cc_b, len);
+                let mut at = 0;
+                for step in [1, 4, 183, 2, 184, 185, 13].iter().cycle() {
+                    if at == len {
+                        break;
+                    }
+                    let n = (*step).min(len - at);
+                    w.write(&pes[at..at + n]);
+                    at += n;
+                }
+                assert_eq!(w.left(), 0);
+                assert_eq!(pieces, whole, "len {len} pcr {pcr_base:?}");
+                assert_eq!(cc_a, cc_b);
+                assert_eq!(whole.len() % PACKET_SIZE, 0);
+            }
+        }
+    }
+
+    #[test]
+    fn pes_header_matches_begin_and_finish() {
+        for payload in [0, 5, 65_000, 70_000] {
+            let mut pes = Vec::new();
+            begin_pes(&mut pes, 0xE0, 0x1_2345_6789);
+            pes.resize(pes.len() + payload, 0);
+            finish_pes(&mut pes);
+            assert_eq!(
+                pes_header(0xE0, 0x1_2345_6789, payload)[..],
+                pes[..PES_HEADER_SIZE]
+            );
+        }
+    }
 
     fn read_timestamp(b: &[u8]) -> u64 {
         (u64::from(b[0] >> 1) & 0x07) << 30

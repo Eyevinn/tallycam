@@ -191,9 +191,10 @@ impl Muxer {
             cc_pmt: 0,
             cc_video: 0,
             cc_audio: 0,
-            // A 1080p keyframe is a few hundred kB; the buffers grow to
-            // the largest frame once and are reused.
-            pes: Vec::with_capacity(256 * 1024),
+            // Audio PES only (video is written straight into `ts`).
+            pes: Vec::with_capacity(4096),
+            // A 1080p keyframe is a few hundred kB; the buffer grows to the
+            // largest frame once and is reused.
             ts: Vec::with_capacity(256 * 1024 / 184 * PACKET_SIZE + 2 * PACKET_SIZE),
             late_video_frames: 0,
             late_audio_frames: 0,
@@ -333,32 +334,45 @@ impl Muxer {
             let n = sei::write_nal_unit(&f, self.video.sei_codec(), &mut sei_buf);
             &sei_buf[..n]
         });
-        let pts = self.clock.pts(frame.pts_ns);
-        packet::begin_pes(&mut self.pes, VIDEO_STREAM_ID, pts);
-        annexb::append_access_unit(
-            &mut self.pes,
-            self.video,
-            frame.data,
-            self.nal_length_size,
-            frame.keyframe.then_some(&self.parameter_sets[..]),
-            sei_nal,
-        );
-        packet::finish_pes(&mut self.pes);
         if frame.keyframe {
             self.write_tables(out);
         }
         if self.clock.slack_ns(frame.pts_ns, now_ns) < 0 {
             self.late_video_frames += 1;
         }
+        let pts = self.clock.pts(frame.pts_ns);
+        let parameter_sets = frame.keyframe.then_some(&self.parameter_sets[..]);
+        // Sized first (only the NAL lengths are read), then written straight
+        // into TS packets: the frame is copied once, into `ts`.
+        let mut size = annexb::ByteCount::default();
+        annexb::append_access_unit(
+            &mut size,
+            self.video,
+            frame.data,
+            self.nal_length_size,
+            parameter_sets,
+            sei_nal,
+        );
         self.ts.clear();
-        packet::packetize(
-            &self.pes,
+        let header = packet::pes_header(VIDEO_STREAM_ID, pts, size.0);
+        let mut pes = packet::PesWriter::new(
+            &mut self.ts,
             VIDEO_PID,
             frame.keyframe,
             Some(self.clock.pcr(now_ns)),
             &mut self.cc_video,
-            &mut self.ts,
+            header.len() + size.0,
         );
+        pes.write(&header);
+        annexb::append_access_unit(
+            &mut pes,
+            self.video,
+            frame.data,
+            self.nal_length_size,
+            parameter_sets,
+            sei_nal,
+        );
+        debug_assert_eq!(pes.left(), 0);
         out(&self.ts, Content::Video);
         true
     }

@@ -133,10 +133,12 @@ final class CoreTsMuxer {
     /// - Parameters:
     ///   - frame: One Opus packet, or one raw AAC frame without ADTS header.
     ///   - ptsNs: Capture time of the first sample minus the encoder delay.
+    func writeAudio(_ frame: UnsafeRawBufferPointer, ptsNs: Int64, nowNs: Int64) -> Result {
+        lc_ts_audio(mux, frame.bindMemory(to: UInt8.self).baseAddress, frame.count, ptsNs, nowNs)
+    }
+
     func writeAudio(_ frame: Data, ptsNs: Int64, nowNs: Int64) -> Result {
-        frame.withUnsafeBytes { buffer in
-            lc_ts_audio(mux, buffer.bindMemory(to: UInt8.self).baseAddress, buffer.count, ptsNs, nowNs)
-        }
+        frame.withUnsafeBytes { writeAudio($0, ptsNs: ptsNs, nowNs: nowNs) }
     }
 
     var stats: Stats {
@@ -190,15 +192,22 @@ enum EncoderParameterSets {
 }
 
 extension CMSampleBuffer {
-    /// A sync sample (keyframe): not marked NotSync.
+    /// A sync sample (keyframe): not marked NotSync. Reads the attachment
+    /// with CoreFoundation calls: bridging the array to Swift would build an
+    /// array and a dictionary per frame.
     var isSyncSample: Bool {
-        guard let attachments = CMSampleBufferGetSampleAttachmentsArray(self, createIfNecessary: false)
-            as? [[CFString: Any]],
-            let first = attachments.first
+        guard let attachments = CMSampleBufferGetSampleAttachmentsArray(self, createIfNecessary: false),
+              CFArrayGetCount(attachments) > 0,
+              let first = CFArrayGetValueAtIndex(attachments, 0)
         else {
             return true
         }
-        return !(first[kCMSampleAttachmentKey_NotSync] as? Bool ?? false)
+        let dictionary = unsafeBitCast(first, to: CFDictionary.self)
+        guard let value = CFDictionaryGetValue(dictionary, Unmanaged.passUnretained(kCMSampleAttachmentKey_NotSync).toOpaque())
+        else {
+            return true
+        }
+        return !CFBooleanGetValue(unsafeBitCast(value, to: CFBoolean.self))
     }
 }
 

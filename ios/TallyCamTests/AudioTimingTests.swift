@@ -130,7 +130,7 @@ final class AudioEncoderTests: XCTestCase {
         var packets: [(Data, Int64)] = []
         var format: (Double, Int)?
         encoder.onFormat = { format = ($0, $1) }
-        encoder.onOutput = { packet, pts, _ in packets.append((packet, pts)) }
+        encoder.onOutput = { packet, pts, _ in packets.append((Data(packet), pts)) }
         let t0: Int64 = 50_000_000_000
         for k in 0 ..< buffers {
             let samples = (0 ..< 240).map { Float(sin(Double(k * 240 + $0) * 0.13) * 0.5) }

@@ -18,22 +18,25 @@ final class SrtConnection {
         case disconnected(reason: String, reconnecting: Bool)
     }
 
+    /// The first (`last` false) or last SRT packet of a video frame went
+    /// out. Called on the core's SRT thread, twice per frame: keep it short.
+    typealias FrameSent = @Sendable (_ captureNs: Int64, _ enqueuedNs: Int64, _ sentNs: Int64, _ last: Bool) -> Void
+
     var onEvent: ((Event) -> Void)?
-    /// The first (`last` false) or last SRT packet of a video frame went out.
-    var onFrameSent: ((_ captureNs: Int64, _ enqueuedNs: Int64, _ sentNs: Int64, _ last: Bool) -> Void)?
 
     private let queue: DispatchQueue
     private let options: SrtCallerOptions
+    private let frameSent: FrameSent
     private var caller: SrtCaller?
     /// `caller`'s hot handle (for `lc_ts_new`), 0 when there is none.
     private(set) var hotHandle: UInt64 = 0
     private var wasConnected = false
     private var closed = false
-    private var queueFullCount = 0
 
-    init(options: SrtCallerOptions, queue: DispatchQueue) {
+    init(options: SrtCallerOptions, queue: DispatchQueue, frameSent: @escaping FrameSent) {
         self.options = options
         self.queue = queue
+        self.frameSent = frameSent
     }
 
     var stats: SrtStats? {
@@ -44,7 +47,8 @@ final class SrtConnection {
         let encryption = options.passphrase == nil ? "off" : "AES-\(Int(options.pbkeylen == 0 ? 16 : options.pbkeylen) * 8)"
         log.info("Connecting to \(self.options.host):\(self.options.port) streamid=\(self.options.streamId ?? "-") latency=\(self.options.latencyMs) ms encryption=\(encryption)")
         do {
-            let caller = try SrtCaller.start(options: options, listener: Listener(connection: self, queue: queue))
+            let caller = try SrtCaller.start(options: options,
+                                          listener: Listener(connection: self, queue: queue, frameSent: frameSent))
             self.caller = caller
             hotHandle = caller.hotHandle()
         } catch let SrtError.Config(message) {
@@ -64,22 +68,6 @@ final class SrtConnection {
         let caller = caller
         self.caller = nil
         caller?.close()
-    }
-
-    /// The result of a send onto the caller (the core muxer's `lc_ts_video`
-    /// and `lc_ts_audio`): logs runs of a full queue.
-    /// Packets are dropped while not connected.
-    func noteSendResult(_ result: Int32) {
-        if result == LC_SRT_QUEUE_FULL {
-            // Counted in the stats as dropped; log the first of a run.
-            if queueFullCount == 0 {
-                log.warning("SRT send queue full, dropping")
-            }
-            queueFullCount += 1
-        } else if result > 0, queueFullCount > 0 {
-            log.info("SRT send queue drained after \(self.queueFullCount) dropped sends")
-            queueFullCount = 0
-        }
     }
 
     fileprivate func received(_ event: SrtEvent) {
@@ -114,16 +102,19 @@ final class SrtConnection {
     }
 }
 
-/// The core calls this on its SRT thread; everything hops to the
-/// connection's queue. Holds the connection weakly: the core keeps the
+/// The core calls this on its SRT thread. Events hop to the connection's
+/// queue; frame-sent reports go straight to their handler, without a hop
+/// per packet report. Holds the connection weakly: the core keeps the
 /// listener until the caller is closed.
 private final class Listener: SrtListener, @unchecked Sendable {
     private weak var connection: SrtConnection?
     private let queue: DispatchQueue
+    private let frameSent: SrtConnection.FrameSent
 
-    init(connection: SrtConnection, queue: DispatchQueue) {
+    init(connection: SrtConnection, queue: DispatchQueue, frameSent: @escaping SrtConnection.FrameSent) {
         self.connection = connection
         self.queue = queue
+        self.frameSent = frameSent
     }
 
     func onEvent(event: SrtEvent) {
@@ -133,8 +124,6 @@ private final class Listener: SrtListener, @unchecked Sendable {
     }
 
     func onFrameSent(captureNs: Int64, enqueuedNs: Int64, sentNs: Int64, last: Bool) {
-        queue.async { [weak connection = self.connection] in
-            connection?.onFrameSent?(captureNs, enqueuedNs, sentNs, last)
-        }
+        frameSent(captureNs, enqueuedNs, sentNs, last)
     }
 }

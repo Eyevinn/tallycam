@@ -53,29 +53,51 @@ fn is_slice(codec: VideoCodec, t: u8) -> bool {
     }
 }
 
+/// Where an access unit's bytes go: a buffer, a TS packetizer
+/// ([`super::packet::PesWriter`]) or a length count ([`ByteCount`]).
+pub trait ByteSink {
+    fn put(&mut self, bytes: &[u8]);
+}
+
+impl ByteSink for Vec<u8> {
+    fn put(&mut self, bytes: &[u8]) {
+        self.extend_from_slice(bytes);
+    }
+}
+
+/// Counts the bytes put, to size a PES before writing it.
+#[derive(Debug, Default)]
+pub struct ByteCount(pub usize);
+
+impl ByteSink for ByteCount {
+    fn put(&mut self, bytes: &[u8]) {
+        self.0 += bytes.len();
+    }
+}
+
 /// Appends one access unit to `out`: AUD, `parameter_sets` (Annex B, start
 /// codes included; `Some` on keyframes), the encoder's NAL units from
 /// `length_prefixed` (each after a big-endian length of `length_size`
 /// bytes) with start codes, and `sei` (one NAL unit without start code)
 /// before the first slice. A truncated or zero length ends the frame.
 pub fn append_access_unit(
-    out: &mut Vec<u8>,
+    out: &mut impl ByteSink,
     codec: VideoCodec,
     length_prefixed: &[u8],
     length_size: usize,
     parameter_sets: Option<&[u8]>,
     sei: Option<&[u8]>,
 ) {
-    out.extend_from_slice(&START_CODE);
+    out.put(&START_CODE);
     let keyframe = parameter_sets.is_some();
-    out.extend_from_slice(match (codec, keyframe) {
+    out.put(match (codec, keyframe) {
         (VideoCodec::H264, true) => &H264_AUD_INTRA[..],
         (VideoCodec::H264, false) => &H264_AUD_INTER[..],
         (VideoCodec::Hevc, true) => &HEVC_AUD_INTRA[..],
         (VideoCodec::Hevc, false) => &HEVC_AUD_INTER[..],
     });
     if let Some(sets) = parameter_sets {
-        out.extend_from_slice(sets);
+        out.put(sets);
     }
     let mut pending_sei = sei;
     let bytes = length_prefixed;
@@ -96,12 +118,12 @@ pub fn append_access_unit(
         }
         if is_slice(codec, t) {
             if let Some(sei) = pending_sei.take() {
-                out.extend_from_slice(&START_CODE);
-                out.extend_from_slice(sei);
+                out.put(&START_CODE);
+                out.put(sei);
             }
         }
-        out.extend_from_slice(&START_CODE);
-        out.extend_from_slice(nal);
+        out.put(&START_CODE);
+        out.put(nal);
     }
 }
 

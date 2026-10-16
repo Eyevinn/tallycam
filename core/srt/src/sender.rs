@@ -13,7 +13,6 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use bytes::Bytes;
 use log::{debug, info, warn};
 use srt_protocol::connection::{Action, DuplexConnection, Input};
 use srt_protocol::options::{
@@ -203,8 +202,9 @@ impl SrtSender {
     /// payloads are reported through `on_frame_sent`. `now_ns` is the host
     /// time now (0 = read the clock here).
     ///
-    /// No allocation, no lock: safe on the encoder/muxer thread. Calls must
-    /// be serialized (one producer). Returns the payloads queued.
+    /// No lock, one allocation per 64 payloads: safe on the encoder/muxer
+    /// thread. Calls must be serialized (one producer). Returns the
+    /// payloads queued.
     pub fn send(
         &self,
         data: &[u8],
@@ -355,18 +355,24 @@ impl Worker {
     fn sleep(&self, timeout: Duration, socket: Option<&UdpSocket>) {
         let s = &self.shared;
         s.parked.store(true, Ordering::SeqCst);
-        if s.queue.is_empty() && !self.closed() {
-            if timeout < Duration::from_millis(1) {
-                // poll(2) has ms resolution; the SND pacing period is shorter.
-                if !timeout.is_zero() && !poll_readable(socket, &s.waker, 0) {
-                    std::thread::sleep(timeout);
-                }
-            } else {
-                poll_readable(socket, &s.waker, timeout.as_millis().min(1000) as i32);
-            }
-        }
+        // Payloads queued before `parked` was set came without a wake; one
+        // after it wrote to the pipe, which a later poll drains.
+        let idle = s.queue.is_empty() && !self.closed();
+        let woken = if idle && !timeout.is_zero() {
+            // Whole ms rounded up: poll(2) waits no shorter, and a wait cut
+            // short only wakes the thread again. A sub-ms SND pacing wait
+            // (0.2 ms per packet at the 50 Mbit/s cap) becomes 1 ms; the
+            // engine then sends every period that elapsed, so the average
+            // rate holds with one wakeup per ms instead of one per packet.
+            let ms = timeout.as_nanos().div_ceil(1_000_000).min(1000) as i32;
+            poll_waker(socket, &s.waker, ms)
+        } else {
+            true
+        };
         s.parked.store(false, Ordering::SeqCst);
-        s.waker.drain();
+        if woken {
+            s.waker.drain();
+        }
     }
 
     fn session(&self) -> End {
@@ -502,6 +508,8 @@ impl Worker {
         let mut peer_shutdown = false;
         let mut unreachable_since: Option<Instant> = None;
         let mut last_heard = Instant::now();
+        // When the engine's timers last ran (`now` of the last timer input).
+        let mut timers_at = last_heard;
         loop {
             if self.closed() {
                 let shutdown = Packet::Control(ControlPacket {
@@ -518,6 +526,37 @@ impl Worker {
             }
             let now = Instant::now();
             let mut open = true;
+
+            // Payloads from the producer, first and at the time the engine's
+            // timers last ran. Every input runs the timers, and the SND
+            // timer releases the packets due since its last run: fed at
+            // `now`, the first payload would take all of them and the rest
+            // of the frame would go out one SND period (about 10 us without
+            // a bandwidth cap) at a time, one sleep and wakeup per packet.
+            // This way the timer run below sends the whole burst at once.
+            while let Some(slot) = self.shared.queue.front() {
+                let src = self.source_time(slot.enqueued_ns, now, start_time);
+                if slot.marks != 0 {
+                    st.marks.push_back(FrameMark {
+                        seq: next_seq,
+                        marks: slot.marks,
+                        capture_ns: slot.capture_ns,
+                        enqueued_ns: slot.enqueued_ns,
+                    });
+                }
+                next_seq += 1;
+                let data = slot.data.clone();
+                self.shared.queue.pop();
+                open &= self
+                    .pump(
+                        &mut st,
+                        &mut conn,
+                        &socket,
+                        timers_at,
+                        Input::Data(Some((src, data))),
+                    )
+                    .is_some();
+            }
 
             // Packets from the listener.
             loop {
@@ -581,32 +620,8 @@ impl Worker {
                     .is_some();
             }
 
-            // Payloads from the producer.
-            while let Some(slot) = self.shared.queue.front() {
-                let src = self.source_time(slot.enqueued_ns, now, start_time);
-                if slot.marks != 0 {
-                    st.marks.push_back(FrameMark {
-                        seq: next_seq,
-                        marks: slot.marks,
-                        capture_ns: slot.capture_ns,
-                        enqueued_ns: slot.enqueued_ns,
-                    });
-                }
-                next_seq += 1;
-                let data = Bytes::copy_from_slice(&slot.data[..slot.len as usize]);
-                self.shared.queue.pop();
-                open &= self
-                    .pump(
-                        &mut st,
-                        &mut conn,
-                        &socket,
-                        now,
-                        Input::Data(Some((src, data))),
-                    )
-                    .is_some();
-            }
-
             let wait = self.pump(&mut st, &mut conn, &socket, now, Input::Timer);
+            timers_at = now;
             self.publish(&conn, &st, base);
             let wait = match (open, wait) {
                 (true, Some(w)) => w,
@@ -853,8 +868,9 @@ fn set_thread_qos() {
     }
 }
 
-/// True when the socket is readable (or a wake came) within `timeout_ms`.
-fn poll_readable(socket: Option<&UdpSocket>, waker: &Waker, timeout_ms: i32) -> bool {
+/// Waits up to `timeout_ms` for the socket to become readable or a wake;
+/// true when the wake pipe has bytes to drain.
+fn poll_waker(socket: Option<&UdpSocket>, waker: &Waker, timeout_ms: i32) -> bool {
     let mut fds = [
         libc::pollfd {
             fd: waker.read_fd,
@@ -869,7 +885,7 @@ fn poll_readable(socket: Option<&UdpSocket>, waker: &Waker, timeout_ms: i32) -> 
     ];
     // SAFETY: two valid pollfd entries (fd -1 is ignored by poll).
     let r = unsafe { libc::poll(fds.as_mut_ptr(), 2, timeout_ms) };
-    r > 0
+    r != 0 && (r < 0 || fds[0].revents != 0)
 }
 
 /// A non-blocking pipe that wakes the SRT thread out of poll(2).

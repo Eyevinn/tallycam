@@ -14,22 +14,23 @@ final class AudioEncoder {
     /// Called once the output format is known.
     var onFormat: ((_ sampleRate: Double, _ channels: Int) -> Void)?
     /// Called with one encoded packet (raw AAC frame without ADTS header, or
-    /// one Opus packet), its PTS (host ns) and how long the encoder took
-    /// from the frame's last sample being in to the packet, ns.
-    var onOutput: ((_ packet: Data, _ ptsNs: Int64, _ encodeNs: Int64) -> Void)?
+    /// one Opus packet; valid only during the call), its PTS (host ns) and
+    /// how long the encoder took from the frame's last sample being in to
+    /// the packet, ns.
+    var onOutput: ((_ packet: UnsafeRawBufferPointer, _ ptsNs: Int64, _ encodeNs: Int64) -> Void)?
 
     let codec: AudioCodec
     static let sampleRate: Double = 48000
     private let channels: AVAudioChannelCount = 1
     private var converter: AVAudioConverter?
     private var inputBuffer: AVAudioPCMBuffer?
-    private var outputFormat: AVAudioFormat?
+    /// One packet; reused for every convert call.
+    private var outputBuffer: AVAudioCompressedBuffer?
     private var framer: AudioFramer
     private var primingFrames: Int
     /// First-sample capture times of frames handed to the converter whose
     /// packets have not come out yet (the AAC encoder may hold one back).
     private var pendingFrames: [Int64] = []
-    private var maxPacketSize = 1536
 
     init(codec: AudioCodec) {
         self.codec = codec
@@ -54,7 +55,7 @@ final class AudioEncoder {
     }
 
     private func encodeFrame(_ frame: UnsafeBufferPointer<Float>, firstSampleNs: Int64) {
-        guard let converter, let inputBuffer, let outputFormat,
+        guard let converter, let inputBuffer, let output = outputBuffer,
               let channel = inputBuffer.floatChannelData?[0]
         else {
             return
@@ -67,8 +68,8 @@ final class AudioEncoder {
         pendingFrames.append(firstSampleNs)
         var provided = false
         while true {
-            let output = AVAudioCompressedBuffer(format: outputFormat, packetCapacity: 1,
-                                                 maximumPacketSize: maxPacketSize)
+            output.packetCount = 0
+            output.byteLength = 0
             var error: NSError?
             let status = converter.convert(to: output, error: &error) { _, inputStatus in
                 if provided {
@@ -88,7 +89,8 @@ final class AudioEncoder {
                 let first = pendingFrames.removeFirst()
                 let pts = AudioTiming.ptsNs(firstSampleNs: first, primingFrames: primingFrames,
                                             sampleRate: Self.sampleRate)
-                onOutput?(Data(bytes: output.data, count: Int(output.byteLength)), pts, HostClock.nowNs() - startNs)
+                onOutput?(UnsafeRawBufferPointer(start: output.data, count: Int(output.byteLength)), pts,
+                          HostClock.nowNs() - startNs)
             }
             if status != .haveData {
                 break
@@ -134,11 +136,11 @@ final class AudioEncoder {
         if codec == .opus, reported > 0 {
             primingFrames = reported
         }
-        maxPacketSize = max(converter.maximumOutputPacketSize, 1536)
+        let maxPacketSize = max(converter.maximumOutputPacketSize, 1536)
         log.info("\(self.codec.label) \(Self.sampleRate) Hz, \(self.channels) ch, \(converter.bitRate) bit/s, \(self.codec.frameLength)-sample frames, priming \(self.primingFrames) (converter reports \(reported))")
         self.converter = converter
         self.inputBuffer = inputBuffer
-        self.outputFormat = outputFormat
+        outputBuffer = AVAudioCompressedBuffer(format: outputFormat, packetCapacity: 1, maximumPacketSize: maxPacketSize)
         framer.reset()
         pendingFrames.removeAll()
         onFormat?(Self.sampleRate, Int(channels))

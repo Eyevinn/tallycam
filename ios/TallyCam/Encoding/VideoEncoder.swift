@@ -72,13 +72,16 @@ final class VideoEncoder: @unchecked Sendable {
         let codecType: CMVideoCodecType = settings.codec == .h264 ? kCMVideoCodecType_H264 : kCMVideoCodecType_HEVC
         var lowLatency = settings.lowLatency && settings.codec == .h264
         let session: VTCompressionSession
+        // The session calls back with this encoder (unretained: `stop`, also
+        // from deinit, invalidates the session, after which no callback runs).
+        let refcon = Unmanaged.passUnretained(self).toOpaque()
         do {
-            session = try Self.createSession(settings, codecType: codecType, lowLatency: lowLatency)
+            session = try Self.createSession(settings, codecType: codecType, lowLatency: lowLatency, refcon: refcon)
         } catch where lowLatency {
             // Not every codec, size and OS has low-latency rate control.
             log.info("No low-latency \(self.settings.codec.rawValue) encoder (\(error.localizedDescription)), using the default rate control")
             lowLatency = false
-            session = try Self.createSession(settings, codecType: codecType, lowLatency: false)
+            session = try Self.createSession(settings, codecType: codecType, lowLatency: false, refcon: refcon)
         }
         // Low-latency rate control supports Constrained Baseline and
         // Constrained High (High without B-frames, CABAC allowed).
@@ -119,7 +122,7 @@ final class VideoEncoder: @unchecked Sendable {
     }
 
     private static func createSession(_ settings: VideoEncoderSettings, codecType: CMVideoCodecType,
-                                      lowLatency: Bool) throws -> VTCompressionSession
+                                      lowLatency: Bool, refcon: UnsafeMutableRawPointer) throws -> VTCompressionSession
     {
         let specification: CFDictionary? = lowLatency
             ? [kVTVideoEncoderSpecification_EnableLowLatencyRateControl: true] as CFDictionary
@@ -133,8 +136,8 @@ final class VideoEncoder: @unchecked Sendable {
             encoderSpecification: specification,
             imageBufferAttributes: nil,
             compressedDataAllocator: nil,
-            outputCallback: nil,
-            refcon: nil,
+            outputCallback: videoEncoderOutput,
+            refcon: refcon,
             compressionSessionOut: &session
         )
         guard status == noErr, let session else {
@@ -195,27 +198,34 @@ final class VideoEncoder: @unchecked Sendable {
             }
             return
         }
-        let capturePts = sampleBuffer.presentationTimeStamp
+        // The encoded frame carries the capture PTS; the time it went in
+        // rides along as the frame's refcon (host ns, never 0), so no
+        // closure is allocated per frame.
         let encodeInNs = HostClock.nowNs()
         let status = VTCompressionSessionEncodeFrame(
             session,
             imageBuffer: imageBuffer,
-            presentationTimeStamp: capturePts,
+            presentationTimeStamp: sampleBuffer.presentationTimeStamp,
             duration: sampleBuffer.duration,
             frameProperties: nil,
+            sourceFrameRefcon: UnsafeMutableRawPointer(bitPattern: Int(encodeInNs)),
             infoFlagsOut: nil
-        ) { [weak self] status, _, encoded in
-            guard status == noErr, let encoded, let self else {
-                if status != noErr {
-                    log.error("Encode failed: \(status)")
-                }
-                return
-            }
-            self.handleOutput(encoded, capturePts: capturePts, encodeInNs: encodeInNs, encodeOutNs: HostClock.nowNs())
-        }
+        )
         if status != noErr {
             log.error("EncodeFrame failed: \(status)")
         }
+    }
+
+    /// On a VideoToolbox thread.
+    fileprivate func output(status: OSStatus, encoded: CMSampleBuffer?, encodeInNs: Int64) {
+        guard status == noErr, let encoded else {
+            if status != noErr {
+                log.error("Encode failed: \(status)")
+            }
+            return
+        }
+        handleOutput(encoded, capturePts: encoded.presentationTimeStamp, encodeInNs: encodeInNs,
+                     encodeOutNs: HostClock.nowNs())
     }
 
     private func handleOutput(_ sampleBuffer: CMSampleBuffer, capturePts: CMTime, encodeInNs: Int64, encodeOutNs: Int64) {
@@ -230,6 +240,16 @@ final class VideoEncoder: @unchecked Sendable {
         }
         onOutput?(sampleBuffer, capturePts, encodeInNs, encodeOutNs)
     }
+}
+
+private func videoEncoderOutput(refcon: UnsafeMutableRawPointer?, sourceFrameRefcon: UnsafeMutableRawPointer?,
+                                status: OSStatus, _: VTEncodeInfoFlags, encoded: CMSampleBuffer?)
+{
+    guard let refcon else {
+        return
+    }
+    Unmanaged<VideoEncoder>.fromOpaque(refcon).takeUnretainedValue()
+        .output(status: status, encoded: encoded, encodeInNs: Int64(Int(bitPattern: sourceFrameRefcon)))
 }
 
 enum VideoEncoderError: LocalizedError {

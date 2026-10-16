@@ -1,3 +1,4 @@
+import Accelerate
 import Atomics
 @preconcurrency import AVFoundation
 import AudioToolbox
@@ -27,6 +28,9 @@ final class MicCapture: @unchecked Sendable {
 
     static let sampleRate: Double = 48000
     static let ioBufferDuration: TimeInterval = 0.005
+
+    /// Peak and RMS for the operator's meter.
+    let levels = MicLevels()
 
     private let ring = MicRing()
     private let lock = NSLock()
@@ -313,9 +317,60 @@ final class MicCapture: @unchecked Sendable {
                 log.info("Microphone sample time jumped by \(slot.sampleTime - last) samples")
             }
             lastSampleTime = slot.sampleTime + Double(slot.frames)
-            sink?(UnsafeBufferPointer(start: slot.samples, count: slot.frames), captureNs, arrivedNs, Self.sampleRate)
+            let samples = UnsafeBufferPointer(start: slot.samples, count: slot.frames)
+            levels.measure(samples, sampleRate: Self.sampleRate)
+            sink?(samples, captureNs, arrivedNs, Self.sampleRate)
             ring.release()
         }
+    }
+}
+
+/// The microphone level for the operator's meter: measured on the delivery
+/// thread (never the I/O thread) with vDSP, read on the main thread through
+/// atomics.
+final class MicLevels: @unchecked Sendable {
+    /// Time constant of the RMS reading.
+    private static let rmsWindow = 0.3
+
+    /// Highest peak since the last `read`, as Float bits.
+    private let peakBits = ManagedAtomic<UInt32>(0)
+    private let meanSquareBits = ManagedAtomic<UInt32>(0)
+    // Delivery thread only.
+    private var meanSquare: Float = 0
+
+    /// On the delivery thread, once per buffer.
+    func measure(_ samples: UnsafeBufferPointer<Float>, sampleRate: Double) {
+        guard let base = samples.baseAddress, !samples.isEmpty else {
+            return
+        }
+        let count = vDSP_Length(samples.count)
+        var peak: Float = 0
+        vDSP_maxmgv(base, 1, &peak, count)
+        var bufferMeanSquare: Float = 0
+        vDSP_measqv(base, 1, &bufferMeanSquare, count)
+        guard peak.isFinite, bufferMeanSquare.isFinite else {
+            return
+        }
+        let alpha = Float(min(1, Double(samples.count) / (sampleRate * Self.rmsWindow)))
+        meanSquare += alpha * (bufferMeanSquare - meanSquare)
+        meanSquareBits.store(meanSquare.bitPattern, ordering: .relaxed)
+        var old = peakBits.load(ordering: .relaxed)
+        while peak > Float(bitPattern: old) {
+            let (exchanged, original) = peakBits.compareExchange(expected: old, desired: peak.bitPattern,
+                                                                 ordering: .relaxed)
+            if exchanged {
+                break
+            }
+            old = original
+        }
+    }
+
+    /// The highest peak since the last read and the current RMS, both
+    /// linear (1 = full scale).
+    func read() -> (peak: Float, rms: Float) {
+        let peak = Float(bitPattern: peakBits.exchange(0, ordering: .relaxed))
+        let rms = Float(bitPattern: meanSquareBits.load(ordering: .relaxed)).squareRoot()
+        return (peak, rms)
     }
 }
 

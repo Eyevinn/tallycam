@@ -311,6 +311,10 @@ final class CaptureOutputs: NSObject, @unchecked Sendable, AVCaptureVideoDataOut
     private let lock = NSLock()
     private var videoSink: Sink?
     private var previewSink: PreviewSink?
+    /// Image statistics (`StatsSampler`) and focus peaking: always on while
+    /// the camera runs, each rate-limited inside.
+    private var statsSink: PreviewSink?
+    private var peakingSink: PreviewSink?
     private var dropped = 0
     /// Set once before the session starts.
     var genlock: GenlockController?
@@ -334,11 +338,23 @@ final class CaptureOutputs: NSObject, @unchecked Sendable, AVCaptureVideoDataOut
         }
     }
 
+    func setStatsSink(_ sink: PreviewSink?) {
+        lock.withLock {
+            statsSink = sink
+        }
+    }
+
+    func setPeakingSink(_ sink: PreviewSink?) {
+        lock.withLock {
+            peakingSink = sink
+        }
+    }
+
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer,
                        from _: AVCaptureConnection)
     {
-        let (sink, preview) = lock.withLock {
-            (videoSink, previewSink)
+        let (sink, preview, stats, peaking) = lock.withLock {
+            (videoSink, previewSink, statsSink, peakingSink)
         }
         // The encoder first: what runs before it adds to every frame's
         // latency.
@@ -346,6 +362,8 @@ final class CaptureOutputs: NSObject, @unchecked Sendable, AVCaptureVideoDataOut
         genlock?.onFrame(sampleBuffer)
         torchProbe?.onFrame(sampleBuffer)
         preview?(sampleBuffer)
+        stats?(sampleBuffer)
+        peaking?(sampleBuffer)
     }
 
     func captureOutput(_: AVCaptureOutput, didDrop _: CMSampleBuffer, from _: AVCaptureConnection) {

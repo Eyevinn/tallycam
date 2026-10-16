@@ -1,9 +1,10 @@
 @preconcurrency import AVFoundation
 
 private let whenManualExposure: [String: JSONValue] = ["exposure_mode": .string("manual")]
-private let whenAutoExposure: [String: JSONValue] = ["exposure_mode": .array([.string("auto"), .string("auto_iso")])]
-/// The shutter is the operator's in manual and in auto ISO.
-private let whenFixedShutter: [String: JSONValue] = ["exposure_mode": .array([.string("manual"), .string("auto_iso")])]
+private let whenAutoExposure: [String: JSONValue] = ["exposure_mode": .string("auto")]
+/// The shutter is a production setting; under a free shutter the owner sets
+/// it in manual (`readonly` otherwise, see `currentDescriptors`).
+private let whenFixedShutter: [String: JSONValue] = ["exposure_mode": .string("manual")]
 private let whenManualWhiteBalance: [String: JSONValue] = ["wb_mode": .string("manual")]
 private let whenManualFocus: [String: JSONValue] = ["focus_mode": .string("manual")]
 
@@ -103,7 +104,7 @@ extension CameraControls {
                     ControlOption(value: .string($0.rawValue), label: $0.label)
                 })
             },
-            get: { c in (c.pendingResolution ?? c.activeResolution).map { .string($0.rawValue) } },
+            get: { c in c.activeResolution.map { .string($0.rawValue) } },
             set: { c, value in
                 let id = try choice(value, c.availableResolutions.map(\.rawValue))
                 guard let resolution = VideoResolution(rawValue: id) else {
@@ -124,10 +125,15 @@ extension CameraControls {
             get: { c in c.currentFrameRate.map { .int($0) } },
             set: { c, value in
                 let frameRate = try Int(number(value))
+                guard !c.formatLocked || frameRate == c.currentFrameRate else {
+                    throw ControlError("not while live: stop the stream to change it")
+                }
                 c.session.beginConfiguration()
                 defer { c.session.commitConfiguration() }
                 try c.configure { try c.applyFrameRate(frameRate, on: $0) }
                 c.revalidateStabilization()
+                // The production shutter may no longer fit the frame.
+                c.applyProductionShutter()
                 return nil
             },
             reshapes: true
@@ -218,47 +224,58 @@ extension CameraControls {
                 guard let device = c.device else {
                     return nil
                 }
-                let modes: [(String, String, AVCaptureDevice.ExposureMode)] = [
-                    ("auto", "Auto", .continuousAutoExposure), ("auto_iso", "Auto ISO", .custom),
-                    ("locked", "Locked", .locked), ("manual", "Manual", .custom),
-                ]
-                return .enumeration(modes.filter { device.isExposureModeSupported($0.2) }
-                    .map { ControlOption(value: .string($0.0), label: $0.1) })
+                // Auto is the core's auto ISO loop at the production shutter
+                // (iOS auto exposure only on a camera without custom
+                // exposure).
+                let custom = device.isExposureModeSupported(.custom)
+                var options: [ControlOption] = []
+                if custom || device.isExposureModeSupported(.continuousAutoExposure) {
+                    options.append(ControlOption(value: .string("auto"), label: "Auto"))
+                }
+                if device.isExposureModeSupported(.locked) {
+                    options.append(ControlOption(value: .string("locked"), label: "Locked"))
+                }
+                if custom {
+                    options.append(ControlOption(value: .string("manual"), label: "Manual"))
+                }
+                return .enumeration(options)
             },
             get: { c in
                 switch c.device?.exposureMode {
-                case .custom: .string(c.autoIso ? "auto_iso" : "manual")
+                case .custom: .string(c.autoIso ? "auto" : "manual")
                 case .locked: .string("locked")
                 case nil: nil
                 default: .string("auto")
                 }
             },
             set: { c, value in
-                let id = try choice(value, ["auto", "auto_iso", "locked", "manual"])
+                // `auto_iso` is what `auto` was called before protocol 2.
+                var id = try choice(value, ["auto", "auto_iso", "locked", "manual"])
+                if id == "auto_iso" {
+                    id = "auto"
+                }
                 return try c.configure { device in
-                    c.autoIso = id == "auto_iso"
                     switch id {
                     case "auto":
-                        device.exposureMode = .continuousAutoExposure
-                        // iOS auto exposure sets the frame duration itself.
-                        return c.genlock.isEnabled ? "genlock needs auto_iso, locked or manual exposure: "
-                            + "iOS auto exposure overrides the frame duration" : nil
+                        c.autoIsoBias = 0
+                        if device.isExposureModeSupported(.custom) {
+                            c.enterAutoIso(device)
+                        } else {
+                            c.autoIso = false
+                            device.exposureMode = .continuousAutoExposure
+                        }
                     case "locked":
+                        c.autoIso = false
                         device.exposureMode = .locked
                     default:
                         guard device.isExposureModeSupported(.custom) else {
                             throw ControlError("manual exposure not supported")
                         }
-                        // Start from what auto exposure picked.
-                        if id == "auto_iso" {
-                            c.enterAutoIso(device)
-                        } else {
-                            // The ISO auto exposure reports, not `currentISO`,
-                            // which darkens the picture (see `enterAutoIso`).
-                            let format = device.activeFormat
-                            device.setExposureModeCustom(duration: AVCaptureDevice.currentExposureDuration,
-                                                         iso: min(max(device.iso, format.minISO), format.maxISO))
-                        }
+                        c.autoIso = false
+                        // At the production shutter, from the ISO auto
+                        // exposure reports (not `currentISO`, which darkens
+                        // the picture).
+                        c.enterCustom(device)
                     }
                     return nil
                 }
@@ -305,8 +322,11 @@ extension CameraControls {
                 guard denominator > 0 else {
                     throw ControlError("expected the denominator of 1/x seconds")
                 }
+                guard c.effectiveShutter == .free else {
+                    throw ControlError("the shutter is a production setting")
+                }
                 return try c.configure { device in
-                    guard device.exposureMode == .custom else {
+                    guard device.exposureMode == .custom, !c.autoIso else {
                         throw ControlError("requires exposure_mode manual")
                     }
                     var warning: String?
@@ -339,7 +359,7 @@ extension CameraControls {
                         return warning
                     }
                     guard device.exposureMode == .continuousAutoExposure || device.exposureMode == .autoExpose else {
-                        throw ControlError("requires exposure_mode auto or auto_iso")
+                        throw ControlError("requires exposure_mode auto")
                     }
                     var warning: String?
                     device.setExposureTargetBias(clamp(bias, device.minExposureTargetBias ... device.maxExposureTargetBias,
@@ -366,7 +386,18 @@ extension CameraControls {
                 guard hz == 50 || hz == 60 || hz == 0 else {
                     throw ControlError("expected 50, 60 or 0 (off)")
                 }
+                guard Int(hz) != c.mainsHz else {
+                    return nil
+                }
+                // The phone's own production; a hub's wins (docs/SHADING.md).
+                guard c.serverShutter == nil else {
+                    throw ControlError("set by the production on the control server")
+                }
+                guard !c.formatLocked else {
+                    throw ControlError("not while live: stop the stream to change it")
+                }
                 c.mainsHz = Int(hz)
+                c.applyProductionShutter()
                 return nil
             }
         ),
@@ -583,8 +614,10 @@ extension CameraControls {
                             device.focusMode = .continuousAutoFocus
                             c.focusManual = false
                         }
-                        // Manual exposure stays as the operator set it.
-                        if device.isExposurePointOfInterestSupported, device.exposureMode != .custom {
+                        // The metering point follows only iOS auto exposure; a
+                        // tap never changes the exposure mode or its owner
+                        // (docs/SHADING.md).
+                        if device.isExposurePointOfInterestSupported, device.exposureMode == .continuousAutoExposure {
                             device.exposurePointOfInterest = point
                             device.exposureMode = .continuousAutoExposure
                         }

@@ -64,6 +64,11 @@ final class AutoIsoLoop {
         lc_auto_iso_set_mains(loop, UInt32(max(hz, 0)))
     }
 
+    /// Free shutter: hold `baseNs`, shorten it only at the lowest ISO; 0 off.
+    func setFreeShutter(baseNs: Double) {
+        lc_auto_iso_set_free_shutter(loop, baseNs)
+    }
+
     /// The ISO and exposure duration to apply, when they change.
     func onSample(_ input: Input) -> Command? {
         var i = LcAutoIsoInput(t_ns: input.tNs, offset_ev: input.offsetEv, iso: input.iso,

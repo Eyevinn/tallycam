@@ -25,11 +25,11 @@ enum StreamControls {
         ControlDescriptor(id: "video_codec", label: "Video codec", group: "stream",
                           kind: .enumeration(VideoCodec.allCases.map {
                               ControlOption(value: .string($0.rawValue), label: $0.label)
-                          })),
+                          })).lockedWhileLive(),
         ControlDescriptor(id: "audio_codec", label: "Audio codec", group: "stream",
                           kind: .enumeration(AudioCodec.allCases.map {
                               ControlOption(value: .string($0.rawValue), label: $0.label)
-                          })),
+                          })).lockedWhileLive(),
         ControlDescriptor(id: "orientation", label: "Orientation", group: "image",
                           kind: .enumeration(OrientationMode.allCases.map {
                               ControlOption(value: .string($0.rawValue), label: $0.label)
@@ -117,14 +117,24 @@ enum StreamControls {
             guard let codec = value.string.flatMap(VideoCodec.init(rawValue:)) else {
                 return "expected " + VideoCodec.allCases.map(\.rawValue).joined(separator: " or ")
             }
+            // Not while live (docs/SHADING.md, D11): a change that only
+            // applies later looks as if it took effect.
+            guard controller.state == .idle || codec == controller.videoCodec else {
+                return "not while live: stop the stream to change it"
+            }
             controller.videoCodec = codec
-            return controller.state == .idle ? nil : "applies the next time the stream starts"
+            return nil
         case "audio_codec":
             guard let codec = value.string.flatMap(AudioCodec.init(rawValue:)) else {
                 return "expected " + AudioCodec.allCases.map(\.rawValue).joined(separator: " or ")
             }
+            // Not while live (docs/SHADING.md, D11): a change that only
+            // applies later looks as if it took effect.
+            guard controller.state == .idle || codec == controller.audioCodec else {
+                return "not while live: stop the stream to change it"
+            }
             controller.audioCodec = codec
-            return controller.state == .idle ? nil : "applies the next time the stream starts"
+            return nil
         case "orientation":
             guard let mode = value.string.flatMap(OrientationMode.init(rawValue:)) else {
                 return "expected auto, landscape or portrait"

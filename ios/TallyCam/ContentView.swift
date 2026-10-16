@@ -8,6 +8,7 @@ struct ContentView: View {
     /// Width of the tally border plus a margin: chrome stays clear of it.
     private static let tallyClearance: CGFloat = 22
     private static let stripHeight: CGFloat = 32
+    /// The group chips' row under the status strip.
 
     @StateObject private var capture = Capture()
     @StateObject private var controller = StreamController()
@@ -19,6 +20,8 @@ struct ContentView: View {
     @State private var connectCardDismissed = false
     @State private var toast: String?
     @State private var toastTask: Task<Void, Never>?
+    /// Touches blocked except the slide to unlock; not persisted.
+    @State private var screenLocked = false
 
     var body: some View {
         GeometryReader { geometry in
@@ -26,16 +29,52 @@ struct ContentView: View {
             let insets = geometry.safeAreaInsets
             let top = Self.edgePadding(insets.top)
             ZStack {
-                CameraStage(capture: capture)
-                TallyOverlay(tally: remote.tally, banner: remote.banner, cameraName: controller.displayName,
-                             topPadding: top + Self.stripHeight + 10)
-                StatusStrip(controller: controller, remote: remote, capture: capture) {
-                    showSettings = true
+                CameraStage(capture: capture, remote: remote, shading: remote.shading)
+                TallyOverlay(tally: remote.tally)
+                VStack(alignment: .leading, spacing: 6) {
+                    StatusStrip(controller: controller, remote: remote, capture: capture) {
+                        showSettings = true
+                    }
+                    // Chips left, name and tally right; on a narrow screen
+                    // the name goes to its own row, still on the right.
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: 6) {
+                            groupChips
+                            Spacer(minLength: 8)
+                            tallyChip
+                        }
+                        VStack(alignment: .trailing, spacing: 6) {
+                            HStack(spacing: 6) {
+                                groupChips
+                                Spacer(minLength: 0)
+                            }
+                            tallyChip
+                        }
+                    }
+                    .padding(.horizontal, 4)
+                    if let banner = remote.banner {
+                        Banner(text: banner)
+                            .frame(maxWidth: .infinity)
+                            .padding(.horizontal, 20)
+                            .padding(.top, 4)
+                            .transition(.move(edge: .top).combined(with: .opacity))
+                    }
                 }
+                .animation(.easeInOut(duration: 0.2), value: remote.banner)
                 .padding(.top, top)
                 .padding(.leading, Self.edgePadding(insets.leading))
                 .padding(.trailing, Self.edgePadding(insets.trailing))
                 .frame(maxHeight: .infinity, alignment: .top)
+                if !screenLocked {
+                    zoomControls(insets: insets)
+                    operatorButtons(insets: insets)
+                }
+                if capture.hasAudio {
+                    AudioMeter(levels: capture.mic.levels)
+                        .padding(.trailing, Self.edgePadding(insets.trailing) + 4)
+                        .padding(.bottom, Self.edgePadding(insets.bottom) + 4)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                }
                 liveButton(landscape: landscape, insets: insets)
                 if let toast {
                     Toast(text: toast)
@@ -46,7 +85,15 @@ struct ContentView: View {
                         .frame(maxHeight: .infinity, alignment: .bottom)
                         .transition(.opacity.combined(with: .move(edge: .bottom)))
                 }
-                if remote.isUnconfigured, !connectCardDismissed, !showSettings {
+                if screenLocked {
+                    ScreenLockLayer(bottomPadding: landscape
+                        ? Self.edgePadding(insets.bottom) + 6
+                        : 20 + LiveButton.size + 18) {
+                        withAnimation(.easeOut(duration: 0.2)) { screenLocked = false }
+                    }
+                    .transition(.opacity)
+                }
+                if remote.isUnconfigured, !connectCardDismissed, !showSettings, !screenLocked {
                     ConnectCard(onSettings: { showSettings = true },
                                 onDismiss: { withAnimation { connectCardDismissed = true } })
                         .padding(24)
@@ -95,8 +142,54 @@ struct ContentView: View {
         }
     }
 
+    private var groupChips: some View {
+        HStack(spacing: 6) {
+            GroupChips(remote: remote, shading: remote.shading, interactive: !screenLocked)
+            ExposureWarningLabel(shading: remote.shading)
+        }
+    }
+
+    private var tallyChip: some View {
+        TallyChip(tally: remote.tally, cameraName: controller.displayName)
+    }
+
     private var keepAwake: Bool {
         controller.state != .idle || remote.connected
+    }
+
+    /// Lens buttons above the zoom rocker, at the leading edge, vertically
+    /// centred (away from the live button in both orientations).
+    private func zoomControls(insets: EdgeInsets) -> some View {
+        VStack(spacing: 10) {
+            LensButtons(shading: remote.shading) { lens in
+                capture.controls.apply(["lens": .string(lens)]) { _ in }
+            }
+            ZoomRocker { rate in
+                if rate == 0 {
+                    capture.controls.stopZoomRamp()
+                } else {
+                    capture.controls.rampZoom(rate: rate)
+                }
+            }
+        }
+        .padding(.leading, Self.edgePadding(insets.leading) + 4)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+    }
+
+    /// Aids and screen lock, bottom leading.
+    private func operatorButtons(insets: EdgeInsets) -> some View {
+        HStack(spacing: 10) {
+            AidsMenu()
+            Button {
+                withAnimation(.easeOut(duration: 0.2)) { screenLocked = true }
+            } label: {
+                ChromeButtonLabel(systemName: "lock")
+            }
+            .accessibilityLabel("Lock screen")
+        }
+        .padding(.leading, Self.edgePadding(insets.leading) + 4)
+        .padding(.bottom, Self.edgePadding(insets.bottom) + 4)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
     }
 
     private func liveButton(landscape: Bool, insets: EdgeInsets) -> some View {
@@ -113,6 +206,9 @@ struct ContentView: View {
         // The same message again does not trigger onChange.
         if controller.state == .idle, let message = controller.message {
             showToast(message)
+        } else if controller.state != .idle, !screenLocked {
+            // Suggested, not forced: a camera on a tripod may need its controls.
+            showToast("Lock the screen against stray touches: lock button, bottom left")
         }
     }
 

@@ -72,10 +72,11 @@ final class CameraControls: @unchecked Sendable {
     let queue: DispatchQueue
     let genlock = GenlockController()
     let torchProbe = TorchProbe()
-    /// Auto ISO: the shutter stays where the operator put it (rounded to a
-    /// flicker-free value for `mainsHz`) and the core's loop sets the ISO
-    /// from the metered exposure. iOS auto exposure would change the frame
-    /// duration, which genlock owns.
+    /// Auto exposure: the shutter stays at the production's (see
+    /// `effectiveShutter`) and the core's loop sets the ISO from the metered
+    /// exposure. iOS auto exposure would change the shutter (flicker) and the
+    /// frame duration, which genlock owns. Under a free shutter the loop
+    /// shortens the shutter once the ISO is at its minimum.
     var autoIso = false {
         didSet {
             if autoIso, !oldValue {
@@ -86,13 +87,19 @@ final class CameraControls: @unchecked Sendable {
     var autoIsoBias: Float = 0 {
         didSet { autoIsoLoop.setBias(ev: Double(autoIsoBias)) }
     }
-    /// Mains frequency (50 or 60 Hz) for flicker-free auto ISO shutters.
+    /// Mains frequency (50 or 60 Hz, 0 for none) for flicker-free shutters.
     var mainsHz: Int {
         didSet {
             UserDefaults.standard.set(mainsHz, forKey: Self.mainsKey)
-            autoIsoLoop.setMains(hz: mainsHz)
+            configureLoopShutter()
         }
     }
+    /// The production's shutter as the hub sent it (docs/SHADING.md,
+    /// "Shutter"). Without a hub the phone is its own production: the shutter
+    /// is one mains period, or free when `mainsHz` is 0.
+    private(set) var serverShutter: ShutterPolicy?
+    /// A production that arrived while live, applied when the stream stops.
+    private var pendingProduction: (mainsHz: Int, shutter: ShutterPolicy)?
     private let autoIsoLoop: AutoIsoLoop
     /// An auto ISO exposure is being applied: no samples until the device has
     /// it, since `iso` and `exposureDuration` lag behind what was commanded.
@@ -123,10 +130,9 @@ final class CameraControls: @unchecked Sendable {
     /// The operator's resolution; the lens may not have it (`attach`,
     /// `switchLens` fall back).
     private(set) var wantedResolution: VideoResolution
-    /// Set while live: the encoder's frame size is fixed, so a resolution
-    /// change waits in `pendingResolution` until the stream stops.
+    /// Set while live: resolution, frame rate and the production shutter
+    /// cannot change (docs/SHADING.md, D11).
     private(set) var formatLocked = false
-    private(set) var pendingResolution: VideoResolution?
     private var reportedFormat: CaptureFormat?
 
     init(session: AVCaptureSession, videoOutput: AVCaptureVideoDataOutput, queue: DispatchQueue) {
@@ -246,9 +252,111 @@ final class CameraControls: @unchecked Sendable {
     /// `currentISO` the picture dropped about 1.3 EV on an iPhone 16
     /// (ISO 377 became 153) and auto ISO had to climb back.
     func enterAutoIso(_ device: AVCaptureDevice) {
+        enterCustom(device)
+        autoIso = true
+        configureLoopShutter()
+    }
+
+    /// Custom exposure at the production shutter, with the ISO moved so the
+    /// picture keeps its brightness. Under a free shutter the current one
+    /// stays.
+    func enterCustom(_ device: AVCaptureDevice) {
         let format = device.activeFormat
-        device.setExposureModeCustom(duration: AVCaptureDevice.currentExposureDuration,
-                                     iso: min(max(device.iso, format.minISO), format.maxISO))
+        let current = device.exposureDuration.seconds * 1e9
+        guard let target = productionExposureNs(device), current > 0, abs(target / current - 1) > 0.005 else {
+            device.setExposureModeCustom(duration: AVCaptureDevice.currentExposureDuration,
+                                         iso: min(max(device.iso, format.minISO), format.maxISO))
+            return
+        }
+        let iso = Float(Double(device.iso) * current / target)
+        device.setExposureModeCustom(duration: CMTime(value: CMTimeValue(target.rounded()), timescale: 1_000_000_000),
+                                     iso: min(max(iso, format.minISO), format.maxISO))
+    }
+
+    // MARK: Production shutter
+
+    /// What the shutter follows now.
+    var effectiveShutter: ShutterPolicy {
+        switch serverShutter {
+        case nil: mainsHz == 0 ? .free : .mains
+        case .mains: mainsHz == 0 ? .free : .mains
+        case let policy?: policy
+        }
+    }
+
+    /// The production's exposure duration for the active format, or nil
+    /// under a free shutter. A shutter longer than the frame becomes the
+    /// longest flicker-free one that fits (1/100 for 1/50 at 60 fps).
+    func productionExposureNs(_ device: AVCaptureDevice) -> Double? {
+        let wanted: Double
+        switch effectiveShutter {
+        case .free: return nil
+        case .mains: wanted = 1e9 / Double(mainsHz)
+        case let .fixed(denominator): wanted = 1e9 / Double(denominator)
+        }
+        let format = device.activeFormat
+        let period = currentFrameRate.map { 1e9 / Double($0) } ?? device.activeVideoMinFrameDuration.seconds * 1e9
+        let longest = AutoIsoLoop.longestExposureNs(framePeriodNs: period,
+                                                    formatMaxNs: format.maxExposureDuration.seconds * 1e9,
+                                                    genlock: genlock.isEnabled)
+        let shortest = format.minExposureDuration.seconds * 1e9
+        guard wanted > longest else {
+            return max(wanted, shortest)
+        }
+        if mainsHz > 0 {
+            let pulse = 1e9 / Double(2 * mainsHz)
+            let pulses = (longest / pulse).rounded(.down)
+            if pulses >= 1 {
+                return max(pulses * pulse, shortest)
+            }
+        }
+        return max(longest, shortest)
+    }
+
+    /// Tells the auto ISO loop how to treat the shutter.
+    private func configureLoopShutter() {
+        switch effectiveShutter {
+        case .mains:
+            autoIsoLoop.setMains(hz: mainsHz)
+            autoIsoLoop.setFreeShutter(baseNs: 0)
+        case .fixed:
+            // The production chose this value on purpose: no rounding.
+            autoIsoLoop.setMains(hz: 0)
+            autoIsoLoop.setFreeShutter(baseNs: 0)
+        case .free:
+            autoIsoLoop.setMains(hz: 0)
+            let base = device.map { $0.exposureDuration.seconds * 1e9 } ?? 0
+            autoIsoLoop.setFreeShutter(baseNs: base > 0 ? base : 1e9 / 100)
+        }
+    }
+
+    /// The hub's production settings (nil: none, the phone's own). Kept for
+    /// the next stream while live. Returns a warning.
+    func setProduction(mainsHz hz: Int?, shutter: ShutterPolicy?) -> String? {
+        let next = (hz ?? mainsHz, shutter)
+        if formatLocked {
+            if next.0 != mainsHz || next.1 != serverShutter {
+                pendingProduction = next.1.map { (next.0, $0) }
+                return "production shutter changed while live: kept until the stream stops"
+            }
+            return nil
+        }
+        serverShutter = shutter
+        if hz != nil, hz != mainsHz {
+            mainsHz = next.0
+        }
+        applyProductionShutter()
+        return nil
+    }
+
+    /// Moves a custom exposure (auto or manual) to the production shutter.
+    func applyProductionShutter() {
+        configureLoopShutter()
+        if let device, device.exposureMode == .custom {
+            _ = try? configure { enterCustom($0) }
+        }
+        publishControlsIfChanged(force: false)
+        onUpdate?(.values(values()))
     }
 
     /// Genlock picks a format with headroom above the frame rate; off goes
@@ -259,7 +367,6 @@ final class CameraControls: @unchecked Sendable {
         genlock.setEnabled(on)
         if on, let device, device.exposureMode == .continuousAutoExposure || device.exposureMode == .autoExpose {
             try configure { enterAutoIso($0) }
-            autoIso = true
             onUpdate?(.log(level: "info", message: String(
                 format: "Genlock: exposure moved to auto ISO at 1/%.0f%@ "
                     + "(iOS auto exposure sets the frame duration itself)",
@@ -339,7 +446,20 @@ final class CameraControls: @unchecked Sendable {
         } catch {
             log.error("No capture format: \(error.localizedDescription, privacy: .public)")
         }
+        enterDefaultExposure()
         applyConnectionSettings()
+    }
+
+    /// Auto exposure as the app means it: auto ISO at the production shutter,
+    /// or iOS auto exposure on a camera without custom exposure.
+    private func enterDefaultExposure() {
+        _ = try? configure { device in
+            if device.isExposureModeSupported(.custom) {
+                enterAutoIso(device)
+            } else if device.isExposureModeSupported(.continuousAutoExposure) {
+                device.exposureMode = .continuousAutoExposure
+            }
+        }
     }
 
     /// Called on the session queue once the session runs.
@@ -385,6 +505,10 @@ final class CameraControls: @unchecked Sendable {
             control.kind(self).map {
                 ControlDescriptor(id: control.id, label: control.label, group: control.group,
                                   kind: $0, enabledWhen: control.enabledWhen)
+                    .readonly(control.id == "shutter" && effectiveShutter != .free
+                        || control.id == "mains_hz" && serverShutter != nil)
+                    .lockedWhileLive(control.id == "resolution" || control.id == "frame_rate"
+                        || control.id == "mains_hz")
             }
         }
     }
@@ -482,16 +606,13 @@ final class CameraControls: @unchecked Sendable {
         return (resolution, frameRate)
     }
 
-    /// The `resolution` control. While live (`formatLocked`) it is kept
-    /// for the next stream.
+    /// The `resolution` control. Refused while live (`formatLocked`).
     func setResolution(_ resolution: VideoResolution) throws -> String? {
+        guard !formatLocked || resolution == activeResolution else {
+            throw ControlError("not while live: stop the stream to change it")
+        }
         wantedResolution = resolution
         UserDefaults.standard.set(resolution.rawValue, forKey: Self.resolutionKey)
-        if formatLocked {
-            pendingResolution = resolution == activeResolution ? nil : resolution
-            return pendingResolution == nil ? nil : "applies the next time the stream starts"
-        }
-        pendingResolution = nil
         guard resolution != activeResolution else {
             return nil
         }
@@ -511,23 +632,15 @@ final class CameraControls: @unchecked Sendable {
         return activeFormat
     }
 
-    /// Applies a resolution chosen while live.
+    /// The stream stopped: applies a production that came while live.
     func unlockFormat() {
         formatLocked = false
-        guard let pending = pendingResolution else {
+        guard let pending = pendingProduction else {
             return
         }
-        pendingResolution = nil
-        do {
-            if let warning = try setResolution(pending) {
-                onUpdate?(.log(level: "warn", message: "resolution: \(warning)"))
-            }
-        } catch {
-            onUpdate?(.log(level: "error", message: "resolution: \(error.localizedDescription)"))
-        }
-        publishControlsIfChanged(force: false)
-        notifyFormatIfChanged()
-        onUpdate?(.values(values()))
+        pendingProduction = nil
+        _ = setProduction(mainsHz: pending.mainsHz, shutter: pending.shutter)
+        onUpdate?(.log(level: "info", message: "Production shutter applied after the stream stopped"))
     }
 
     func switchLens(to id: String) throws {
@@ -546,6 +659,9 @@ final class CameraControls: @unchecked Sendable {
         if formatLocked, !CameraFormats.resolutions(newDevice.formats.map(Self.info)).contains(resolution) {
             throw ControlError("The \(lens.label) lens has no \(resolution.rawValue); stop the stream to switch")
         }
+        // Exposure, colour and focus keep their modes and values on the new
+        // lens (the owner set them, docs/SHADING.md).
+        let carried = values().filter { Self.carriedOverLensSwitch.contains($0.key) }
         let newInput = try AVCaptureDeviceInput(device: newDevice)
         session.beginConfiguration()
         if let input {
@@ -577,6 +693,11 @@ final class CameraControls: @unchecked Sendable {
         }
         revalidateStabilization()
         session.commitConfiguration()
+        autoIso = false
+        enterDefaultExposure()
+        for control in Self.table where carried[control.id] != nil && control.kind(self) != nil {
+            _ = try? control.set(self, carried[control.id]!)
+        }
         if let warning {
             onUpdate?(.log(level: "warn", message: warning))
         }
@@ -612,6 +733,32 @@ final class CameraControls: @unchecked Sendable {
         queue.async { [self] in
             rotationAngle = angle
             applyConnectionSettings()
+        }
+    }
+
+    /// Smooth zoom from the operator's rocker: ramps towards the longest
+    /// (`rate` > 0) or widest (`rate` < 0) zoom at `abs(rate)` doublings per
+    /// second, until `stopZoomRamp` or a new rate.
+    func rampZoom(rate: Double) {
+        queue.async { [self] in
+            _ = try? configure { device in
+                guard abs(rate) > 0.001 else {
+                    device.cancelVideoZoomRamp()
+                    return
+                }
+                let target = rate > 0
+                    ? min(device.maxAvailableVideoZoomFactor, 10)
+                    : device.minAvailableVideoZoomFactor
+                device.ramp(toVideoZoomFactor: target, withRate: Float(abs(rate)))
+            }
+        }
+    }
+
+    /// Stops a zoom ramp where it is and publishes the zoom it reached.
+    func stopZoomRamp() {
+        queue.async { [self] in
+            _ = try? configure { $0.cancelVideoZoomRamp() }
+            onUpdate?(.values(values()))
         }
     }
 
@@ -717,6 +864,11 @@ final class CameraControls: @unchecked Sendable {
         onUpdate?(.controls(descriptors, Self.commands.map(\.descriptor), values()))
     }
 
+    /// Mode and value controls of the owned groups, in table order.
+    private static let carriedOverLensSwitch: Set<String> = [
+        "exposure_mode", "iso", "ev_bias", "wb_mode", "wb_temperature", "wb_tint", "focus_mode", "focus_position",
+    ]
+
     private static func discoverLenses() -> [Lens] {
         let candidates: [Lens] = [
             Lens(id: "ultra_wide", label: "Ultra wide", type: .builtInUltraWideCamera),
@@ -725,8 +877,22 @@ final class CameraControls: @unchecked Sendable {
         ]
         let found = AVCaptureDevice.DiscoverySession(deviceTypes: candidates.map(\.type),
                                                      mediaType: .video, position: .back).devices
-        return candidates.filter { lens in
-            found.contains { $0.deviceType == lens.type && !CameraFormats.resolutions($0.formats.map(info)).isEmpty }
+        let usable = candidates.compactMap { lens in
+            found.first { $0.deviceType == lens.type && !CameraFormats.resolutions($0.formats.map(info)).isEmpty }
+                .map { (lens, $0) }
+        }
+        // The label carries the zoom factor against the wide lens, from the
+        // field of view ("Tele 5×"), so the operator sees which tele it is.
+        let wideFov = usable.first { $0.0.id == "wide" }?.1.activeFormat.videoFieldOfView
+        return usable.map { lens, device in
+            guard let wideFov, wideFov > 0, device.activeFormat.videoFieldOfView > 0 else {
+                return lens
+            }
+            let ratio = tan(Double(wideFov) * .pi / 360) / tan(Double(device.activeFormat.videoFieldOfView) * .pi / 360)
+            // 0.5× and whole factors above 1, as Apple labels its lenses.
+            let factor = ratio < 1 ? (ratio * 10).rounded() / 10 : ratio.rounded()
+            let text = factor == factor.rounded() ? "\(Int(factor))×" : "\(factor)×"
+            return Lens(id: lens.id, label: "\(lens.label) \(text)", type: lens.type)
         }
     }
 

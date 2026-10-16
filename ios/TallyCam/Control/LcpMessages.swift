@@ -101,6 +101,10 @@ struct ControlDescriptor: Encodable, Equatable {
     var unit: String?
     var options: [ControlOption]?
     var enabledWhen: [String: JSONValue]?
+    /// Shown, never set (the shutter outside a free-shutter production).
+    var readonly: Bool?
+    /// Refused while the stream is live (format and codecs).
+    var lockedWhileLive: Bool?
 
     init(id: String, label: String, group: String, kind: ControlKind, enabledWhen: [String: JSONValue]? = nil) {
         self.id = id
@@ -126,6 +130,21 @@ struct ControlDescriptor: Encodable, Equatable {
     }
 }
 
+extension ControlDescriptor {
+    /// This descriptor, refused while live.
+    func lockedWhileLive(_ locked: Bool = true) -> ControlDescriptor {
+        var copy = self
+        copy.lockedWhileLive = locked ? true : nil
+        return copy
+    }
+
+    func readonly(_ readonly: Bool) -> ControlDescriptor {
+        var copy = self
+        copy.readonly = readonly ? true : nil
+        return copy
+    }
+}
+
 struct CommandDescriptor: Encodable, Equatable {
     let name: String
     let label: String
@@ -146,7 +165,9 @@ struct DeviceInfo: Encodable {
 struct HelloMessage: Encodable {
     let type = "hello"
     /// 1: with device keys (`public_key`, then `challenge` and `auth`).
-    let `protocol` = 1
+    /// 2: ownership of exposure, colour and focus, and production settings
+    /// (docs/SHADING.md).
+    let `protocol` = 2
     let device: DeviceInfo
     /// The device key, base64 SEC1 (from the core's `DeviceKeyIdentity`).
     let publicKey: String?
@@ -227,6 +248,15 @@ struct ResultMessage: Encodable {
     var data: JSONValue?
 }
 
+/// `image_stats`: the core's luma and colour statistics plus the camera
+/// settings at the moment of measurement.
+struct ImageStatsMessage: Encodable {
+    let type = "image_stats"
+    let luma: JSONValue
+    var colour: JSONValue?
+    var camera: [String: JSONValue]?
+}
+
 struct LogMessage: Encodable {
     let type = "log"
     let level: String
@@ -254,6 +284,14 @@ enum LcpIncoming {
     case preview(enabled: Bool, fps: Double, width: Int)
     /// Sign and answer with `auth` (see `DeviceKey`).
     case challenge(server: String, nonce: String)
+    /// The remote takes these control groups (docs/SHADING.md).
+    case own(id: JSONValue?, groups: [String], holderId: String, holderLabel: String)
+    /// These control groups go back to auto.
+    case release(id: JSONValue?, groups: [String])
+    /// Production settings: mains frequency and shutter.
+    case production(mainsHz: Int, shutter: ShutterPolicy)
+    /// Start or stop `image_stats`.
+    case stats(enabled: Bool, fps: Double)
 
     /// Returns nil for unknown types and malformed messages, which are ignored.
     static func parse(_ text: String) -> LcpIncoming? {
@@ -278,6 +316,25 @@ enum LcpIncoming {
                 return nil
             }
             return .challenge(server: server, nonce: nonce)
+        case "own":
+            guard let groups = json["groups"].flatMap(Self.strings),
+                  let holder = json["holder"]?.object, let holderId = holder["id"]?.string
+            else {
+                return nil
+            }
+            return .own(id: id, groups: groups, holderId: String(holderId.prefix(64)),
+                        holderLabel: String((holder["label"]?.string ?? "").prefix(64)))
+        case "release":
+            return json["groups"].flatMap(Self.strings).map { .release(id: id, groups: $0) }
+        case "production":
+            // Compared as a number: Int(Double) traps on huge values.
+            guard let hz = json["mains_hz"]?.double, [0, 50, 60].contains(hz) else {
+                return nil
+            }
+            return .production(mainsHz: Int(hz), shutter: ShutterPolicy(json["shutter"]))
+        case "stats":
+            return .stats(enabled: json["enabled"]?.bool ?? false,
+                          fps: json["fps"]?.double.flatMap { $0.isFinite ? min(max($0, 0.2), 4) : nil } ?? 1)
         case "preview":
             return .preview(enabled: json["enabled"]?.bool ?? false,
                             fps: json["fps"]?.double ?? 1,
@@ -285,6 +342,33 @@ enum LcpIncoming {
                             width: json["width"]?.double.flatMap { $0.isFinite ? Int(min(max($0, 0), 4096)) : nil } ?? 480)
         default:
             return nil
+        }
+    }
+
+    private static func strings(_ value: JSONValue) -> [String]? {
+        guard case let .array(items) = value else {
+            return nil
+        }
+        return items.compactMap { if case let .string(s) = $0 { s } else { nil } }
+    }
+}
+
+/// The production's shutter (docs/SHADING.md, "Shutter").
+enum ShutterPolicy: Equatable, Sendable {
+    /// One mains period: 1/50 at 50 Hz, 1/60 at 60 Hz.
+    case mains
+    /// No mains-lit light: the shutter is an exposure control, and auto
+    /// shortens it only once the ISO is at its minimum.
+    case free
+    /// A fixed shutter, 1/x s.
+    case fixed(Int)
+
+    /// `"mains"`, `"free"` or a denominator; anything else is `mains`.
+    init(_ value: JSONValue?) {
+        switch value {
+        case .string("free"): self = .free
+        case let .number(x) where x.isFinite && x >= 1 && x <= 100_000 && x.rounded() == x: self = .fixed(Int(x))
+        default: self = .mains
         }
     }
 }

@@ -6,8 +6,11 @@
 //!   on a foreign [`SrtListener`].
 //! - UniFFI: device keys (`device_key`): the hello fields from the public
 //!   key, the challenge payload the Secure Enclave signs, the `auth` message.
+//! - UniFFI: camera logic (`camera`): the mains frequency per region and the
+//!   bitrate defaults.
 //! - C ABI (`include/tallycam_core_hot.h`): the per-frame calls: the clock
-//!   mapping, the SEI writer, the MPEG-TS muxer onto `lc_srt_send`, the
+//!   mapping, the SEI writer, the MPEG-TS muxer (which queues straight onto
+//!   the SRT caller; `lc_srt_send` sends a ready payload the same way), the
 //!   genlock and auto ISO loops. The clock calls read the
 //!   snapshot the running service publishes through a seqlock; the SRT send
 //!   copies into a lock-free queue: no locks, no allocation, no UniFFI

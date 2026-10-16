@@ -9,6 +9,7 @@
 //! keeps it deterministic and lets the tests drive it through synthetic
 //! networks.
 
+use super::secs;
 use core::net::{IpAddr, SocketAddr};
 
 use super::config::{ClockConfig, SourceKind};
@@ -53,10 +54,6 @@ const RECENTLY_REPLACED: f64 = 3600.0;
 /// Without a clock update for this long the clock is no longer reported as
 /// synchronized (holdover limit, 8 polls at maxpoll 8).
 const HOLDOVER_LIMIT: f64 = 2048.0;
-
-fn secs(ns: i64) -> f64 {
-    ns as f64 * 1e-9
-}
 
 fn to_ns(s: f64) -> i64 {
     (s * 1e9).round() as i64
@@ -1990,15 +1987,5 @@ impl Engine {
     /// Host ns to TAI ns with the current mapping.
     pub fn tai_ns(&self, host_ns: i64) -> i64 {
         self.clock.tai_ns(host_ns)
-    }
-
-    /// The raw timescale `R(h)` (for tests).
-    pub fn raw_ns(&self, host_ns: i64) -> i64 {
-        host_ns + self.raw_base
-    }
-
-    /// Number of sources, active or not.
-    pub fn source_count(&self) -> usize {
-        self.sources.len()
     }
 }

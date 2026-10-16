@@ -42,3 +42,6 @@ target/
 .DS_Store
 .env
 *.local
+
+# Python bytecode (tools/torch-pair)
+__pycache__/

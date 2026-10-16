@@ -1,5 +1,6 @@
-# Rust workspace for the shared core (clock discipline, LCP SEI, LCP protocol
-# types), its iOS FFI wrapper, the hub library and the clock probe.
+# Rust workspace for the shared core (clock discipline, LCP SEI, MPEG-TS,
+# genlock, LCP protocol types), its SRT caller (core/srt), its iOS FFI wrapper,
+# the hub library, the clock probe and the SRT interop tool (tools/srt-spike).
 #
 # control-hub (the standalone hub binary) keeps its own Cargo.lock and target
 # directory and depends on the core and the hub library by path. sync-probe and fake-camera are standalone tools.

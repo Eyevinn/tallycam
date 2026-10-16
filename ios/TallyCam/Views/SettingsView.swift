@@ -15,6 +15,7 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
+                cameraSection
                 connectionSection
                 streamSection
                 orientationSection
@@ -38,6 +39,20 @@ struct SettingsView: View {
     }
 
     // MARK: Sections
+
+    private var cameraSection: some View {
+        Section {
+            TextField(CameraName.display(custom: nil, model: CaptureCalibration.model,
+                                         deviceId: DeviceKey.current()?.deviceId),
+                      text: $controller.cameraName)
+                .submitLabel(.done)
+                .autocorrectionDisabled()
+        } header: {
+            Text("Camera name")
+        } footer: {
+            Text("How the hub and Strom show this camera. The operator can rename it too; empty uses the model.")
+        }
+    }
 
     private var connectionSection: some View {
         Section {
@@ -168,7 +183,7 @@ struct SettingsView: View {
         return Section("About") {
             if let key, let info = remote.deviceInfo(key: key) {
                 LabeledContent("App version", value: "\(info.appVersion) (\(build))")
-                LabeledContent("Device", value: info.name)
+                LabeledContent("Camera name", value: info.name)
                 LabeledContent("Model", value: info.model)
                 LabeledContent("iOS", value: info.osVersion)
                 LabeledContent("Stream id", value: ProvisioningLink.streamId(deviceId: info.id))

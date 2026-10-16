@@ -37,7 +37,7 @@ Phone C:     |--------|--------|--------|---      slightly slow (frequency)
 2. **Phase (offset):** even at the same rate, picking the nearest frame leaves
    an error of up to half a frame, ±16.7 ms at 30p.
 
-## What we have today: timestamps
+## Without genlock: timestamps
 
 Every frame carries its TAI capture time in the LCP SEI (PROTOCOL.md). Strom
 knows how the cameras relate and can keep lip sync and pick the nearest frame,
@@ -45,10 +45,11 @@ but the error itself is still there. Phone and receiver clocks agree within a
 few ms once settled (LATENCY.md), which bounds how precise any software lock
 can be.
 
-The app already pins min and max frame duration to the same value
-(`ios/TallyCam/Control/CameraControls.swift`), so the rate is fixed against the
-phone's own clock, not against TAI, and the phase is whatever the sensor
-starts with.
+With the `genlock` control off, the app pins min and max frame duration to
+the same value (`ios/TallyCam/Control/CameraControls.swift`), so the rate is
+fixed against the phone's own clock, not against TAI, and the phase is
+whatever the sensor starts with. With it on, the software genlock below
+steers the frame duration onto the TAI grid.
 
 ## What a genlock buys
 
@@ -95,8 +96,8 @@ Field observations from one developer (forum, unverified):
 | Level | How | Where |
 |---|---|---|
 | Hardware genlock | `follow()` with an `AVExternalSyncDevice` (ProDock) | Studio, newest Pro phones, cabled to a sync generator |
-| Software genlock | Frequency lock plus our own phase steering onto the TAI grid | Every other phone, including retired ones |
-| Timestamps only | What we have today | Fallback |
+| Software genlock | Frequency lock plus our own phase steering onto the TAI grid (implemented, see "Results") | Every other phone, including retired ones |
+| Timestamps only | The SEI capture time, genlock off | Fallback |
 
 The phone reports its level to Strom, so Strom knows which cameras it can cut
 between without a frame synchronizer.
@@ -229,17 +230,18 @@ the ISO and the shutter at 8 Hz and applies what the loop returns.
 - **Flashes are ignored.** Scene changes count once they fill half of a
   1.2 s median window, so spikes up to about half a second (a flashing
   screen in shot) leave the ISO alone. Bias changes act at once.
-- **Mains flicker.** The control `mains_hz` (50 or 60; default from the
-  device region) rounds the shutter to whole light pulses: 1/100, 1/50, 30 ms
+- **Mains flicker.** The control `mains_hz` (50, 60, or 0 for off; default
+  from the device region) rounds the shutter to whole light pulses: 1/100, 1/50, 30 ms
   at 50 Hz; 1/120, 1/60, 1/40, 1/30 at 60 Hz, within the frame (with 2% room
   while genlock may shorten frames). The ISO compensates the rounding. At
   frame rates above twice the mains frequency no flicker-free shutter fits and
-  the shutter is left alone.
+  the shutter is left alone. Off (0) leaves any shutter, for scenes without
+  mains-lit light, such as outdoors.
 - Simulated (camera model with the measured gain 3): a +1 EV bias step
   settles in about 0.25 s with no overshoot; across gains 0.7 to 4 and
   metering lags up to 0.5 s, within 2.2 s without overshoot (two steps while
   the gain is still unknown).
-- Measured 2026-10-16 (iPhone 16 Pro, 1080p30, indoor scene; ISO from the
+- Measured 2026-10-16 (iPhone 16, 1080p30, indoor scene; ISO from the
   `state` events at 4 Hz): bias 0 to +1 EV went ISO 381, 698, 758; back to 0
   went 758, 416, 391; to -1 went 391, 236, 202, 196. No overshoot, about 90%
   of the step within 0.5 s of the `set`, settled within 1.3 s. That scene's
@@ -248,17 +250,13 @@ the ISO and the shutter at 8 Hz and applies what the loop returns.
   went from 1/250 to 1/100 at 50 Hz and to 1/120 at 60 Hz. Flashes were only
   simulated.
 
-## Proposed spike (about a week)
+## The spike (done)
 
-1. Two phones film `control-hub/web/clapper.html`. Measure phase and drift via
-   the SEI over ten minutes, with no steering.
-2. Add the frequency lock (`activeLockedVideoFrameDuration` where supported).
-   Measure whether the drift goes away.
-3. Add phase steering. Measure the residual phase error and look for side
-   effects in the picture.
-
-The question to answer: can we go from ±16.7 ms to a few ms without visible
-artefacts? If so, it belongs in the pitch.
+The plan was: film `hub/web/clapper.html` with two phones, then add the
+frequency lock and the phase steering, and see whether ±16.7 ms comes down to
+a few ms without visible artefacts. It did, through `activeVideoMin/
+MaxFrameDuration` with manual exposure (see "Results"); the frequency lock
+through `activeLockedVideoFrameDuration` is still untried.
 
 ## Idea: community calibration (2026-10-16, not built)
 
@@ -316,7 +314,7 @@ Limits of the torch method:
   is PWM-dimmed below full level (which would add bands of its own). Use full
   level.
 
-**Torch probe (built, not yet run on a device).** The `torch_probe` command
+**Torch probe (built and run, see the runs below).** The `torch_probe` command
 measures what one phone can measure about its own torch:
 `ios/TallyCam/Control/TorchProbe.swift` (switching, per-frame luma profile along
 the readout) and `TorchProbeAnalysis.swift` (fit, unit tested on a simulated
@@ -345,7 +343,7 @@ rolling shutter).
 - Expect edges in the vertical blanking between readouts to be missed (the
   summary counts them).
 - Pairs: `mode` `emit` on the phone with the torch (genlocked), `watch` on the
-  other camera (genlock off, `frame_duration` 33400 us so its phase slides
+  other camera (genlock off, `frame_duration` 33400 us, a Debug-build command, so its phase slides
   through a frame in about 17 s), started together; then
   `python3 tools/torch-pair/analyze.py EMITTER_DIR WATCHER_DIR`. Frames and
   commands carry TAI stamps for this. The script fits the watcher's edge line

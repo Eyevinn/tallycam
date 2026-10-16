@@ -263,8 +263,9 @@ part. For a GStreamer receiver such as Strom's SRT input:
 - Do not count the SRT latency twice: `srtsrc` timestamps buffers on
   arrival, after TSBPD, and still reports the SRT latency in the latency
   query.
-- What is then left is the PCR lead (about 110 ms for video, to wait for
-  the AAC audio) and one frame in `tsdemux` + `h264parse`.
+- What is then left is the PCR lead (the PCR delay: 80 ms with Opus, the
+  default, 150 ms with AAC; see "MPEG-TS timing" in PROTOCOL.md) and one
+  frame in `tsdemux` + `h264parse`.
 
 ## Audio and A/V sync
 
@@ -278,8 +279,9 @@ part. For a GStreamer receiver such as Strom's SRT input:
 - With AAC, audio was the slow stream and set the PCR delay (150 ms). With
   Opus from the audio unit, video is the slower stream again and the PCR
   delay is the video's 80 ms.
-- Both are now replaced: see "Audio budget". The new timestamps need the
-  physical A/V test below before they can be trusted on the phone.
+- Both the AAC path and its 150 ms PCR delay were replaced by the audio unit
+  and Opus: see "Audio budget". The new timestamps were then checked with the
+  clapper ("Clapper test" below).
 
 ### A/V test with a phone: the digital clapper
 
@@ -316,8 +318,8 @@ their 5-second mark, and the Mac emits them about 263 ms after it (OS clock
 +33 ms plus 230 ms playout). The remaining 67 to 85 ms between two runs is
 the Mac's unreported speaker latency, the air path and any phone timestamp
 error together; this setup cannot separate them. So the phone's audio time
-stamps are stable within a run (+-5 ms), but A/V on the phone is not yet
-measured: that needs the clapper filmed, or a clap in front of the camera.
+stamps are stable within a run (+-5 ms). A/V on the phone was measured
+later by filming the clapper: see "Clapper test, 2026-10-15".
 
 ## SRT and WHIP
 

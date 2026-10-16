@@ -276,7 +276,8 @@ enum LcpIncoming {
         case "preview":
             return .preview(enabled: json["enabled"]?.bool ?? false,
                             fps: json["fps"]?.double ?? 1,
-                            width: Int(json["width"]?.double ?? 480))
+                            // Clamped before converting: Int(Double) traps on huge values.
+                            width: json["width"]?.double.flatMap { $0.isFinite ? Int(min(max($0, 0), 4096)) : nil } ?? 480)
         default:
             return nil
         }

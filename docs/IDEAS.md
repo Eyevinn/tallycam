@@ -41,9 +41,9 @@ Where we can differ from Blackmagic Camera, Larix, Moblin and NDI apps:
 
 ## Other notes
 
-- **Avoid two servers.** The control hub is a good prototype, but Strom is
-  meant to implement the protocol. Move the device registry and tally into
-  Strom once the protocol settles.
+- **Avoid two servers.** Settled: the hub is one library (`tallycam-hub`)
+  that runs standalone and that Strom embeds (ARCHITECTURE.md), so the device
+  registry and tally exist once.
 - **Open the protocol.** A published, versioned LCP with the existing test
   vectors (`core/tests/vectors/`) lets others build devices. That makes it a
   platform rather than an app.

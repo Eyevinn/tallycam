@@ -25,8 +25,7 @@ final class SrtConnection {
     private let queue: DispatchQueue
     private let options: SrtCallerOptions
     private var caller: SrtCaller?
-    /// `caller`'s hot handle (`lc_srt_send`, `lc_ts_new`), 0 when there is
-    /// none.
+    /// `caller`'s hot handle (for `lc_ts_new`), 0 when there is none.
     private(set) var hotHandle: UInt64 = 0
     private var wasConnected = false
     private var closed = false
@@ -68,7 +67,7 @@ final class SrtConnection {
     }
 
     /// The result of a send onto the caller (the core muxer's `lc_ts_video`
-    /// and `lc_ts_audio`, or `lc_srt_send`): logs runs of a full queue.
+    /// and `lc_ts_audio`): logs runs of a full queue.
     /// Packets are dropped while not connected.
     func noteSendResult(_ result: Int32) {
         if result == LC_SRT_QUEUE_FULL {

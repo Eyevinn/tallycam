@@ -7,6 +7,7 @@
 //! raw host timescale `R(h)` (host ns plus a constant), which the discipline
 //! never adjusts, so samples never need to be slewed.
 
+use super::secs;
 use std::collections::VecDeque;
 
 use super::regress::{self, MIN_SAMPLES_FOR_REGRESS, REGRESS_RUNS_RATIO};
@@ -99,10 +100,6 @@ pub struct SourceStats {
     last_best_start: usize,
 }
 
-fn secs(ns: i64) -> f64 {
-    ns as f64 * 1e-9
-}
-
 impl SourceStats {
     pub fn new(precision: f64) -> Self {
         let mut s = SourceStats {
@@ -176,10 +173,6 @@ impl SourceStats {
 
     pub fn last_best_start(&self) -> usize {
         self.last_best_start
-    }
-
-    pub fn last_sample(&self) -> Option<&Sample> {
-        self.samples.back()
     }
 
     pub fn samples(&self) -> impl Iterator<Item = &Sample> {
@@ -436,13 +429,6 @@ impl SourceStats {
             r.offset += doffset;
         }
         self.estimated_offset += doffset;
-    }
-
-    pub fn add_dispersion(&mut self, dispersion: f64) {
-        for s in self.samples.iter_mut() {
-            s.root_dispersion += dispersion;
-            s.peer_dispersion += dispersion;
-        }
     }
 
     /// `chronyc sourcestats` row: (span s, est offset, est offset error,

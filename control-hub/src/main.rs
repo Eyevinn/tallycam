@@ -2,7 +2,7 @@
 //!
 //! Usage: control-hub [--listen ADDR] [--public-url URL] [--srt-url URL] [--state-file PATH]
 //! [--invites] [--operator-token TOKEN] [--preview-fps N] (env LCP_HUB_LISTEN, LCP_HUB_PUBLIC_URL, LCP_HUB_SRT_URL,
-//! LCP_HUB_STATE_FILE, LCP_HUB_INVITES=1, LCP_HUB_PREVIEW_FPS)
+//! LCP_HUB_STATE_FILE, LCP_HUB_INVITES=1, LCP_HUB_OPERATOR_TOKEN, LCP_HUB_PREVIEW_FPS)
 
 use std::net::SocketAddr;
 use std::sync::Arc;

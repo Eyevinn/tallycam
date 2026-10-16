@@ -32,8 +32,10 @@ protocol.
 ## Provisioning v0
 
 How a phone learns where to connect: the server shows a QR code, the phone's
-Camera app opens it in the app. No token yet; anyone on the network who sees
-the code can join (as with the open device endpoint itself).
+Camera app opens it in the app. On an open server anyone on the network who
+sees the code can join (as with the open device endpoint itself); an
+invite-only server puts a one-time invite in the link instead (see
+"Admission").
 
 ### Deep link
 
@@ -227,7 +229,7 @@ phone                                   server
   "public_key": "BLxFB1xZ...base64 SEC1 P-256...",
   "device": {
     "id": "cbdd2da5173c382db5e77591b8f19052",
-    "name": "Per's iPhone",
+    "name": "Camera 2",
     "model": "iPhone17,3",
     "platform": "ios",
     "os_version": "26.0",
@@ -239,8 +241,13 @@ phone                                   server
 ```
 
 `public_key` and `protocol: 1` come from apps with device keys; the id is
-then derived from the key (see "Device keys"). A phone resends `hello` when its controls change (for example after switching
-lens, the ISO range changes).
+then derived from the key (see "Device keys"). `device.name` is the camera's
+display name; the id stays its identity. The iOS app sends the name set with
+`camera_name`, or by default the model and the start of the id
+("iPhone 16 · 55dd"), since iOS 16 lets no app read the name the user gave the
+phone. A phone resends `hello` when its controls or its name change (for
+example after switching lens, the ISO range changes); a server takes the new
+name on an admitted connection.
 
 ### `state`
 
@@ -285,6 +292,12 @@ what auto exposure picked.
 `connecting` carries `stream.error` too when a live stream lost its
 connection and is reconnecting.
 `clock`: the phone's clock discipline, see "Time and frame timestamps".
+`genlock`, while genlock is on: `state` (`free_run`, `acquiring` or
+`locked`), `phase_error_ms` and `phase_error_max_ms` (mean and largest error
+against the TAI frame grid over the last second), `correction_ppm`,
+`frame_duration_us` (as last applied) and `calibration_us` (this model's
+exposure lead, `CaptureCalibration`; 0 until models are measured). The hub
+passes it through unchanged; its page does not show it yet.
 
 While live, `stream` also reports where the time goes on the phone:
 
@@ -384,11 +397,12 @@ puts it in `data`.
 
 | id | kind | notes |
 |---|---|---|
+| `camera_name` | text | the display name sent as `hello.device.name`, persisted; set by the operator or in the app's Settings. The value reported is the name in use; an empty value goes back to the default (model and the start of the id). Shown large on the phone, in the tally chip when on air or on preview |
 | `live` | bool | start/stop the SRT stream |
 | `stream_url` | text | SRT URL, see "Stream URL" (streamid, latency, passphrase, pbkeylen) |
-| `srt_latency_ms` | range | SRT latency in ms (20 to 8000). Sets the `latency` parameter of `stream_url`, which stays the one place it is kept; applies on the next Go Live. SRT uses the larger of both ends, see `status.stream.srt_latency_ms` |
+| `srt_latency_ms` | range | SRT latency in ms (0 to 8000). Sets the `latency` parameter of `stream_url`, which stays the one place it is kept; applies on the next Go Live. SRT uses the larger of both ends, see `status.stream.srt_latency_ms` |
 | `bitrate_kbps` | range | video bitrate, applied live. Follows the format and codec (1080p30 H.264 6000; about 0.7x for HEVC) until set; changing `resolution`, `frame_rate` or `video_codec` returns it to that default. The range's maximum follows them too (20000 at 1080p30, up to 50000), so `hello` is sent again when it changes |
-| `video_codec` | enum | `h264` (default, High) or `hevc` (Main); applies on the next Go Live. HEVC is stream_type 0x24 with AUD, VPS/SPS/PPS on keyframes and the timestamp as a prefix SEI |
+| `video_codec` | enum | `h264` (default; High, or Constrained High with VideoToolbox's low-latency rate control, the default) or `hevc` (Main); applies on the next Go Live. HEVC is stream_type 0x24 with AUD, VPS/SPS/PPS on keyframes and the timestamp as a prefix SEI |
 | `audio_codec` | enum | `opus` (default) or `aac`; applies on the next Go Live. See "MPEG-TS timing" for how each is carried |
 | `lens` | enum | `ultra_wide`, `wide`, `tele` (those that exist) |
 | `zoom` | range | zoom factor within the lens, log scale |
@@ -400,7 +414,7 @@ puts it in `data`.
 | `iso` | range | manual only |
 | `shutter` | enum | denominator of 1/x seconds, e.g. 50 = 1/50 s; manual and auto_iso. At most one frame time (1/240 at 240 fps). In auto_iso it is rounded to a flicker-free value (`mains_hz`), so a measured value may be outside the options |
 | `ev_bias` | range | exposure compensation in EV, auto and auto_iso |
-| `mains_hz` | enum | 50 or 60; default from the device region, persisted. In auto_iso (and when genlock moves exposure to auto_iso) the shutter is rounded to a whole number of half mains periods that fits the frame (2% room while genlock runs); the ISO compensates. No flicker-free shutter fits above 100 fps at 50 Hz or 120 fps at 60 Hz, and the shutter is then left alone |
+| `mains_hz` | enum | 50, 60, or 0 (off: no mains-lit light in the picture, for example outdoors, so auto ISO may use any shutter); default from the device region, persisted. In auto_iso (and when genlock moves exposure to auto_iso) the shutter is rounded to a whole number of half mains periods that fits the frame (2% room while genlock runs); the ISO compensates. No flicker-free shutter fits above 100 fps at 50 Hz or 120 fps at 60 Hz, and the shutter is then left alone |
 | `genlock` | bool | soft genlock: the frame timing locks to the TAI frame grid (docs/GENLOCK.md). Moves auto exposure to auto_iso; status in `status.genlock` |
 | `genlock_offset_us` | range | where frames land after each grid point, µs (per-model calibration, or measurement sweeps); -50000 to 50000 |
 | `wb_mode` | enum | `auto`, `locked`, `manual` |
@@ -413,17 +427,19 @@ puts it in `data`.
 Commands: `focus_at {x, y}` (point of interest for focus and exposure, in
 normalized frame coordinates), `wb_one_shot` (measure white balance once, then
 lock), `clock_log {lines?, kinds?}` (the clock discipline log, see "Clock
-log"), `torch_probe {cycles?, on_ms?, off_ms?}` (a measurement of the torch
-against the capture timing, results as `log` messages and files on the phone;
-see GENLOCK.md, "Torch probe").
+log"), `torch_probe {mode?, cycles?, on_ms?, off_ms?}` (a measurement of the
+torch against the capture timing; `mode` is `self`, `emit` or `watch`; results
+as `log` messages and files on the phone; see GENLOCK.md, "Torch probe").
+Debug builds also have `frame_duration {us}` (a fixed frame duration, for
+genlock experiments; refused while genlock runs).
 
 ## Candidates for later
 
 Taken from what Blackmagic Camera (iPhone) and the Blackmagic camera control
 model (REST API, SDI/Bluetooth protocol) expose, and not in the prototype yet:
 
-- `shutter_measurement` (`speed | angle`) and `shutter_angle`, plus
-  flicker-free shutter options for 50/60 Hz lighting.
+- `shutter_measurement` (`speed | angle`) and `shutter_angle`. (Flicker-free
+  shutters for 50/60 Hz lighting are in, as `mains_hz` in auto ISO.)
 - `wb_preset` (daylight, tungsten, fluorescent, cloudy, ...).
 - Local recording on the phone (`record` bool, codec ProRes/HEVC, color space
   Rec.709 / Apple Log), so each camera keeps a full-quality ISO for post while
@@ -596,8 +612,9 @@ bitstream parser. Byte vectors for both codecs are in
 
 ## Rules settled by the prototype
 
-- `ping` / `pong` (`id` optional, echoed) in either direction. The server also
-  sends WebSocket pings; a phone silent for 10 s is offline. Phones send
+- `ping` / `pong` messages (`id` optional, echoed) exist in either direction,
+  but the iOS app ignores a JSON `ping` and keeps the link alive with
+  WebSocket pings, as the server does; a phone silent for 10 s is offline. Phones send
   `status` every second.
 - The first message must be `hello`. Earlier messages are ignored; a `hello`
   without `device.id` closes the socket. A `hello` with a `public_key` is

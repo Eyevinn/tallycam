@@ -1,6 +1,6 @@
 [package]
 name = "tallycam-core-ffi"
-description = "iOS/Swift bindings of the TallyCam core: UniFFI for the clock service, a small C ABI for per-frame calls"
+description = "iOS/Swift bindings of the TallyCam core: UniFFI for the clock service, SRT caller, device keys and camera defaults; a small C ABI for per-frame calls"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

@@ -27,10 +27,6 @@ pub struct SoftwareClock {
     correction_rate: f64,
 }
 
-fn secs(ns: i64) -> f64 {
-    ns as f64 * 1e-9
-}
-
 impl SoftwareClock {
     /// Starts free running at `tai_ns` (from the platform wall clock).
     pub fn new(host_ns: i64, tai_ns: i64, max_slew_live: f64, max_slew_idle: f64) -> Self {
@@ -179,11 +175,6 @@ impl SoftwareClock {
         let base = self.snap.base_freq;
         self.reanchor(now, base, reg);
         self.snap.anchor_tai_ns += delta_ns;
-    }
-
-    /// Seconds since the anchor, for tests and reports.
-    pub fn since_anchor(&self, now: i64) -> f64 {
-        secs(now - self.snap.anchor_host_ns)
     }
 }
 

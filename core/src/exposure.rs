@@ -26,9 +26,6 @@
 
 use crate::genlock::GenlockConfig;
 
-/// Mains frequencies with flicker-free shutter rounding.
-pub const MAINS_HZ: [u32; 2] = [50, 60];
-
 /// The usual mains frequency for an ISO 3166 region code: 60 Hz in the
 /// Americas' 60 Hz countries and a few others, 50 Hz elsewhere. Japan is
 /// split (50 Hz east, 60 Hz west) and gets 50.

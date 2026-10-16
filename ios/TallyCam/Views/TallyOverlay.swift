@@ -1,9 +1,13 @@
 import SwiftUI
 
-/// Tally border and chip, and the operator message banner.
+/// Tally border and chip, the camera's name, and the operator message
+/// banner. The name is always shown, large, so the person at the camera
+/// knows which camera they are; on air or on preview it sits in the tally
+/// chip, in the border's colour.
 struct TallyOverlay: View {
     let tally: RemoteControl.Tally
     let banner: String?
+    let cameraName: String
     /// Space above the chip, so it sits below the status strip.
     var topPadding: CGFloat = 22
 
@@ -15,14 +19,23 @@ struct TallyOverlay: View {
                     .ignoresSafeArea()
             }
             VStack(spacing: 8) {
-                if let color, let label {
-                    Text(label)
-                        .font(.headline.weight(.heavy))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 6)
-                        .background(color, in: Capsule())
+                HStack(spacing: 10) {
+                    if let label {
+                        Text(label)
+                            .font(.title3.weight(.heavy))
+                        Text("·")
+                    }
+                    Text(cameraName)
+                        .font(.title2.weight(.bold))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
                 }
+                .foregroundStyle(.white)
+                .padding(.horizontal, 18)
+                .padding(.vertical, 8)
+                .background(color ?? .black.opacity(0.45), in: Capsule())
+                .padding(.horizontal, 24)
+                .accessibilityElement(children: .combine)
                 if let banner {
                     Text(banner)
                         .font(.title3.weight(.semibold))

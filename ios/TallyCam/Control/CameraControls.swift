@@ -243,7 +243,7 @@ final class CameraControls: @unchecked Sendable {
     }
 
     /// Custom exposure at the values auto exposure reports. With
-    /// `currentISO` the picture dropped about 1.3 EV on an iPhone 16 Pro
+    /// `currentISO` the picture dropped about 1.3 EV on an iPhone 16
     /// (ISO 377 became 153) and auto ISO had to climb back.
     func enterAutoIso(_ device: AVCaptureDevice) {
         let format = device.activeFormat

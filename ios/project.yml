@@ -102,6 +102,7 @@ targets:
       - TallyCam/Orientation.swift
       - TallyCam/CameraFormats.swift
       - TallyCam/Control/TorchProbeAnalysis.swift
+      - TallyCam/Control/CameraName.swift
       # LcpMessages reports the capture calibration.
       - TallyCam/CaptureCalibration.swift
     preBuildScripts:

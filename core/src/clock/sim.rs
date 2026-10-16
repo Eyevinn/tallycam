@@ -522,11 +522,6 @@ impl Simulation {
         self.engine.tai_ns(self.host_now()) - self.now_true
     }
 
-    /// Which server a source id talks to.
-    pub fn server_of(&self, addr: &SocketAddr) -> Option<usize> {
-        self.server_index(addr)
-    }
-
     pub fn run(&mut self) {
         let d = self.scenario.duration_s;
         self.run_until(d);

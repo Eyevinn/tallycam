@@ -21,7 +21,7 @@ control, and always shows who controls it.
 ```
                 ┌──────────────── Rust core ─────────────────┐
                 │ provisioning · control protocol · clock     │
-                │ discipline · SEI timestamps · (MPEG-TS, SRT)│
+                │ discipline · SEI timestamps · MPEG-TS · SRT │
                 └──────────────┬──────────────────────────────┘
        ┌───────────────┬───────┴────────┬──────────────────┬──────────────┐
    iOS (Swift)    Android (Kotlin)   Desktop          Capture box       Browser
@@ -156,9 +156,10 @@ app.
   it ties the protocol to no kind of device.
 - SEI format: keep our own payload, or adopt an existing standard (MISB ST
   0604 precision time stamp, H.264/HEVC `time_code` SEI) where one fits.
-- Software genlock: can a phone steer its frame timing onto a shared grid
-  using the disciplined clock? If so, the half-frame phase error between
-  unlocked cameras goes away. Research and a spike plan: GENLOCK.md.
+- Software genlock is answered: a phone steers its frame timing onto the TAI
+  grid within ±0.25 ms (GENLOCK.md, "Results"). Open is the calibration per
+  model: the same capture stamp means a different instant of light on
+  different models.
 - Whether a camera block in Strom is always placed by the operator (current
   proposal) or created when a device connects.
 - Talkback (IFB): an audio channel from the production back to the phone, so

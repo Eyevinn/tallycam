@@ -27,7 +27,7 @@ struct ContentView: View {
             let top = Self.edgePadding(insets.top)
             ZStack {
                 CameraStage(capture: capture)
-                TallyOverlay(tally: remote.tally, banner: remote.banner,
+                TallyOverlay(tally: remote.tally, banner: remote.banner, cameraName: controller.displayName,
                              topPadding: top + Self.stripHeight + 10)
                 StatusStrip(controller: controller, remote: remote, capture: capture) {
                     showSettings = true

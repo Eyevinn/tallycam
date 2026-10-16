@@ -44,7 +44,9 @@ final class StatusReporter {
         let id = key.deviceId
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0"
         return DeviceInfo(id: id,
-                          name: UIDevice.current.name,
+                          // UIDevice.name is only "iPhone" since iOS 16.
+                          name: CameraName.display(custom: CameraName.stored, model: CaptureCalibration.model,
+                                                   deviceId: id),
                           model: CaptureCalibration.model,
                           platform: "ios",
                           osVersion: UIDevice.current.systemVersion,

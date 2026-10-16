@@ -18,7 +18,8 @@ final class RemoteControl: ObservableObject {
     /// Returns the clock discipline log (chrony's measurements, statistics,
     /// tracking and selection logs, plus events) and its reports.
     static let clockLogCommand = CommandDescriptor(name: "clock_log", label: "Clock log",
-                                                   args: ["lines": "1..4000"])
+                                                   args: ["lines": "1..4000",
+                                                          "kinds": "comma-separated, e.g. tracking,selection"])
     private static let urlKey = "lcpUrl"
     private static let bannerSeconds: UInt64 = 8
     private static let maxPendingLogs = 50
@@ -71,6 +72,8 @@ final class RemoteControl: ObservableObject {
     private var lastDroppedFrames = 0
     private var droppedSinceWarning = 0
     private var lastDropWarning = Date.distantPast
+    /// `device.name` as last sent in `hello`.
+    private var helloName: String?
     /// The stream controls as last sent in `hello`.
     private var streamControls: [ControlDescriptor] = []
     private var cameraCommands: [CommandDescriptor] = []
@@ -349,12 +352,13 @@ final class RemoteControl: ObservableObject {
         case let .set(id, values):
             applySet(id: id, values: values)
         case let .command(id, name, args) where name == Self.clockLogCommand.name:
-            let lines = Int(args["lines"]?.double ?? 200)
+            // Clamped before converting: Int(Double) traps on huge values.
+            let lines = args["lines"]?.double.flatMap { $0.isFinite ? Int(min(max($0, 1), 4000)) : nil } ?? 200
             let kinds = (args["kinds"]?.string ?? "")
                 .split(separator: ",")
                 .map { $0.trimmingCharacters(in: .whitespaces) }
                 .filter { !$0.isEmpty }
-            let data = PhoneClock.shared.logReport(kinds: kinds, lines: min(max(lines, 1), 4000))
+            let data = PhoneClock.shared.logReport(kinds: kinds, lines: lines)
             if let id {
                 client.send(ResultMessage(id: id, ok: true, data: data))
             }
@@ -429,8 +433,11 @@ final class RemoteControl: ObservableObject {
             return
         }
         PhoneClock.shared.setLive(controller.state == .live)
-        // The bitrate range follows the format and codec.
-        if helloSent, StreamControls.descriptors(controller) != streamControls {
+        // The bitrate range follows the format and codec; the hello carries
+        // the camera name.
+        if helloSent, StreamControls.descriptors(controller) != streamControls
+            || controller.displayName != helloName
+        {
             sendHello()
         }
         if controller.state != lastStreamState {
@@ -473,7 +480,9 @@ final class RemoteControl: ObservableObject {
         guard let key = DeviceKey.current() else {
             return
         }
-        let hello = HelloMessage(device: reporter.deviceInfo(key: key),
+        let device = reporter.deviceInfo(key: key)
+        helloName = device.name
+        let hello = HelloMessage(device: device,
                                  publicKey: key.identity.publicKey,
                                  controls: streamControls + cameraControls,
                                  commands: cameraCommands + [Self.clockLogCommand])

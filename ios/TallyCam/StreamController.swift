@@ -35,9 +35,26 @@ final class StreamController: ObservableObject {
         didSet { UserDefaults.standard.set(url, forKey: Self.urlKey) }
     }
 
+    /// The name set by the operator (`camera_name`) or in Settings; empty
+    /// for the default (`CameraName`).
+    @Published var cameraName: String {
+        didSet {
+            if let name = CameraName.normalized(cameraName) {
+                UserDefaults.standard.set(name, forKey: CameraName.defaultsKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: CameraName.defaultsKey)
+            }
+        }
+    }
+
+    /// The camera's display name, as `hello.device.name` carries it.
+    var displayName: String {
+        CameraName.display(custom: cameraName, model: CaptureCalibration.model,
+                           deviceId: DeviceKey.current()?.deviceId)
+    }
+
     @Published private(set) var state: State = .idle
     @Published private(set) var message: String?
-    @Published private(set) var statsText = ""
     @Published private(set) var stats: Stats?
     /// When the stream went live (connected), for the uptime display.
     @Published private(set) var liveSince: Date?
@@ -93,6 +110,7 @@ final class StreamController: ObservableObject {
 
     init() {
         url = UserDefaults.standard.string(forKey: Self.urlKey) ?? ""
+        cameraName = CameraName.stored ?? ""
         let storedBitrate = UserDefaults.standard.integer(forKey: Self.bitrateKey)
         manualBitrateKbps = storedBitrate == 0 ? nil : storedBitrate
         audioCodec = UserDefaults.standard.string(forKey: Self.audioCodecKey)
@@ -128,25 +146,6 @@ final class StreamController: ObservableObject {
     /// Whether the bitrate follows the format and codec.
     var bitrateIsAuto: Bool {
         manualBitrateKbps == nil
-    }
-
-    var statusLine: String {
-        switch state {
-        case .idle:
-            message.map { "Idle - \($0)" } ?? "Idle"
-        case .connecting:
-            message.map { "Reconnecting - \($0)" } ?? "Connecting..."
-        case .live:
-            "Live  \(statsText)"
-        }
-    }
-
-    func toggle(capture: Capture) {
-        if state == .idle {
-            goLive(capture: capture)
-        } else {
-            stop()
-        }
     }
 
     /// Returns the value applied, clamped to `bitrateRange`. Applied live;
@@ -210,7 +209,6 @@ final class StreamController: ObservableObject {
             return
         }
         message = nil
-        statsText = ""
         stats = nil
         state = .connecting
         let id = UUID()
@@ -294,7 +292,6 @@ final class StreamController: ObservableObject {
             state = .connecting
             liveSince = nil
             stats = nil
-            statsText = ""
             statsTimer?.invalidate()
             statsTimer = nil
         case let .stopped(reason):
@@ -346,10 +343,8 @@ final class StreamController: ObservableObject {
         let kbps = Double(bytes) * 8 / elapsed / 1000
         lastBytesSent = stats.bytesSent
         lastStatsTime = now
-        var text = String(format: "%.0f kbit/s", kbps)
         var numbers = Stats(bitrateKbps: Int(kbps.rounded()))
         if let srt = stats.srt {
-            text += String(format: "  RTT %.0f ms  retrans %llu  drop %llu", srt.rttMs, srt.retransmittedPackets, srt.droppedPackets)
             numbers.rttMs = (srt.rttMs * 10).rounded() / 10
             numbers.retransmits = Int(clamping: srt.retransmittedPackets)
             numbers.dropped = Int(clamping: srt.droppedPackets)
@@ -358,7 +353,6 @@ final class StreamController: ObservableObject {
         numbers.latency = stats.latency
         numbers.lateVideoFrames = stats.lateVideoFrames
         numbers.lateAudioFrames = stats.lateAudioFrames
-        statsText = text
         self.stats = numbers
     }
 }

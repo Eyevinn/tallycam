@@ -35,6 +35,11 @@ pub mod driver;
 
 use crate::protocol::ClockStatus;
 
+/// Nanoseconds as seconds.
+pub(crate) fn secs(ns: i64) -> f64 {
+    ns as f64 * 1e-9
+}
+
 pub use config::{ClockConfig, SourceConfig, SourceKind};
 pub use engine::{Action, Engine, PathInfo, RandomSource, SourceId};
 pub use mapping::{Mapping, MappingSnapshot, SnapshotCell};

@@ -1,0 +1,8 @@
+{
+  "comment" : "Made by CryptoKit P256.Signing.PrivateKey (core/src/device_key.rs test)",
+  "device_id" : "cbdd2da5173c382db5e77591b8f19052",
+  "nonce" : "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+  "public_key" : "BLxFB1xZwxS1RTcEabOdKEU6KJDj0BBk4+UiCOLSjUQ+XRVRp8g4ocqVq7LGxt0vu8Y292Ql3ostD5K2v2K46YQ=",
+  "server" : "0123456789abcdef0123456789abcdef",
+  "signature" : "Hf/COp8I2g094rNxoDmza8m/WSAhQzb6SqXySonC1Mbog0Ckyoc5sFsJu0eyaAmpRfFX2B/StEeicuFKk/FJYA=="
+}

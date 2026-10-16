@@ -1,0 +1,6 @@
+[bindings.swift]
+module_name = "TallyCamCore"
+ffi_module_name = "TallyCamCoreFFI"
+ffi_module_filename = "TallyCamCoreFFI"
+# scripts/build-core-apple.sh writes a module map that also covers the hot-path C header.
+generate_module_map = false

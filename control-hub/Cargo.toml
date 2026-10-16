@@ -1,0 +1,36 @@
+[package]
+name = "control-hub"
+version = "0.1.0"
+edition = "2021"
+description = "Standalone TallyCam hub: the tallycam-hub library with its web UI, plus a fake device"
+license = "MIT"
+publish = false
+default-run = "control-hub"
+
+[[bin]]
+name = "control-hub"
+path = "src/main.rs"
+
+[[bin]]
+name = "fake_device"
+path = "src/bin/fake_device.rs"
+
+[dependencies]
+# Device protocol types (shared with the apps).
+tallycam-core = { path = "../core" }
+tallycam-hub = { path = "../hub", features = ["server"] }
+axum = { version = "0.8", features = ["ws"] }
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# Only used by fake_device (WebSocket client, preview JPEG).
+tokio-tungstenite = "0.26"
+base64 = "0.22"
+image = { version = "0.25", default-features = false, features = ["jpeg"] }
+
+[dev-dependencies]
+# Decodes the served QR code in the tests.
+rqrr = "0.9"

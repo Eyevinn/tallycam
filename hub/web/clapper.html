@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Digital Clapper</title>
+<style>
+  :root { --bg: #000; --fg: #e8e8e8; --muted: #8a8a8a; --flash: #fff; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
+    font-family: -apple-system, system-ui, sans-serif; overflow: hidden; }
+  body.lit { background: var(--flash); }
+  #ui { position: absolute; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 16px; padding: 16px; text-align: center; }
+  body.lit #ui { visibility: hidden; }
+  #clock { font-size: min(18vw, 160px); font-variant-numeric: tabular-nums; letter-spacing: 0.02em; }
+  #info { color: var(--muted); font-size: 14px; line-height: 1.5; max-width: 40em; }
+  button { font-size: 20px; padding: 12px 28px; border-radius: 10px; border: 1px solid var(--muted);
+    background: #222; color: var(--fg); cursor: pointer; }
+</style>
+</head>
+<body>
+<!--
+  Digital clapper for A/V sync tests: the whole screen flashes white and a
+  1 kHz beep plays at every whole second of this device's clock, flash and
+  beep at the same instant as far as this device can tell. Every 5th second
+  (seconds divisible by 5) both last longer, so a receiver can tell which
+  second an event belongs to. Film it with the camera under test and run
+  `sync-probe --av`; see docs/LATENCY.md.
+
+  Timing: the beep is scheduled with AudioContext.getOutputTimestamp(), so
+  it leaves the speaker at the whole second as far as the browser knows its
+  output latency. The flash is drawn in the animation frame that is shown at
+  the whole second (one frame after the frame's timestamp). Remaining error:
+  output latency the browser does not know about (Bluetooth speakers: do not
+  use them) and display latency beyond one refresh.
+-->
+<div id="ui">
+  <div id="clock">--:--:--</div>
+  <button id="start">Start</button>
+  <div id="info">Flash and beep on every whole second; longer every 5th second.
+    Full screen, built-in speakers, volume up. Film this screen with the camera
+    under test.</div>
+</div>
+<script>
+"use strict";
+const BEEP_MS = 50, MARK_BEEP_MS = 150;
+const FLASH_MS = 100, MARK_FLASH_MS = 300;
+const body = document.body;
+const clockEl = document.getElementById("clock");
+const infoEl = document.getElementById("info");
+let ctx = null;
+let scheduledUntil = 0;           // whole seconds (wall clock) already scheduled
+let frameMs = 1000 / 60;          // measured display refresh interval
+let lastFrame = 0;
+const intervals = [];
+
+// performance.now() -> wall clock (Unix ms); read once, both are monotonic enough here.
+const wallOffset = Date.now() - performance.now();
+const isMark = second => second % 5 === 0;
+
+function scheduleBeeps() {
+  if (!ctx) return;
+  const ts = ctx.getOutputTimestamp ? ctx.getOutputTimestamp() : null;
+  const haveTs = ts && ts.performanceTime > 0;
+  const nowWall = performance.now() + wallOffset;
+  const first = Math.max(scheduledUntil + 1, Math.ceil((nowWall + 150) / 1000));
+  const last = Math.floor((nowWall + 1500) / 1000);
+  for (let s = first; s <= last; s++) {
+    const perf = s * 1000 - wallOffset;
+    // Context time of the sample that leaves the output at `perf`.
+    const when = haveTs
+      ? ts.contextTime + (perf - ts.performanceTime) / 1000
+      : ctx.currentTime + (perf - performance.now()) / 1000 - (ctx.outputLatency || 0) - (ctx.baseLatency || 0);
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.frequency.value = 1000;
+    gain.gain.value = 0.8;
+    osc.connect(gain).connect(ctx.destination);
+    osc.start(when);
+    osc.stop(when + (isMark(s) ? MARK_BEEP_MS : BEEP_MS) / 1000);
+    scheduledUntil = s;
+  }
+  const lat = ctx.outputLatency !== undefined ? (ctx.outputLatency * 1000).toFixed(1) + " ms" : "unknown";
+  infoEl.textContent = `Audio output latency ${lat} (compensated${haveTs ? " via output timestamp" : ", estimated"}), ` +
+    `display ${(1000 / frameMs).toFixed(0)} Hz. Flash and beep on every whole second, longer every 5th second.`;
+}
+
+function frame(t) {
+  if (lastFrame) {
+    intervals.push(t - lastFrame);
+    if (intervals.length > 120) intervals.shift();
+    const sorted = [...intervals].sort((a, b) => a - b);
+    frameMs = sorted[sorted.length >> 1];
+  }
+  lastFrame = t;
+  // This frame is on screen about one refresh after its timestamp.
+  const shownWall = t + frameMs + wallOffset;
+  const second = Math.floor(shownWall / 1000);
+  // ?sweep: each second's flash starts (second mod 34) ms later, so it
+  // crosses a whole 30p frame in 34 s (camera-to-camera exposure offsets).
+  const into = shownWall - second * 1000 - (sweep ? second % 34 : 0);
+  const lit = started && into >= 0 && into < (isMark(second) ? MARK_FLASH_MS : FLASH_MS);
+  body.classList.toggle("lit", !!lit);
+  const d = new Date(shownWall);
+  clockEl.textContent = [d.getHours(), d.getMinutes(), d.getSeconds()].map(v => String(v).padStart(2, "0")).join(":")
+    + (sweep ? `  sweep +${second % 34} ms` : "");
+  requestAnimationFrame(frame);
+}
+
+// ?silent: flash only, no audio (camera-to-camera tests).
+const silent = new URLSearchParams(location.search).has("silent");
+const sweep = new URLSearchParams(location.search).has("sweep");
+let started = false;
+document.getElementById("start").addEventListener("click", async () => {
+  started = true;
+  try { await document.documentElement.requestFullscreen(); } catch (e) { /* not available */ }
+  document.getElementById("start").remove();
+  if (silent) return;
+  ctx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: "interactive" });
+  await ctx.resume();
+  scheduleBeeps();
+  setInterval(scheduleBeeps, 250);
+});
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

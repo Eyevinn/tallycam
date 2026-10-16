@@ -1,0 +1,13 @@
+[package]
+name = "sync-probe"
+version = "0.1.0"
+edition = "2021"
+description = "Receives TallyCam SRT streams and measures glass-to-receive latency and A/V sync from LCP SEI capture timestamps."
+license = "MIT"
+
+[dependencies]
+tallycam-core = { path = "../../core", features = ["driver"] }
+gstreamer = { version = "0.25", features = ["v1_22"] }
+gstreamer-app = { version = "0.25", features = ["v1_22"] }
+gstreamer-video = { version = "0.25", features = ["v1_22"] }
+anyhow = "1"

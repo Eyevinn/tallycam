@@ -1,0 +1,10 @@
+[package]
+name = "clockd-probe"
+description = "Runs the TallyCam clock discipline against real NTP pools and prints chronyc-like reports"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+tallycam-core = { path = "../../core", features = ["driver"] }

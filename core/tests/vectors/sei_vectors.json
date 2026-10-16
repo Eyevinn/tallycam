@@ -1,0 +1,60 @@
+{
+ "description": "LCP capture timestamp SEI vectors (docs/PROTOCOL.md). NAL units have no start code or length prefix; payload_hex is the 34-byte payload before emulation prevention. Flags: bit 0 synced, bit 1 TAI timescale.",
+ "vectors": [
+  {
+   "name": "tai_synced_2026",
+   "capture_ns": 1791000037123456789,
+   "synced": true,
+   "tai": true,
+   "frame_counter": 4242,
+   "uncertainty_us": 4785,
+   "payload_hex": "8e3d91ef349042bc90a2097eeb07f1a6010318dae90b6d747f1500001092000012b1",
+   "h264_nal_hex": "0605228e3d91ef349042bc90a2097eeb07f1a6010318dae90b6d747f1500001092000012b180",
+   "hevc_nal_hex": "4e0105228e3d91ef349042bc90a2097eeb07f1a6010318dae90b6d747f1500001092000012b180"
+  },
+  {
+   "name": "tai_unsynced_unknown_uncertainty",
+   "capture_ns": 1791000037000000000,
+   "synced": false,
+   "tai": true,
+   "frame_counter": 0,
+   "uncertainty_us": 4294967295,
+   "payload_hex": "8e3d91ef349042bc90a2097eeb07f1a6010218dae90b6618b20000000000ffffffff",
+   "h264_nal_hex": "0605228e3d91ef349042bc90a2097eeb07f1a6010218dae90b6618b200000300000300ffffffff80",
+   "hevc_nal_hex": "4e0105228e3d91ef349042bc90a2097eeb07f1a6010218dae90b6618b200000300000300ffffffff80"
+  },
+  {
+   "name": "emulation_prevention_heavy",
+   "capture_ns": 4294967296,
+   "synced": false,
+   "tai": false,
+   "frame_counter": 3,
+   "uncertainty_us": 256,
+   "payload_hex": "8e3d91ef349042bc90a2097eeb07f1a6010000000001000000000000000300000100",
+   "h264_nal_hex": "0605228e3d91ef349042bc90a2097eeb07f1a601000003000003010000030000030000030003000003010080",
+   "hevc_nal_hex": "4e0105228e3d91ef349042bc90a2097eeb07f1a601000003000003010000030000030000030003000003010080"
+  },
+  {
+   "name": "all_zero",
+   "capture_ns": 0,
+   "synced": false,
+   "tai": false,
+   "frame_counter": 0,
+   "uncertainty_us": 0,
+   "payload_hex": "8e3d91ef349042bc90a2097eeb07f1a6010000000000000000000000000000000000",
+   "h264_nal_hex": "0605228e3d91ef349042bc90a2097eeb07f1a6010000030000030000030000030000030000030000030000030080",
+   "hevc_nal_hex": "4e0105228e3d91ef349042bc90a2097eeb07f1a6010000030000030000030000030000030000030000030000030080"
+  },
+  {
+   "name": "high_bytes",
+   "capture_ns": 1234605616436508552,
+   "synced": true,
+   "tai": true,
+   "frame_counter": 2712847316,
+   "uncertainty_us": 900,
+   "payload_hex": "8e3d91ef349042bc90a2097eeb07f1a601031122334455667788a1b2c3d400000384",
+   "h264_nal_hex": "0605228e3d91ef349042bc90a2097eeb07f1a601031122334455667788a1b2c3d4000003038480",
+   "hevc_nal_hex": "4e0105228e3d91ef349042bc90a2097eeb07f1a601031122334455667788a1b2c3d4000003038480"
+  }
+ ]
+}

@@ -1,0 +1,7 @@
+// Copy to Config/Local.xcconfig (not committed) and fill in.
+
+// Team ID from https://developer.apple.com/account (Membership details).
+DEVELOPMENT_TEAM =
+
+// Optional. Override if the bundle id is already taken in your team.
+// BUNDLE_ID_PREFIX = se.eyevinn.yourname

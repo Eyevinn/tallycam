@@ -1,0 +1,14 @@
+[package]
+name = "fake-camera"
+version = "0.1.0"
+edition = "2021"
+description = "Simulated TallyCam camera: test video and audio with LCP SEI capture timestamps, sent over SRT."
+license = "MIT"
+
+[dependencies]
+tallycam-core = { path = "../../core", features = ["driver"] }
+tallycam-srt = { path = "../../core/srt" }
+gstreamer-app = { version = "0.25", features = ["v1_22"] }
+gstreamer = { version = "0.25", features = ["v1_22"] }
+gstreamer-video = { version = "0.25", features = ["v1_22"] }
+anyhow = "1"

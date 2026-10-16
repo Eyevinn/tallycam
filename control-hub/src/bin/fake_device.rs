@@ -1,0 +1,1085 @@
+//! Fake LCP v0 phone for testing the control hub without an iPhone.
+//!
+//! Usage: fake_device [--url ws://127.0.0.1:8090/lcp/v0/device] [--key PATH | --legacy-id ID]
+//! [--name NAME]
+//!
+//! Proves a device key like the app: the hello carries the public key, the
+//! hub's `challenge` is answered with a signed `auth`, and the device id is
+//! derived from the key. `--key` keeps the key in a file (created when
+//! missing), so the device is the same across runs; without it every run is
+//! a new device. `--legacy-id` acts as an app before device keys (no key,
+//! that id). Then sends a hello with the iOS prototype controls, applies `set` (clamping,
+//! honouring `enabled_when`, replying with `result`), sends `status` every
+//! second and generated JPEG previews while the hub asks for them. Reconnects
+//! after a disconnect.
+
+use std::f64::consts::PI;
+use std::io::Cursor;
+use std::time::{Duration, Instant};
+
+use base64::Engine as _;
+use futures_util::{SinkExt, StreamExt};
+use serde_json::{json, Map, Value};
+use tallycam_core::clock::report::clock_status;
+use tallycam_core::clock::sim::{Scenario, SimServer, Simulation};
+use tallycam_hub::device_key::{self, SoftwareKey};
+use tallycam_hub::protocol::{
+    Battery, CommandDescriptor, ControlDescriptor, ControlKind, DeviceInfo, DeviceMessage,
+    EnumOption, Hello, Log, Preview, Scale, ServerToDevice, Status, StreamStatus, TallyState,
+    Values, CONTROL_PATH, DEVICE_PATH, PROTOCOL_VERSION,
+};
+use tallycam_hub::protocol::{ClockStatus, CommandResult, Percentiles, StreamLatency};
+use tokio::time::{interval, sleep, sleep_until, MissedTickBehavior};
+use tokio_tungstenite::tungstenite::Message;
+
+/// A plausible `status.clock`: the core's clock discipline running against a
+/// simulated network of eight NTP servers (Strom's pools), in step with the
+/// fake device's uptime, so the hub shows iburst, sync and source states.
+struct FakeClock {
+    sim: Simulation,
+}
+
+impl FakeClock {
+    fn new() -> Self {
+        let pools = [0, 0, 0, 0, 1, 2, 3, 3];
+        let servers = pools
+            .iter()
+            .enumerate()
+            .map(|(i, &pool)| SimServer {
+                pool,
+                offset_ms: [0.1, -0.15, 0.05, 0.2, -0.1, 0.0, 0.12, -0.05][i],
+                up_ms: 6.0 + 2.0 * i as f64,
+                down_ms: 6.0 + 2.0 * i as f64,
+                jitter_ms: 0.4 + 0.3 * i as f64,
+                ..Default::default()
+            })
+            .collect();
+        let scenario = Scenario {
+            name: "fake_device".into(),
+            servers,
+            host_freq_ppm: 14.0,
+            wall_error_ms: 40.0,
+            duration_s: f64::MAX,
+            ..Default::default()
+        };
+        FakeClock {
+            sim: Simulation::new(scenario),
+        }
+    }
+
+    fn status(&mut self, uptime_s: f64) -> ClockStatus {
+        self.sim.run_until(uptime_s);
+        let now = self.sim.host_now();
+        let t = self.sim.engine.tracking_report(now);
+        let sources = self.sim.engine.sources_report(now);
+        clock_status(&t, &sources, Some(40.0))
+    }
+}
+
+const SHUTTERS: [u64; 9] = [25, 30, 50, 60, 100, 120, 250, 500, 1000];
+
+struct Args {
+    url: String,
+    key: Option<String>,
+    legacy_id: Option<String>,
+    name: String,
+}
+
+fn parse_args() -> Args {
+    let mut a = Args {
+        url: format!("ws://127.0.0.1:8090{DEVICE_PATH}"),
+        key: None,
+        legacy_id: None,
+        name: "Fake iPhone".into(),
+    };
+    let mut it = std::env::args().skip(1);
+    while let Some(arg) = it.next() {
+        let mut val = || {
+            it.next()
+                .unwrap_or_else(|| die(&format!("{arg} needs a value")))
+        };
+        match arg.as_str() {
+            "--url" => a.url = val(),
+            "--key" => a.key = Some(val()),
+            "--legacy-id" => a.legacy_id = Some(val()),
+            "--name" => a.name = val(),
+            "--help" | "-h" => {
+                println!(
+                    "fake_device [--url URL] [--key PATH | --legacy-id ID] [--name NAME]\n\
+                     URL defaults to ws://127.0.0.1:8090{DEVICE_PATH} (controllers use {CONTROL_PATH}).\n\
+                     --key PATH       device key file (hex P-256 secret), created when missing;\n\
+                     \x20                default: a new key, and so a new device, on every run.\n\
+                     --legacy-id ID   no device key, this id (an app before device keys)."
+                );
+                std::process::exit(0);
+            }
+            _ => die(&format!("unknown argument '{arg}'")),
+        }
+    }
+    if a.key.is_some() && a.legacy_id.is_some() {
+        die("--key and --legacy-id exclude each other");
+    }
+    a
+}
+
+fn die(msg: &str) -> ! {
+    eprintln!("fake_device: {msg}");
+    std::process::exit(2)
+}
+
+// ---------------------------------------------------------------------------
+// Descriptors
+// ---------------------------------------------------------------------------
+
+fn control(id: &str, label: &str, group: &str, kind: ControlKind) -> ControlDescriptor {
+    ControlDescriptor {
+        id: id.into(),
+        label: Some(label.into()),
+        group: Some(group.into()),
+        kind,
+        min: None,
+        max: None,
+        step: None,
+        scale: None,
+        unit: None,
+        options: None,
+        enabled_when: None,
+        readonly: false,
+        extra: Map::new(),
+    }
+}
+
+fn range(c: ControlDescriptor, min: f64, max: f64, step: f64, unit: &str) -> ControlDescriptor {
+    ControlDescriptor {
+        min: Some(min),
+        max: Some(max),
+        step: Some(step),
+        unit: Some(unit.into()),
+        ..c
+    }
+}
+
+fn options(c: ControlDescriptor, opts: &[(Value, &str)]) -> ControlDescriptor {
+    ControlDescriptor {
+        options: Some(
+            opts.iter()
+                .map(|(v, l)| EnumOption {
+                    value: v.clone(),
+                    label: Some((*l).into()),
+                })
+                .collect(),
+        ),
+        ..c
+    }
+}
+
+fn when(c: ControlDescriptor, key: &str, value: &str) -> ControlDescriptor {
+    let mut m = Map::new();
+    m.insert(key.into(), json!(value));
+    ControlDescriptor {
+        enabled_when: Some(m),
+        ..c
+    }
+}
+
+fn log_scale(c: ControlDescriptor) -> ControlDescriptor {
+    ControlDescriptor {
+        scale: Some(Scale::Log),
+        ..c
+    }
+}
+
+/// Per-lens hardware limits, like an iPhone 16 Pro reports them.
+struct LensCaps {
+    zoom_max: f64,
+    iso_min: f64,
+    iso_max: f64,
+    torch: bool,
+}
+
+fn lens_caps(lens: &str) -> LensCaps {
+    match lens {
+        "ultra_wide" => LensCaps {
+            zoom_max: 4.0,
+            iso_min: 40.0,
+            iso_max: 2560.0,
+            torch: true,
+        },
+        "tele" => LensCaps {
+            zoom_max: 3.0,
+            iso_min: 64.0,
+            iso_max: 3200.0,
+            torch: false,
+        },
+        _ => LensCaps {
+            zoom_max: 8.0,
+            iso_min: 32.0,
+            iso_max: 2176.0,
+            torch: true,
+        },
+    }
+}
+
+fn mode_options() -> Vec<(Value, &'static str)> {
+    vec![
+        (json!("auto"), "Auto"),
+        (json!("locked"), "Locked"),
+        (json!("manual"), "Manual"),
+    ]
+}
+
+fn controls_for(lens: &str) -> Vec<ControlDescriptor> {
+    use ControlKind::*;
+    let caps = lens_caps(lens);
+    let shutter_labels: Vec<(Value, String)> = SHUTTERS
+        .iter()
+        .map(|s| (json!(s), format!("1/{s}")))
+        .collect();
+    let mut v = vec![
+        control("live", "Live", "stream", Bool),
+        control("stream_url", "SRT URL", "stream", Text),
+        range(
+            control("bitrate_kbps", "Bitrate", "stream", Range),
+            500.0,
+            20000.0,
+            100.0,
+            "kbps",
+        ),
+        options(
+            control("frame_rate", "Frame rate", "stream", Enum),
+            &[
+                (json!(25), "25"),
+                (json!(30), "30"),
+                (json!(50), "50"),
+                (json!(60), "60"),
+            ],
+        ),
+        options(
+            control("audio_codec", "Audio codec", "stream", Enum),
+            &[(json!("opus"), "Opus"), (json!("aac"), "AAC")],
+        ),
+        options(
+            control("lens", "Lens", "lens", Enum),
+            &[
+                (json!("ultra_wide"), "0.5x"),
+                (json!("wide"), "1x"),
+                (json!("tele"), "5x"),
+            ],
+        ),
+        log_scale(range(
+            control("zoom", "Zoom", "lens", Range),
+            1.0,
+            caps.zoom_max,
+            0.01,
+            "x",
+        )),
+        options(
+            control("stabilization", "Stabilization", "image", Enum),
+            &[
+                (json!("off"), "Off"),
+                (json!("standard"), "Standard"),
+                (json!("cinematic"), "Cinematic"),
+                (json!("cinematic_extended"), "Cinematic ext."),
+            ],
+        ),
+        options(
+            control("exposure_mode", "Exposure", "exposure", Enum),
+            &mode_options(),
+        ),
+        log_scale(when(
+            range(
+                control("iso", "ISO", "exposure", Range),
+                caps.iso_min,
+                caps.iso_max,
+                1.0,
+                "",
+            ),
+            "exposure_mode",
+            "manual",
+        )),
+        when(
+            options(
+                control("shutter", "Shutter", "exposure", Enum),
+                &shutter_labels
+                    .iter()
+                    .map(|(v, l)| (v.clone(), l.as_str()))
+                    .collect::<Vec<_>>(),
+            ),
+            "exposure_mode",
+            "manual",
+        ),
+        when(
+            range(
+                control("ev_bias", "EV bias", "exposure", Range),
+                -3.0,
+                3.0,
+                0.1,
+                "EV",
+            ),
+            "exposure_mode",
+            "auto",
+        ),
+        options(
+            control("wb_mode", "White balance", "white_balance", Enum),
+            &mode_options(),
+        ),
+        when(
+            range(
+                control("wb_temperature", "Temperature", "white_balance", Range),
+                2500.0,
+                10000.0,
+                50.0,
+                "K",
+            ),
+            "wb_mode",
+            "manual",
+        ),
+        when(
+            range(
+                control("wb_tint", "Tint", "white_balance", Range),
+                -150.0,
+                150.0,
+                1.0,
+                "",
+            ),
+            "wb_mode",
+            "manual",
+        ),
+        options(
+            control("focus_mode", "Focus", "focus", Enum),
+            &mode_options(),
+        ),
+        when(
+            range(
+                control("focus_position", "Focus position", "focus", Range),
+                0.0,
+                1.0,
+                0.001,
+                "",
+            ),
+            "focus_mode",
+            "manual",
+        ),
+    ];
+    if caps.torch {
+        v.insert(6, control("torch", "Torch", "lens", Bool));
+    }
+    v
+}
+
+fn commands() -> Vec<CommandDescriptor> {
+    let mut args = Map::new();
+    args.insert("x".into(), json!("0..1"));
+    args.insert("y".into(), json!("0..1"));
+    vec![
+        CommandDescriptor {
+            name: "focus_at".into(),
+            label: Some("Focus at point".into()),
+            args: Some(args),
+            extra: Map::new(),
+        },
+        CommandDescriptor {
+            name: "wb_one_shot".into(),
+            label: Some("One-shot white balance".into()),
+            args: None,
+            extra: Map::new(),
+        },
+    ]
+}
+
+// ---------------------------------------------------------------------------
+// Simulated camera
+// ---------------------------------------------------------------------------
+
+struct Camera {
+    info: DeviceInfo,
+    /// None for `--legacy-id`.
+    key: Option<SoftwareKey>,
+    controls: Vec<ControlDescriptor>,
+    state: Values,
+    tally: TallyState,
+    preview: Option<(f64, u32)>,
+    focus_point: (f64, f64),
+    battery: f64,
+    live_since: Option<Instant>,
+    started: Instant,
+    rng: u64,
+    clock: FakeClock,
+}
+
+impl Camera {
+    fn new(args: &Args) -> Self {
+        let key = match (&args.key, &args.legacy_id) {
+            (_, Some(_)) => None,
+            (Some(path), None) => Some(
+                device_key::load_or_create(std::path::Path::new(path)).unwrap_or_else(|e| die(&e)),
+            ),
+            (None, None) => Some(device_key::generate()),
+        };
+        let id = match (&key, &args.legacy_id) {
+            (Some(key), _) => key.public_key().device_id(),
+            (None, Some(id)) => id.clone(),
+            (None, None) => unreachable!(),
+        };
+        let state = json!({
+            "live": false,
+            "stream_url": "srt://192.0.2.10:9000?streamid=cam1&latency=500",
+            "bitrate_kbps": 6000,
+            "frame_rate": 30,
+            "audio_codec": "opus",
+            "lens": "wide",
+            "zoom": 1.0,
+            "torch": false,
+            "stabilization": "standard",
+            "exposure_mode": "auto",
+            "iso": 125,
+            "shutter": 50,
+            "ev_bias": 0.0,
+            "wb_mode": "auto",
+            "wb_temperature": 5200,
+            "wb_tint": 0,
+            "focus_mode": "auto",
+            "focus_position": 0.6
+        });
+        Self {
+            key,
+            info: DeviceInfo {
+                id,
+                name: args.name.clone(),
+                model: "iPhone17,1".into(),
+                platform: "ios".into(),
+                os_version: "26.0".into(),
+                app_version: "0.1.0-fake".into(),
+                extra: Map::new(),
+            },
+            controls: controls_for("wide"),
+            state: state.as_object().cloned().unwrap_or_default(),
+            tally: TallyState::Off,
+            preview: None,
+            focus_point: (0.5, 0.5),
+            battery: 0.87,
+            live_since: None,
+            started: Instant::now(),
+            rng: 0x2545_f491_4f6c_dd1d ^ u64::from(std::process::id()),
+            clock: FakeClock::new(),
+        }
+    }
+
+    fn rand(&mut self) -> f64 {
+        // xorshift64*
+        self.rng ^= self.rng >> 12;
+        self.rng ^= self.rng << 25;
+        self.rng ^= self.rng >> 27;
+        (self.rng.wrapping_mul(0x2545_f491_4f6c_dd1d) >> 11) as f64 / (1u64 << 53) as f64
+    }
+
+    fn hello(&self) -> DeviceMessage {
+        DeviceMessage::Hello(Hello {
+            protocol: if self.key.is_some() {
+                PROTOCOL_VERSION
+            } else {
+                0
+            },
+            device: self.info.clone(),
+            public_key: self.key.as_ref().map(|k| k.public_key().to_base64()),
+            controls: self.controls.clone(),
+            commands: commands(),
+        })
+    }
+
+    fn full_state(&self) -> DeviceMessage {
+        let mut values = self.state.clone();
+        let present: Vec<&str> = self.controls.iter().map(|c| c.id.as_str()).collect();
+        values.retain(|k, _| present.contains(&k.as_str()));
+        DeviceMessage::State { values }
+    }
+
+    fn str_of(&self, key: &str) -> &str {
+        self.state.get(key).and_then(Value::as_str).unwrap_or("")
+    }
+
+    fn num_of(&self, key: &str) -> f64 {
+        self.state.get(key).and_then(Value::as_f64).unwrap_or(0.0)
+    }
+
+    /// Validate and apply one value. Returns the error text, if any; a clamped
+    /// value is applied and still reported as an error.
+    fn apply_one(&mut self, key: &str, value: &Value) -> Option<String> {
+        let Some(desc) = self.controls.iter().find(|c| c.id == key).cloned() else {
+            return Some(format!("unknown control '{key}'"));
+        };
+        if desc.readonly {
+            return Some(format!("{key} is read-only"));
+        }
+        if !desc.is_enabled(&self.state) {
+            let cond = desc
+                .enabled_when
+                .as_ref()
+                .map(|m| {
+                    m.iter()
+                        .map(|(k, v)| format!("{k}={}", v.as_str().unwrap_or(&v.to_string())))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                })
+                .unwrap_or_default();
+            return Some(format!("{key} is only writable when {cond}"));
+        }
+        match desc.kind {
+            ControlKind::Range => {
+                let Some(mut x) = value.as_f64() else {
+                    return Some(format!("{key} needs a number"));
+                };
+                let (min, max) = (desc.min.unwrap_or(f64::MIN), desc.max.unwrap_or(f64::MAX));
+                let mut err = None;
+                if x < min || x > max {
+                    let c = x.clamp(min, max);
+                    err = Some(format!(
+                        "{key} {x} {} {} {}, clamped",
+                        if x < min { "below" } else { "above" },
+                        if x < min { "min" } else { "max" },
+                        c
+                    ));
+                    x = c;
+                }
+                if let Some(step) = desc.step.filter(|s| *s > 0.0) {
+                    x = ((x - min) / step).round() * step + min;
+                    x = (x * 1e6).round() / 1e6;
+                }
+                let v = if desc.step.is_some_and(|s| s.fract() == 0.0) && x.fract() == 0.0 {
+                    json!(x as i64)
+                } else {
+                    json!(x)
+                };
+                self.state.insert(key.into(), v);
+                err
+            }
+            ControlKind::Enum => {
+                let opts = desc.options.unwrap_or_default();
+                let found = opts.iter().find(|o| json_eq(&o.value, value));
+                match found {
+                    Some(o) => {
+                        self.state.insert(key.into(), o.value.clone());
+                        None
+                    }
+                    None => Some(format!("{key}: {value} is not a supported option")),
+                }
+            }
+            ControlKind::Bool => match value.as_bool() {
+                Some(b) => {
+                    self.state.insert(key.into(), json!(b));
+                    None
+                }
+                None => Some(format!("{key} needs true or false")),
+            },
+            ControlKind::Text => match value.as_str() {
+                Some(s) => {
+                    self.state.insert(key.into(), json!(s));
+                    None
+                }
+                None => Some(format!("{key} needs a string")),
+            },
+            ControlKind::Unknown => Some(format!("{key}: unsupported control kind")),
+        }
+    }
+
+    /// Apply a `set`. Returns the messages to send back.
+    fn apply_set(&mut self, id: Option<Value>, values: Values) -> Vec<DeviceMessage> {
+        let mut errors = Vec::new();
+        let old_lens = self.str_of("lens").to_string();
+        // Controls without a condition first, so `{"exposure_mode":"manual",
+        // "iso":400}` in one set works.
+        let (plain, conditional): (Vec<_>, Vec<_>) = values.iter().partition(|(k, _)| {
+            self.controls
+                .iter()
+                .find(|c| &c.id == *k)
+                .is_none_or(|c| c.enabled_when.is_none())
+        });
+        for (k, v) in plain.into_iter().chain(conditional) {
+            if let Some(e) = self.apply_one(k, v) {
+                errors.push(e);
+            }
+        }
+        let mut out = Vec::new();
+        let mut reported: Values = Values::new();
+        if self.str_of("lens") != old_lens {
+            // New lens: new ranges, resend hello and the full state.
+            let lens = self.str_of("lens").to_string();
+            self.controls = controls_for(&lens);
+            let caps = lens_caps(&lens);
+            let zoom = self.num_of("zoom").clamp(1.0, caps.zoom_max);
+            self.state.insert("zoom".into(), json!(zoom));
+            let iso = self.num_of("iso").clamp(caps.iso_min, caps.iso_max);
+            self.state.insert("iso".into(), json!(iso.round() as i64));
+            if !caps.torch {
+                self.state.insert("torch".into(), json!(false));
+            }
+            out.push(self.hello());
+            out.push(self.full_state());
+        } else {
+            // Report the real value of every key asked for, so a UI that
+            // moved a slider snaps back to what the camera did.
+            for k in values.keys() {
+                if let Some(v) = self.state.get(k) {
+                    reported.insert(k.clone(), v.clone());
+                }
+            }
+            if values.contains_key("live") {
+                self.live_since = self.state["live"]
+                    .as_bool()
+                    .unwrap_or(false)
+                    .then(Instant::now);
+            }
+            out.push(DeviceMessage::State { values: reported });
+        }
+        let error = (!errors.is_empty()).then(|| errors.join("; "));
+        match id {
+            Some(id) => out.push(DeviceMessage::Result(CommandResult {
+                id,
+                ok: error.is_none(),
+                error,
+                data: None,
+            })),
+            None => {
+                if let Some(message) = error {
+                    out.push(DeviceMessage::Log(Log {
+                        level: "warn".into(),
+                        message,
+                    }))
+                }
+            }
+        }
+        out
+    }
+
+    fn apply_command(
+        &mut self,
+        id: Option<Value>,
+        name: &str,
+        args: Option<Map<String, Value>>,
+    ) -> Vec<DeviceMessage> {
+        let mut out = Vec::new();
+        let res: Result<(), String> = match name {
+            "focus_at" => {
+                let args = args.unwrap_or_default();
+                let x = args.get("x").and_then(Value::as_f64);
+                let y = args.get("y").and_then(Value::as_f64);
+                match (x, y) {
+                    (Some(x), Some(y)) if (0.0..=1.0).contains(&x) && (0.0..=1.0).contains(&y) => {
+                        self.focus_point = (x, y);
+                        let mut values = Values::new();
+                        if self.str_of("focus_mode") != "auto" {
+                            self.state.insert("focus_mode".into(), json!("auto"));
+                            values.insert("focus_mode".into(), json!("auto"));
+                        }
+                        let pos = ((1.0 - y) * 1000.0).round() / 1000.0;
+                        self.state.insert("focus_position".into(), json!(pos));
+                        values.insert("focus_position".into(), json!(pos));
+                        out.push(DeviceMessage::State { values });
+                        out.push(DeviceMessage::Log(Log {
+                            level: "info".into(),
+                            message: format!("Focus and exposure point set to {x:.2}, {y:.2}"),
+                        }));
+                        Ok(())
+                    }
+                    _ => Err("focus_at needs x and y in 0..1".into()),
+                }
+            }
+            "wb_one_shot" => {
+                let k = (5600.0 + (self.rand() - 0.5) * 400.0) / 50.0;
+                let k = (k.round() * 50.0) as i64;
+                self.state.insert("wb_mode".into(), json!("locked"));
+                self.state.insert("wb_temperature".into(), json!(k));
+                let mut values = Values::new();
+                values.insert("wb_mode".into(), json!("locked"));
+                values.insert("wb_temperature".into(), json!(k));
+                out.push(DeviceMessage::State { values });
+                Ok(())
+            }
+            _ => Err(format!("unknown command '{name}'")),
+        };
+        if let Some(id) = id {
+            out.push(DeviceMessage::Result(CommandResult {
+                id,
+                ok: res.is_ok(),
+                error: res.err(),
+                data: None,
+            }));
+        }
+        out
+    }
+
+    /// Once a second: auto modes drift, so the operator sees measured values.
+    fn tick(&mut self) -> (Status, Values) {
+        let t = self.started.elapsed().as_secs_f64();
+        let mut changed = Values::new();
+        if self.str_of("exposure_mode") == "auto" {
+            let caps = lens_caps(self.str_of("lens"));
+            let ev = self.num_of("ev_bias");
+            let iso = (200.0 * 2f64.powf(ev) * (1.0 + 0.3 * (t / 7.0).sin()))
+                .clamp(caps.iso_min, caps.iso_max)
+                .round() as i64;
+            let shutter = if iso > 400 { 50 } else { 100 };
+            for (k, v) in [("iso", json!(iso)), ("shutter", json!(shutter))] {
+                if self.state.get(k) != Some(&v) {
+                    self.state.insert(k.into(), v.clone());
+                    changed.insert(k.into(), v);
+                }
+            }
+        }
+        if self.str_of("wb_mode") == "auto" {
+            let k = ((5200.0 + 150.0 * (t / 11.0).sin()) / 50.0).round() as i64 * 50;
+            let v = json!(k);
+            if self.state.get("wb_temperature") != Some(&v) {
+                self.state.insert("wb_temperature".into(), v.clone());
+                changed.insert("wb_temperature".into(), v);
+            }
+        }
+        let charging = false;
+        self.battery = (self.battery - 0.0002).max(0.05);
+        let live = self
+            .state
+            .get("live")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let url = self.str_of("stream_url").to_string();
+        let stream = if live {
+            let connecting = self
+                .live_since
+                .is_some_and(|s| s.elapsed() < Duration::from_millis(1500));
+            let target = self.num_of("bitrate_kbps");
+            StreamStatus {
+                state: if connecting { "connecting" } else { "live" }.into(),
+                url: Some(url),
+                bitrate_kbps: (!connecting).then(|| (target * (0.95 + 0.08 * self.rand())).round()),
+                rtt_ms: (!connecting).then(|| ((10.0 + 6.0 * self.rand()) * 10.0).round() / 10.0),
+                retransmits: (!connecting).then_some((t as u64) / 13),
+                dropped: (!connecting).then_some(0),
+                error: None,
+                srt_latency_ms: (!connecting).then_some(120),
+                latency: (!connecting).then(|| {
+                    let p = |p50: f64| Percentiles {
+                        p50,
+                        p95: (p50 * 1.3 * 10.0).round() / 10.0,
+                        max: (p50 * 1.8 * 10.0).round() / 10.0,
+                    };
+                    Box::new(StreamLatency {
+                        capture_to_encode_ms: Some(p(4.0)),
+                        encode_ms: Some(p(9.0)),
+                        mux_ms: Some(p(0.5)),
+                        send_queue_ms: Some(p(0.3)),
+                        send_frame_ms: Some(p(2.0)),
+                        capture_to_send_ms: Some(p(14.0)),
+                        audio_capture_to_encode_ms: Some(p(7.0)),
+                        audio_encode_ms: Some(p(0.4)),
+                        audio_capture_to_mux_ms: Some(p(25.0)),
+                        extra: Map::new(),
+                    })
+                }),
+                late_video_frames: (!connecting).then_some(0),
+                late_audio_frames: (!connecting).then_some(0),
+                extra: Map::new(),
+            }
+        } else {
+            StreamStatus {
+                state: "idle".into(),
+                url: Some(url),
+                bitrate_kbps: None,
+                rtt_ms: None,
+                retransmits: None,
+                dropped: None,
+                error: None,
+                srt_latency_ms: None,
+                latency: None,
+                late_video_frames: None,
+                late_audio_frames: None,
+                extra: Map::new(),
+            }
+        };
+        let thermal = if t > 600.0 { "fair" } else { "nominal" };
+        let status = Status {
+            battery: Some(Battery {
+                level: (self.battery * 100.0).round() / 100.0,
+                charging,
+            }),
+            thermal: Some(thermal.into()),
+            stream: Some(stream),
+            network: Some("wifi".into()),
+            clock: Some(Box::new(self.clock.status(t))),
+            extra: Map::new(),
+        };
+        (status, changed)
+    }
+
+    /// A generated test picture that reacts to the controls.
+    fn render_preview(&self, width: u32) -> Option<Preview> {
+        let width = width.clamp(64, 1280);
+        let height = width * 9 / 16;
+        let t = self.started.elapsed().as_secs_f64();
+        // Exposure: brighter with higher ISO and longer shutter.
+        let iso = self.num_of("iso").max(1.0);
+        let shutter = self.num_of("shutter").max(1.0);
+        let exposure = ((iso / 200.0) * (100.0 / shutter))
+            .powf(0.5)
+            .clamp(0.15, 2.5)
+            * 2f64.powf(if self.str_of("exposure_mode") == "auto" {
+                self.num_of("ev_bias") * 0.5
+            } else {
+                0.0
+            });
+        // White balance: low Kelvin setting -> image looks blue, high -> warm.
+        let k = self.num_of("wb_temperature");
+        let warm = ((k - 5200.0) / 4000.0).clamp(-1.0, 1.0);
+        let tint = self.num_of("wb_tint") / 300.0;
+        let zoom = self.num_of("zoom").max(1.0)
+            * match self.str_of("lens") {
+                "ultra_wide" => 0.5,
+                "tele" => 5.0,
+                _ => 1.0,
+            };
+        let torch = self
+            .state
+            .get("torch")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let (fx, fy) = self.focus_point;
+        let tally_rgb = match self.tally {
+            TallyState::Program => Some([220u8, 30, 30]),
+            TallyState::Preview => Some([30, 200, 60]),
+            TallyState::Off => None,
+        };
+        let bar_x = ((t * 0.2).fract() * width as f64) as u32;
+
+        let mut img = image::RgbImage::new(width, height);
+        for (x, y, px) in img.enumerate_pixels_mut() {
+            let u = (x as f64 / width as f64 - 0.5) / zoom * 4.0;
+            let v = (y as f64 / height as f64 - 0.5) / zoom * 4.0 * 9.0 / 16.0;
+            let checker = (((u * 4.0).floor() + (v * 4.0).floor()) as i64).rem_euclid(2) as f64;
+            let rings = 0.5 + 0.5 * (((u * u + v * v).sqrt() * 6.0 * PI) - t).sin();
+            let mut base = 0.25 + 0.25 * checker + 0.3 * rings;
+            if torch {
+                let d = ((x as f64 / width as f64 - 0.5).powi(2)
+                    + (y as f64 / height as f64 - 0.5).powi(2))
+                .sqrt();
+                base += (0.4 - d).max(0.0);
+            }
+            let l = base * exposure;
+            let mut rgb = [
+                l * (1.0 + 0.35 * warm),
+                l * (1.0 - 0.25 * tint),
+                l * (1.0 - 0.35 * warm),
+            ];
+            if x.abs_diff(bar_x) < 3 {
+                rgb = [0.9, 0.9, 0.2];
+            }
+            *px = image::Rgb(rgb.map(|c| (c.clamp(0.0, 1.0) * 255.0) as u8));
+            if let Some(c) = tally_rgb {
+                if x < 6 || y < 6 || x >= width - 6 || y >= height - 6 {
+                    *px = image::Rgb(c);
+                }
+            }
+        }
+        // Focus crosshair.
+        let cx = (fx * width as f64) as i64;
+        let cy = (fy * height as f64) as i64;
+        for d in -12i64..=12 {
+            for (px, py) in [(cx + d, cy), (cx, cy + d)] {
+                if px >= 0 && py >= 0 && (px as u32) < width && (py as u32) < height {
+                    img.put_pixel(px as u32, py as u32, image::Rgb([255, 210, 0]));
+                }
+            }
+        }
+
+        let mut buf = Cursor::new(Vec::new());
+        let enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, 70);
+        if let Err(e) = img.write_with_encoder(enc) {
+            eprintln!("fake_device: JPEG encode failed: {e}");
+            return None;
+        }
+        Some(Preview {
+            jpeg: base64::engine::general_purpose::STANDARD.encode(buf.into_inner()),
+            width,
+            height,
+        })
+    }
+}
+
+fn json_eq(a: &Value, b: &Value) -> bool {
+    match (a.as_f64(), b.as_f64()) {
+        (Some(x), Some(y)) => x == y,
+        _ => a == b,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Connection loop
+// ---------------------------------------------------------------------------
+
+fn text(msg: &DeviceMessage) -> Message {
+    Message::Text(serde_json::to_string(msg).unwrap_or_default().into())
+}
+
+/// Applies one hub message; returns what to send back.
+fn on_server_message(
+    cam: &mut Camera,
+    msg: ServerToDevice,
+    next_preview: &mut tokio::time::Instant,
+    far: tokio::time::Instant,
+) -> Vec<DeviceMessage> {
+    let mut out = Vec::new();
+    match msg {
+        ServerToDevice::Set { id, values } => {
+            println!(
+                "fake_device: set {}",
+                serde_json::Value::Object(values.clone())
+            );
+            out = cam.apply_set(id, values)
+        }
+        ServerToDevice::Command { id, name, args } => out = cam.apply_command(id, &name, args),
+        ServerToDevice::Tally { state } => {
+            println!("fake_device: tally {state:?}");
+            cam.tally = state;
+        }
+        ServerToDevice::Message { text } => {
+            println!("fake_device: operator message: {text}");
+            out.push(DeviceMessage::Log(Log {
+                level: "info".into(),
+                message: format!("Showed operator message: {text}"),
+            }));
+        }
+        ServerToDevice::Preview {
+            enabled,
+            fps,
+            width,
+        } => {
+            if enabled {
+                let fps = fps.filter(|f| *f > 0.0).unwrap_or(1.0).min(30.0);
+                cam.preview = Some((fps, width.unwrap_or(480)));
+                *next_preview = tokio::time::Instant::now();
+            } else {
+                cam.preview = None;
+                *next_preview = far;
+            }
+            println!("fake_device: preview {:?}", cam.preview);
+        }
+        ServerToDevice::Ping(p) => out.push(DeviceMessage::Pong(p)),
+        // The fake device does not sync its clock; a late challenge is ignored.
+        ServerToDevice::Pong(_) | ServerToDevice::Challenge { .. } => {}
+    }
+    out
+}
+
+async fn run_once(args: &Args, cam: &mut Camera) -> Result<(), String> {
+    let (ws, _) = tokio_tungstenite::connect_async(args.url.as_str())
+        .await
+        .map_err(|e| format!("connect failed: {e}"))?;
+    println!("fake_device: connected to {} as {}", args.url, cam.info.id);
+    let (mut sink, mut stream) = ws.split();
+    let send_err = |e: tokio_tungstenite::tungstenite::Error| format!("send failed: {e}");
+
+    sink.send(text(&cam.hello())).await.map_err(send_err)?;
+    // Admission: answer the hub's challenge, if it sends one, until the
+    // first `tally` (sent once the hub admitted the device). A refusal is a
+    // `message`, then the hub closes the socket.
+    let mut early = Vec::new();
+    loop {
+        let frame = match stream.next().await {
+            None => return Err("closed by hub before admission".into()),
+            Some(Err(e)) => return Err(format!("read failed: {e}")),
+            Some(Ok(f)) => f,
+        };
+        let Message::Text(t) = frame else {
+            if let Message::Close(_) = frame {
+                return Err("closed by hub before admission".into());
+            }
+            continue;
+        };
+        match serde_json::from_str::<ServerToDevice>(t.as_str()) {
+            Ok(ServerToDevice::Challenge { nonce, server }) => {
+                let Some(key) = &cam.key else {
+                    println!("fake_device: challenge, but no device key (legacy)");
+                    continue;
+                };
+                let signature = key.sign_auth(&server, &nonce);
+                sink.send(text(&DeviceMessage::Auth { signature }))
+                    .await
+                    .map_err(send_err)?;
+            }
+            Ok(ServerToDevice::Message { text }) => {
+                println!("fake_device: hub says: {text}");
+            }
+            Ok(msg @ ServerToDevice::Tally { .. }) => {
+                println!("fake_device: admitted");
+                early.push(msg);
+                break;
+            }
+            Ok(msg) => early.push(msg),
+            Err(_) => {} // unknown types are ignored
+        }
+    }
+    sink.send(text(&cam.full_state())).await.map_err(send_err)?;
+    cam.preview = None;
+
+    let mut status_tick = interval(Duration::from_secs(1));
+    status_tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    let far = tokio::time::Instant::now() + Duration::from_secs(86400 * 365);
+    let mut next_preview = far;
+    for msg in early {
+        for m in on_server_message(cam, msg, &mut next_preview, far) {
+            sink.send(text(&m)).await.map_err(send_err)?;
+        }
+    }
+
+    loop {
+        let mut out: Vec<DeviceMessage> = Vec::new();
+        tokio::select! {
+            frame = stream.next() => {
+                let frame = match frame {
+                    None => return Err("connection closed".into()),
+                    Some(Err(e)) => return Err(format!("read failed: {e}")),
+                    Some(Ok(f)) => f,
+                };
+                let Message::Text(t) = frame else {
+                    if let Message::Close(_) = frame { return Err("closed by hub".into()); }
+                    continue;
+                };
+                let msg: ServerToDevice = match serde_json::from_str(t.as_str()) {
+                    Ok(m) => m,
+                    Err(_) => continue, // unknown types are ignored
+                };
+                out = on_server_message(cam, msg, &mut next_preview, far);
+            }
+            _ = status_tick.tick() => {
+                let (status, changed) = cam.tick();
+                if !changed.is_empty() {
+                    out.push(DeviceMessage::State { values: changed });
+                }
+                out.push(DeviceMessage::Status(status));
+            }
+            _ = sleep_until(next_preview) => {
+                if let Some((fps, width)) = cam.preview {
+                    if let Some(p) = cam.render_preview(width) {
+                        out.push(DeviceMessage::Preview(p));
+                    }
+                    next_preview = tokio::time::Instant::now() + Duration::from_secs_f64(1.0 / fps);
+                } else {
+                    next_preview = far;
+                }
+            }
+        }
+        for m in &out {
+            sink.send(text(m)).await.map_err(send_err)?;
+        }
+    }
+}
+
+#[tokio::main]
+async fn main() {
+    let args = parse_args();
+    let mut cam = Camera::new(&args);
+    loop {
+        if let Err(e) = run_once(&args, &mut cam).await {
+            eprintln!("fake_device: {e}, reconnecting in 2 s");
+        }
+        sleep(Duration::from_secs(2)).await;
+    }
+}

@@ -1,0 +1,6 @@
+// Shared build settings. Per-developer values (team, bundle id prefix) live in
+// Local.xcconfig, which is not committed. Copy Local.template.xcconfig to start.
+BUNDLE_ID_PREFIX = se.eyevinn
+CODE_SIGN_STYLE = Automatic
+
+#include? "Local.xcconfig"

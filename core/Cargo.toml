@@ -1,0 +1,22 @@
+[package]
+name = "tallycam-core"
+description = "Shared TallyCam core: chrony-like clock discipline, LCP SEI timestamps, LCP protocol types, device keys"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[features]
+default = []
+# The std driver: UDP sockets, DNS and a timer thread around the pure engine.
+driver = ["dep:libc"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+libc = { version = "0.2", optional = true }
+# Device keys: P-256 ECDSA (verification on servers, test signing), SHA-256
+# fingerprints, base64 on the wire.
+p256 = { version = "0.13", default-features = false, features = ["ecdsa"] }
+sha2 = "0.10"
+base64 = "0.22"

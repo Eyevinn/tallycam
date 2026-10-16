@@ -1,0 +1,834 @@
+{
+ "description": "Clock discipline scenarios for core::clock::sim. Times in seconds, offsets and delays in ms. Server indices refer to the servers list. Default pools: Strom's chrony.conf (ntp.ubuntu.com x4, 0/1.ubuntu.pool x1, 2.ubuntu.pool x2); servers' pool index selects which name resolves to them.",
+ "scenarios": [
+  {
+   "name": "strom_default_pools_healthy",
+   "description": "Strom's chrony.conf: 8 sources from 4 pools, symmetric paths, host oscillator 20 ppm fast, platform clock 30 ms off.",
+   "servers": [
+    {
+     "pool": 0,
+     "offset_ms": 0.1,
+     "up_ms": 8,
+     "down_ms": 8,
+     "jitter_ms": 0.5
+    },
+    {
+     "pool": 0,
+     "offset_ms": -0.15,
+     "up_ms": 9,
+     "down_ms": 9,
+     "jitter_ms": 0.7
+    },
+    {
+     "pool": 0,
+     "offset_ms": 0.05,
+     "up_ms": 10,
+     "down_ms": 10,
+     "jitter_ms": 0.9
+    },
+    {
+     "pool": 0,
+     "offset_ms": 0.2,
+     "up_ms": 11,
+     "down_ms": 11,
+     "jitter_ms": 1.1
+    },
+    {
+     "pool": 1,
+     "offset_ms": -0.1,
+     "up_ms": 12,
+     "down_ms": 12,
+     "jitter_ms": 1.3
+    },
+    {
+     "pool": 2,
+     "offset_ms": 0.0,
+     "up_ms": 13,
+     "down_ms": 13,
+     "jitter_ms": 1.5
+    },
+    {
+     "pool": 3,
+     "offset_ms": 0.12,
+     "up_ms": 14,
+     "down_ms": 14,
+     "jitter_ms": 1.7000000000000002
+    },
+    {
+     "pool": 3,
+     "offset_ms": -0.05,
+     "up_ms": 15,
+     "down_ms": 15,
+     "jitter_ms": 1.9000000000000001
+    }
+   ],
+   "host_freq_ppm": 20.0,
+   "wall_error_ms": 30.0,
+   "duration_s": 1800,
+   "seed": 11,
+   "expect": {
+    "synced": true,
+    "max_final_error_ms": 1.0,
+    "max_error_bounds_error": true,
+    "freq_ppm": -20.0,
+    "freq_tolerance_ppm": 0.3,
+    "no_step": true,
+    "steps": 0,
+    "min_poll_interval_s": 63.9,
+    "max_requests_per_server": 45,
+    "min_combined": 1
+   }
+  },
+  {
+   "name": "temperature_step",
+   "description": "Host oscillator steps from 20 to 26 ppm after 15 minutes; the regression drops the old trend and the clock follows.",
+   "servers": [
+    {
+     "pool": 0,
+     "offset_ms": 0.1,
+     "up_ms": 8,
+     "down_ms": 8,
+     "jitter_ms": 0.5
+    },
+    {
+     "pool": 0,
+     "offset_ms": -0.15,
+     "up_ms": 9,
+     "down_ms": 9,
+     "jitter_ms": 0.7
+    },
+    {
+     "pool": 0,
+     "offset_ms": 0.05,
+     "up_ms": 10,
+     "down_ms": 10,
+     "jitter_ms": 0.9
+    },
+    {
+     "pool": 0,
+     "offset_ms": 0.2,
+     "up_ms": 11,
+     "down_ms": 11,
+     "jitter_ms": 1.1
+    },
+    {
+     "pool": 1,
+     "offset_ms": -0.1,
+     "up_ms": 12,
+     "down_ms": 12,
+     "jitter_ms": 1.3
+    },
+    {
+     "pool": 2,
+     "offset_ms": 0.0,
+     "up_ms": 13,
+     "down_ms": 13,
+     "jitter_ms": 1.5
+    },
+    {
+     "pool": 3,
+     "offset_ms": 0.12,
+     "up_ms": 14,
+     "down_ms": 14,
+     "jitter_ms": 1.7000000000000002
+    },
+    {
+     "pool": 3,
+     "offset_ms": -0.05,
+     "up_ms": 15,
+     "down_ms": 15,
+     "jitter_ms": 1.9000000000000001
+    }
+   ],
+   "host_freq_ppm": 20.0,
+   "duration_s": 2700,
+   "seed": 12,
+   "events": [
+    {
+     "kind": "host_freq",
+     "at_s": 900,
+     "freq_ppm": 26.0
+    }
+   ],
+   "expect": {
+    "synced": true,
+    "freq_ppm": -26.0,
+    "freq_tolerance_ppm": 0.5,
+    "max_late_error_ms": 3.0,
+    "no_step": true,
+    "steps": 0
+   }
+  },
+  {
+   "name": "falseticker_among_four",
+   "description": "Four sources, one 50 ms off: it is marked x and the clock follows the three good ones.",
+   "pools": [
+    [
+     "pool.example.com",
+     4
+    ]
+   ],
+   "servers": [
+    {
+     "offset_ms": 0.0
+    },
+    {
+     "offset_ms": 0.3
+    },
+    {
+     "offset_ms": -0.2
+    },
+    {
+     "offset_ms": 50.0
+    }
+   ],
+   "duration_s": 900,
+   "seed": 13,
+   "expect": {
+    "synced": true,
+    "falsetickers": [
+     3
+    ],
+    "max_final_error_ms": 1.0,
+    "max_error_bounds_error": true
+   }
+  },
+  {
+   "name": "falseticker_two_good_not_synced",
+   "description": "Three sources, one 50 ms off: it is marked x, but only two consistent sources remain, below minsources 3: not synced.",
+   "pools": [
+    [
+     "pool.example.com",
+     3
+    ]
+   ],
+   "servers": [
+    {
+     "offset_ms": 0.0
+    },
+    {
+     "offset_ms": 0.3
+    },
+    {
+     "offset_ms": 50.0
+    }
+   ],
+   "duration_s": 900,
+   "seed": 14,
+   "expect": {
+    "synced": false,
+    "falsetickers": [
+     2
+    ]
+   }
+  },
+  {
+   "name": "falseticker_two_good_minsources_2",
+   "description": "Same as above with minsources 2: the clock follows the two good ones.",
+   "pools": [
+    [
+     "pool.example.com",
+     3
+    ]
+   ],
+   "min_sources": 2,
+   "servers": [
+    {
+     "offset_ms": 0.0
+    },
+    {
+     "offset_ms": 0.3
+    },
+    {
+     "offset_ms": 50.0
+    }
+   ],
+   "duration_s": 900,
+   "seed": 15,
+   "expect": {
+    "synced": true,
+    "falsetickers": [
+     2
+    ],
+    "used": [
+     0,
+     1
+    ],
+    "max_final_error_ms": 1.0
+   }
+  },
+  {
+   "name": "only_two_sources",
+   "description": "Only two sources reachable: never synced (minsources 3).",
+   "pools": [
+    [
+     "pool.example.com",
+     2
+    ]
+   ],
+   "servers": [
+    {},
+    {
+     "offset_ms": 0.1
+    }
+   ],
+   "duration_s": 900,
+   "seed": 16,
+   "expect": {
+    "synced": false
+   }
+  },
+  {
+   "name": "combine_comparable",
+   "description": "Four sources of comparable quality are combined (* and +).",
+   "pools": [
+    [
+     "pool.example.com",
+     4
+    ]
+   ],
+   "servers": [
+    {
+     "up_ms": 5,
+     "down_ms": 5,
+     "jitter_ms": 0.3,
+     "offset_ms": 0.0
+    },
+    {
+     "up_ms": 5,
+     "down_ms": 5,
+     "jitter_ms": 0.3,
+     "offset_ms": 0.05
+    },
+    {
+     "up_ms": 5,
+     "down_ms": 5,
+     "jitter_ms": 0.3,
+     "offset_ms": -0.05
+    },
+    {
+     "up_ms": 5,
+     "down_ms": 5,
+     "jitter_ms": 0.3,
+     "offset_ms": 0.02
+    }
+   ],
+   "duration_s": 1200,
+   "seed": 17,
+   "expect": {
+    "synced": true,
+    "min_combined": 3,
+    "max_final_error_ms": 0.5
+   }
+  },
+  {
+   "name": "no_combine_when_one_is_much_better",
+   "description": "One close, quiet source and three distant noisy ones: the close one is selected and the others are not combined, as on the Strom home-LAN baseline.",
+   "pools": [
+    [
+     "pool.example.com",
+     4
+    ]
+   ],
+   "servers": [
+    {
+     "up_ms": 0.5,
+     "down_ms": 0.5,
+     "jitter_ms": 0.02,
+     "root_delay_ms": 0.3,
+     "root_dispersion_ms": 0.1
+    },
+    {
+     "up_ms": 40,
+     "down_ms": 40,
+     "jitter_ms": 6,
+     "root_delay_ms": 30,
+     "root_dispersion_ms": 10,
+     "offset_ms": 1.0
+    },
+    {
+     "up_ms": 40,
+     "down_ms": 40,
+     "jitter_ms": 6,
+     "root_delay_ms": 30,
+     "root_dispersion_ms": 10,
+     "offset_ms": -1.0
+    },
+    {
+     "up_ms": 40,
+     "down_ms": 40,
+     "jitter_ms": 6,
+     "root_delay_ms": 30,
+     "root_dispersion_ms": 10,
+     "offset_ms": 0.5
+    }
+   ],
+   "duration_s": 1200,
+   "seed": 18,
+   "expect": {
+    "synced": true,
+    "used": [
+     0
+    ],
+    "max_combined": 1,
+    "max_final_error_ms": 0.2
+   }
+  },
+  {
+   "name": "kod_deny_drops_server",
+   "description": "A server answers Kiss-o'-Death DENY: it is no longer polled; the others keep the clock synced.",
+   "pools": [
+    [
+     "pool.example.com",
+     4
+    ]
+   ],
+   "servers": [
+    {},
+    {
+     "offset_ms": 0.1
+    },
+    {
+     "offset_ms": -0.1
+    },
+    {
+     "kod": "DENY"
+    }
+   ],
+   "duration_s": 900,
+   "seed": 19,
+   "expect": {
+    "synced": true,
+    "abandoned": [
+     3
+    ],
+    "max_requests": [
+     [
+      3,
+      1
+     ]
+    ]
+   }
+  },
+  {
+   "name": "kod_rate_backs_off",
+   "description": "A server answers Kiss-o'-Death RATE: the burst stops and the poll backs off (4 extra poll intervals).",
+   "pools": [
+    [
+     "pool.example.com",
+     4
+    ]
+   ],
+   "servers": [
+    {},
+    {
+     "offset_ms": 0.1
+    },
+    {
+     "offset_ms": -0.1
+    },
+    {
+     "kod": "RATE"
+    }
+   ],
+   "duration_s": 1800,
+   "seed": 20,
+   "expect": {
+    "synced": true,
+    "max_requests": [
+     [
+      3,
+      7
+     ]
+    ]
+   }
+  },
+  {
+   "name": "wifi_to_cellular",
+   "description": "Path change after 10 min from Wi-Fi to a jittery, asymmetric cellular path: samples reset, one new iburst, no step, error bounded by max error.",
+   "servers": [
+    {
+     "pool": 0,
+     "offset_ms": 0.1,
+     "up_ms": 8,
+     "down_ms": 8,
+     "jitter_ms": 0.5
+    },
+    {
+     "pool": 0,
+     "offset_ms": -0.15,
+     "up_ms": 9,
+     "down_ms": 9,
+     "jitter_ms": 0.7
+    },
+    {
+     "pool": 0,
+     "offset_ms": 0.05,
+     "up_ms": 10,
+     "down_ms": 10,
+     "jitter_ms": 0.9
+    },
+    {
+     "pool": 0,
+     "offset_ms": 0.2,
+     "up_ms": 11,
+     "down_ms": 11,
+     "jitter_ms": 1.1
+    },
+    {
+     "pool": 1,
+     "offset_ms": -0.1,
+     "up_ms": 12,
+     "down_ms": 12,
+     "jitter_ms": 1.3
+    },
+    {
+     "pool": 2,
+     "offset_ms": 0.0,
+     "up_ms": 13,
+     "down_ms": 13,
+     "jitter_ms": 1.5
+    },
+    {
+     "pool": 3,
+     "offset_ms": 0.12,
+     "up_ms": 14,
+     "down_ms": 14,
+     "jitter_ms": 1.7000000000000002
+    },
+    {
+     "pool": 3,
+     "offset_ms": -0.05,
+     "up_ms": 15,
+     "down_ms": 15,
+     "jitter_ms": 1.9000000000000001
+    }
+   ],
+   "host_freq_ppm": -12.0,
+   "duration_s": 1800,
+   "seed": 21,
+   "live_from_start": true,
+   "events": [
+    {
+     "kind": "path_change",
+     "at_s": 600,
+     "key": "cellular",
+     "up_ms": 45,
+     "down_ms": 25,
+     "jitter_ms": 8
+    }
+   ],
+   "expect": {
+    "synced": true,
+    "no_step": true,
+    "steps": 0,
+    "max_final_error_ms": 25.0,
+    "max_error_bounds_error": true
+   }
+  },
+  {
+   "name": "makestep_when_idle",
+   "description": "Platform clock 5 s off, not live: makestep 1.0 3 steps once in the first updates.",
+   "servers": [
+    {
+     "pool": 0,
+     "offset_ms": 0.1,
+     "up_ms": 8,
+     "down_ms": 8,
+     "jitter_ms": 0.5
+    },
+    {
+     "pool": 0,
+     "offset_ms": -0.15,
+     "up_ms": 9,
+     "down_ms": 9,
+     "jitter_ms": 0.7
+    },
+    {
+     "pool": 0,
+     "offset_ms": 0.05,
+     "up_ms": 10,
+     "down_ms": 10,
+     "jitter_ms": 0.9
+    },
+    {
+     "pool": 0,
+     "offset_ms": 0.2,
+     "up_ms": 11,
+     "down_ms": 11,
+     "jitter_ms": 1.1
+    },
+    {
+     "pool": 1,
+     "offset_ms": -0.1,
+     "up_ms": 12,
+     "down_ms": 12,
+     "jitter_ms": 1.3
+    },
+    {
+     "pool": 2,
+     "offset_ms": 0.0,
+     "up_ms": 13,
+     "down_ms": 13,
+     "jitter_ms": 1.5
+    },
+    {
+     "pool": 3,
+     "offset_ms": 0.12,
+     "up_ms": 14,
+     "down_ms": 14,
+     "jitter_ms": 1.7000000000000002
+    },
+    {
+     "pool": 3,
+     "offset_ms": -0.05,
+     "up_ms": 15,
+     "down_ms": 15,
+     "jitter_ms": 1.9000000000000001
+    }
+   ],
+   "wall_error_ms": 5000,
+   "duration_s": 600,
+   "seed": 22,
+   "expect": {
+    "synced": true,
+    "steps": 1,
+    "max_final_error_ms": 1.0
+   }
+  },
+  {
+   "name": "no_step_while_live",
+   "description": "Platform clock 5 s off while live: no step, slew at most 500 ppm, the max error covers the remaining offset; the step follows when the stream stops.",
+   "servers": [
+    {
+     "pool": 0,
+     "offset_ms": 0.1,
+     "up_ms": 8,
+     "down_ms": 8,
+     "jitter_ms": 0.5
+    },
+    {
+     "pool": 0,
+     "offset_ms": -0.15,
+     "up_ms": 9,
+     "down_ms": 9,
+     "jitter_ms": 0.7
+    },
+    {
+     "pool": 0,
+     "offset_ms": 0.05,
+     "up_ms": 10,
+     "down_ms": 10,
+     "jitter_ms": 0.9
+    },
+    {
+     "pool": 0,
+     "offset_ms": 0.2,
+     "up_ms": 11,
+     "down_ms": 11,
+     "jitter_ms": 1.1
+    },
+    {
+     "pool": 1,
+     "offset_ms": -0.1,
+     "up_ms": 12,
+     "down_ms": 12,
+     "jitter_ms": 1.3
+    },
+    {
+     "pool": 2,
+     "offset_ms": 0.0,
+     "up_ms": 13,
+     "down_ms": 13,
+     "jitter_ms": 1.5
+    },
+    {
+     "pool": 3,
+     "offset_ms": 0.12,
+     "up_ms": 14,
+     "down_ms": 14,
+     "jitter_ms": 1.7000000000000002
+    },
+    {
+     "pool": 3,
+     "offset_ms": -0.05,
+     "up_ms": 15,
+     "down_ms": 15,
+     "jitter_ms": 1.9000000000000001
+    }
+   ],
+   "wall_error_ms": 5000,
+   "duration_s": 1900,
+   "seed": 23,
+   "live_from_start": true,
+   "events": [
+    {
+     "kind": "set_live",
+     "at_s": 1800,
+     "live": false
+    }
+   ],
+   "expect": {
+    "steps": 1,
+    "max_final_error_ms": 1.0
+   }
+  },
+  {
+   "name": "lossy_mobile",
+   "description": "Mobile-like network: 20 % loss, 15 ms exponential jitter, 20 ms asymmetry.",
+   "servers": [
+    {
+     "pool": 0,
+     "offset_ms": 0.1,
+     "up_ms": 40,
+     "down_ms": 20,
+     "jitter_ms": 15,
+     "loss": 0.2
+    },
+    {
+     "pool": 0,
+     "offset_ms": -0.15,
+     "up_ms": 40,
+     "down_ms": 20,
+     "jitter_ms": 15,
+     "loss": 0.2
+    },
+    {
+     "pool": 0,
+     "offset_ms": 0.05,
+     "up_ms": 40,
+     "down_ms": 20,
+     "jitter_ms": 15,
+     "loss": 0.2
+    },
+    {
+     "pool": 0,
+     "offset_ms": 0.2,
+     "up_ms": 40,
+     "down_ms": 20,
+     "jitter_ms": 15,
+     "loss": 0.2
+    },
+    {
+     "pool": 1,
+     "offset_ms": -0.1,
+     "up_ms": 40,
+     "down_ms": 20,
+     "jitter_ms": 15,
+     "loss": 0.2
+    },
+    {
+     "pool": 2,
+     "offset_ms": 0.0,
+     "up_ms": 40,
+     "down_ms": 20,
+     "jitter_ms": 15,
+     "loss": 0.2
+    },
+    {
+     "pool": 3,
+     "offset_ms": 0.12,
+     "up_ms": 40,
+     "down_ms": 20,
+     "jitter_ms": 15,
+     "loss": 0.2
+    },
+    {
+     "pool": 3,
+     "offset_ms": -0.05,
+     "up_ms": 40,
+     "down_ms": 20,
+     "jitter_ms": 15,
+     "loss": 0.2
+    }
+   ],
+   "host_freq_ppm": 35.0,
+   "duration_s": 2400,
+   "seed": 24,
+   "expect": {
+    "synced": true,
+    "max_final_error_ms": 20.0,
+    "max_error_bounds_error": true,
+    "no_step": true
+   }
+  },
+  {
+   "name": "leap_second_announced",
+   "description": "2026-12-31: the sources announce a leap insert that is not in the built-in table; it is accepted by majority vote.",
+   "start_utc_s": 1798747200,
+   "servers": [
+    {
+     "pool": 0,
+     "offset_ms": 0.1,
+     "up_ms": 8,
+     "down_ms": 8,
+     "jitter_ms": 0.5,
+     "leap": 1
+    },
+    {
+     "pool": 0,
+     "offset_ms": -0.15,
+     "up_ms": 9,
+     "down_ms": 9,
+     "jitter_ms": 0.7,
+     "leap": 1
+    },
+    {
+     "pool": 0,
+     "offset_ms": 0.05,
+     "up_ms": 10,
+     "down_ms": 10,
+     "jitter_ms": 0.9,
+     "leap": 1
+    },
+    {
+     "pool": 0,
+     "offset_ms": 0.2,
+     "up_ms": 11,
+     "down_ms": 11,
+     "jitter_ms": 1.1,
+     "leap": 1
+    },
+    {
+     "pool": 1,
+     "offset_ms": -0.1,
+     "up_ms": 12,
+     "down_ms": 12,
+     "jitter_ms": 1.3,
+     "leap": 1
+    },
+    {
+     "pool": 2,
+     "offset_ms": 0.0,
+     "up_ms": 13,
+     "down_ms": 13,
+     "jitter_ms": 1.5,
+     "leap": 1
+    },
+    {
+     "pool": 3,
+     "offset_ms": 0.12,
+     "up_ms": 14,
+     "down_ms": 14,
+     "jitter_ms": 1.7000000000000002,
+     "leap": 1
+    },
+    {
+     "pool": 3,
+     "offset_ms": -0.05,
+     "up_ms": 15,
+     "down_ms": 15,
+     "jitter_ms": 1.9000000000000001,
+     "leap": 1
+    }
+   ],
+   "duration_s": 1800,
+   "seed": 25,
+   "expect": {
+    "synced": true,
+    "leap": "insert",
+    "tai_utc_s": 37
+   }
+  }
+ ]
+}

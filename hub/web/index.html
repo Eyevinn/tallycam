@@ -1,0 +1,1260 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>TallyCam Control</title>
+<style>
+:root {
+  --bg: #0d0f12;
+  --panel: #15181d;
+  --card: #1a1e24;
+  --raised: #232831;
+  --line: #2c323c;
+  --text: #e3e7ee;
+  --muted: #8a93a3;
+  --faint: #5b6372;
+  --accent: #4c9aff;
+  --pvw: #1fbf4f;
+  --pgm: #e5302f;
+  --warn: #f0a020;
+  --ok: #3ccf6e;
+  --radius: 6px;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font: 13px/1.35 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  display: flex;
+  flex-direction: column;
+}
+button, input, select { font: inherit; color: inherit; }
+header {
+  display: flex; align-items: center; gap: 12px;
+  padding: 8px 16px; border-bottom: 1px solid var(--line); background: var(--panel);
+  flex: none;
+}
+header h1 { font-size: 14px; font-weight: 600; margin: 0; letter-spacing: .04em; text-transform: uppercase; }
+header .spacer { flex: 1; }
+.conn { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); display: inline-block; flex: none; }
+.dot.on { background: var(--ok); }
+.dot.bad { background: var(--pgm); }
+main { flex: 1; display: flex; min-height: 0; }
+#grid {
+  flex: 1; overflow: auto; padding: 16px;
+  display: grid; gap: 12px; align-content: start;
+  grid-template-columns: repeat(auto-fill, minmax(270px, 1fr));
+}
+#empty { padding: 24px 0; grid-column: 1 / -1; display: flex; justify-content: center; }
+
+/* Add a camera (empty state and modal) */
+.add {
+  background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 20px; max-width: 760px; width: 100%;
+  display: flex; gap: 24px; flex-wrap: wrap; align-items: flex-start;
+}
+.add h2 { font-size: 16px; margin: 0 0 10px; font-weight: 600; }
+.add .qr { flex: none; width: 280px; max-width: 100%; }
+.add .qr img { display: block; width: 100%; aspect-ratio: 1; background: #fff; border-radius: 4px; image-rendering: pixelated; }
+.add .qr .noqr { aspect-ratio: 1; display: flex; align-items: center; justify-content: center; text-align: center;
+  border: 1px dashed var(--line); border-radius: 4px; color: var(--muted); padding: 16px; }
+.add .info { flex: 1; min-width: 240px; }
+.add ol { margin: 0 0 14px; padding-left: 20px; color: var(--text); }
+.add ol li { margin-bottom: 4px; }
+.add dl { margin: 0; display: grid; grid-template-columns: max-content 1fr; gap: 6px 10px; }
+.add dt { color: var(--muted); }
+.add dd { margin: 0; min-width: 0; }
+.add code { font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; word-break: break-all; color: var(--text); }
+.add select { background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 3px 6px; max-width: 100%; }
+.add .note { color: var(--muted); font-size: 12px; margin-top: 12px; }
+#modal {
+  position: fixed; inset: 0; background: rgba(0, 0, 0, .6); z-index: 50;
+  display: flex; align-items: flex-start; justify-content: center; padding: 48px 16px; overflow: auto;
+}
+#modal[hidden] { display: none; }
+#modal .add { position: relative; }
+#modal .add .btn.close { position: absolute; top: 10px; right: 10px; }
+
+/* Camera card */
+.card {
+  background: var(--card); border: 3px solid var(--line); border-radius: var(--radius);
+  overflow: hidden; cursor: pointer; display: flex; flex-direction: column;
+  transition: border-color .1s;
+}
+.card.selected { outline: 2px solid var(--accent); outline-offset: 1px; }
+.card.tally-preview { border-color: var(--pvw); }
+.card.tally-program { border-color: var(--pgm); }
+.card.offline .media, .card.offline .stats { opacity: .45; }
+.card-head { display: flex; align-items: center; gap: 8px; padding: 6px 8px; }
+.card-head .name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.card-head .model { color: var(--muted); font-size: 11px; margin-left: auto; white-space: nowrap; }
+.media { position: relative; background: #000; aspect-ratio: 16 / 9; }
+.media img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.media .overlay {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  color: var(--faint); font-size: 12px; text-transform: uppercase; letter-spacing: .08em;
+}
+.media .badge {
+  position: absolute; top: 6px; left: 6px; padding: 1px 6px; border-radius: 3px;
+  font-size: 11px; font-weight: 700; letter-spacing: .06em;
+}
+.badge.live { background: var(--pgm); color: #fff; }
+.badge.connecting { background: var(--warn); color: #000; }
+.badge.error { background: #7a1010; color: #fff; }
+.stats { display: flex; flex-wrap: wrap; gap: 4px 10px; padding: 6px 8px; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.stats b { color: var(--text); font-weight: 500; }
+.chip { padding: 0 5px; border-radius: 3px; background: var(--raised); color: var(--muted); }
+.chip.fair { color: #000; background: #d8c33a; }
+.chip.serious { color: #000; background: var(--warn); }
+.chip.critical { color: #fff; background: var(--pgm); }
+.chip.low { color: #fff; background: var(--pgm); }
+.chip.clk-healthy { color: #d9ffe6; background: #1d5f33; }
+.chip.clk-degraded { color: #000; background: var(--warn); }
+.chip.clk-bad { color: #fff; background: var(--pgm); }
+.clock-pre {
+  margin: 0; padding: 8px 10px; background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius);
+  font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: var(--text);
+  white-space: pre; overflow-x: auto;
+}
+.clock-pre .muted { color: var(--muted); }
+.card-actions { display: flex; gap: 6px; padding: 6px 8px 8px; }
+
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 4px; overflow: hidden; flex-wrap: wrap; }
+.seg button {
+  background: var(--raised); border: 0; border-right: 1px solid var(--line);
+  padding: 5px 9px; cursor: pointer; min-height: 28px;
+}
+.seg button:last-child { border-right: 0; }
+.seg button:hover:not(:disabled) { background: #2d3440; }
+.seg button.active { background: var(--accent); color: #fff; }
+.seg.tally button.active.t-off { background: #4a5160; }
+.seg.tally button.active.t-preview { background: var(--pvw); color: #04140a; }
+.seg.tally button.active.t-program { background: var(--pgm); color: #fff; }
+a.btn { color: inherit; text-decoration: none; display: inline-flex; align-items: center; }
+.btn {
+  background: var(--raised); border: 1px solid var(--line); border-radius: 4px;
+  padding: 5px 10px; cursor: pointer; min-height: 28px;
+}
+.btn:hover:not(:disabled) { background: #2d3440; }
+.btn:disabled, .seg button:disabled { opacity: .45; cursor: default; }
+.btn.golive { margin-left: auto; font-weight: 600; }
+.btn.golive.is-live { background: var(--pgm); border-color: var(--pgm); color: #fff; }
+
+/* Control panel */
+#panel {
+  width: 440px; flex: none; border-left: 1px solid var(--line); background: var(--panel);
+  overflow: auto; display: none;
+}
+#panel.open { display: block; }
+@media (max-width: 860px) {
+  #panel { position: fixed; inset: 0; width: auto; z-index: 10; border-left: 0; }
+}
+.p-head {
+  display: flex; align-items: center; gap: 8px; padding: 10px 16px;
+  border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--panel); z-index: 2;
+}
+.p-head .name { font-weight: 600; font-size: 14px; }
+.p-head .sub { color: var(--muted); font-size: 11px; }
+.p-head .close { margin-left: auto; }
+.p-body { padding: 12px 16px 24px; display: flex; flex-direction: column; gap: 14px; }
+.p-media { cursor: crosshair; border-radius: 4px; overflow: hidden; }
+.p-media.nofocus { cursor: default; }
+.marker {
+  position: absolute; width: 34px; height: 34px; margin: -17px 0 0 -17px;
+  border: 2px solid #ffd200; pointer-events: none; display: none;
+}
+.hint { color: var(--faint); font-size: 11px; margin-top: 4px; }
+.group h3 {
+  margin: 0 0 6px; font-size: 11px; font-weight: 600; color: var(--muted);
+  text-transform: uppercase; letter-spacing: .08em;
+}
+.group .rows { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); }
+.row {
+  display: grid; grid-template-columns: 110px 1fr; gap: 8px; align-items: center;
+  padding: 7px 10px; border-bottom: 1px solid var(--line);
+}
+.row:last-child { border-bottom: 0; }
+.row > label { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row.disabled > label { color: var(--faint); }
+.row.disabled .ctl { opacity: .5; }
+.ctl { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.ctl input[type=range] { flex: 1; min-width: 60px; accent-color: var(--accent); height: 24px; }
+.num {
+  width: 78px; text-align: right; background: var(--bg); border: 1px solid var(--line); border-radius: 4px;
+  padding: 3px 6px; font-variant-numeric: tabular-nums;
+}
+.unit { color: var(--faint); font-size: 11px; min-width: 26px; }
+.ctl select, .ctl input[type=text] {
+  flex: 1; min-width: 0; background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 4px 6px;
+}
+.ctl input.num { flex: none; }
+.toggle {
+  width: 42px; height: 22px; border-radius: 11px; border: 1px solid var(--line); background: var(--raised);
+  position: relative; cursor: pointer; padding: 0; flex: none;
+}
+.toggle::after {
+  content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%;
+  background: var(--muted); transition: left .1s;
+}
+.toggle.on { background: var(--accent); border-color: var(--accent); }
+.toggle.on::after { left: 22px; background: #fff; }
+.toggle:disabled { cursor: default; }
+.cmds { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.cmd { display: inline-flex; gap: 4px; align-items: center; }
+.cmd input { width: 52px; background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 3px 5px; }
+.msg { display: flex; gap: 6px; }
+.msg input { flex: 1; min-width: 0; background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 5px 8px; }
+#log {
+  background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius);
+  height: 150px; overflow: auto; padding: 6px 8px;
+  font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+#log .l { white-space: pre-wrap; word-break: break-word; }
+#log .t { color: var(--faint); margin-right: 6px; }
+#log .warn { color: var(--warn); }
+#log .error { color: #ff6b6b; }
+#log .info { color: var(--text); }
+#log .debug { color: var(--muted); }
+.offline-note { color: var(--warn); font-size: 12px; }
+.offline-note:empty { display: none; }
+</style>
+</head>
+<body>
+<header>
+  <h1>TallyCam Control</h1>
+  <span class="conn"><span class="dot" id="conn-dot"></span><span id="conn-text">connecting</span></span>
+  <span class="spacer"></span>
+  <span class="conn" id="count"></span>
+  <a class="btn" id="clapper" href="/clapper" target="_blank" title="Flash and beep on every whole second: film it to check A/V sync">Clapper</a>
+  <button class="btn" id="add-camera" type="button">Add camera</button>
+</header>
+<main>
+  <div id="grid"><div id="empty"></div></div>
+  <aside id="panel"></aside>
+</main>
+<div id="modal" hidden></div>
+<!--TALLYCAM_CONFIG-->
+<script>
+"use strict";
+
+// ---------------------------------------------------------------------------
+// Where this page finds its hub. The standalone hub serves it as is; a server
+// that embeds the hub (Strom) replaces the TALLYCAM_CONFIG comment above with
+// a script that sets window.TALLYCAM_CONFIG, overriding any of these.
+// ---------------------------------------------------------------------------
+
+const CONFIG = Object.assign({
+  // Controller WebSocket path on this host.
+  controlPath: "/lcp/v0/control",
+  // GET: addresses and deep links (standalone hub, provisioning v0).
+  infoUrl: "/api/info",
+  // GET ?target=<i>: the deep link of one target as a QR code.
+  qrUrl: "/api/connect.svg",
+  // The clapper page, or null to hide the button.
+  clapperUrl: "/clapper",
+  // POST: a one-time invite { deep_link, control_url, qr_svg, expires_in_secs }.
+  // When set it replaces infoUrl and qrUrl.
+  inviteUrl: null,
+  // DELETE <devicesUrl>/<device id>: forget (revoke) a camera, or null to
+  // hide the button.
+  devicesUrl: null,
+  // Page title and header.
+  title: "TallyCam Control",
+  // True when the server needs an operator token: the page takes it from
+  // its URL fragment (#token=..., never sent to the server), keeps it for
+  // the tab, and sends it with invites, forgets and the controller socket.
+  operatorToken: false,
+}, window.TALLYCAM_CONFIG || {});
+
+const OPERATOR_TOKEN = (() => {
+  if (!CONFIG.operatorToken) return null;
+  const m = location.hash.match(/token=([^&]+)/);
+  if (m) {
+    // Kept decoded, as it is used: a reload reads it back from storage.
+    let token = m[1];
+    try { token = decodeURIComponent(token); } catch (e) { /* malformed escape: use as is */ }
+    try { sessionStorage.setItem("operatorToken", token); } catch (e) { /* private mode */ }
+    history.replaceState(null, "", location.pathname + location.search);
+    return token;
+  }
+  try { return sessionStorage.getItem("operatorToken"); } catch (e) { return null; }
+})();
+
+function operatorHeaders() {
+  return OPERATOR_TOKEN ? { "X-Operator-Token": OPERATOR_TOKEN } : {};
+}
+
+// ---------------------------------------------------------------------------
+// State
+// ---------------------------------------------------------------------------
+
+const devices = new Map();   // id -> device record (see addDevice)
+const order = [];            // card order
+let ws = null;
+let selected = null;         // device id shown in the panel
+let panel = null;            // { id, updaters: Map(controlId -> fn), logEl, media, msgButton }
+let nextId = Math.floor(Math.random() * 1e6) * 1000;
+const pending = new Map();   // set/command id -> description, for failed results
+const GROUP_ORDER = ["stream", "lens", "exposure", "white_balance", "focus", "image", "audio"];
+const LOG_MAX = 300;
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function el(tag, attrs, ...children) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (v === null || v === undefined || v === false) continue;
+    if (k === "class") e.className = v;
+    else if (k.startsWith("on")) e.addEventListener(k.slice(2), v);
+    else e.setAttribute(k, v === true ? "" : v);
+  }
+  for (const c of children.flat()) {
+    if (c === null || c === undefined || c === false) continue;
+    e.append(c instanceof Node ? c : document.createTextNode(String(c)));
+  }
+  return e;
+}
+
+function same(a, b) {
+  if (typeof a === "number" || typeof b === "number") return Number(a) === Number(b);
+  return a === b;
+}
+
+function prettyGroup(g) {
+  return (g || "other").replace(/_/g, " ");
+}
+
+function decimalsFor(step) {
+  if (!step || step >= 1) return 0;
+  return Math.min(6, Math.max(0, Math.ceil(-Math.log10(step) - 1e-9)));
+}
+
+function fmtNum(v, step) {
+  if (typeof v !== "number" || !isFinite(v)) return v === undefined || v === null ? "" : String(v);
+  return v.toFixed(decimalsFor(step));
+}
+
+function now() {
+  return new Date().toTimeString().slice(0, 8);
+}
+
+function send(obj) {
+  if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
+}
+
+function sendSet(device, values, withId) {
+  const msg = { type: "set", device, values };
+  if (withId) {
+    msg.id = ++nextId;
+    pending.set(msg.id, { device, what: "set " + Object.keys(values).join(", ") });
+  }
+  send(msg);
+}
+
+function sendCommand(device, name, args) {
+  const id = ++nextId;
+  pending.set(id, { device, what: "command " + name });
+  const msg = { type: "command", device, id, name };
+  if (args && Object.keys(args).length) msg.args = args;
+  send(msg);
+}
+
+function addLog(id, level, text) {
+  const d = devices.get(id);
+  if (!d) return;
+  const entry = { t: now(), level: level || "info", text: String(text) };
+  d.log.push(entry);
+  if (d.log.length > LOG_MAX) d.log.shift();
+  if (panel && panel.id === id) appendLogLine(entry);
+}
+
+// ---------------------------------------------------------------------------
+// Device records
+// ---------------------------------------------------------------------------
+
+function addDevice(id) {
+  let d = devices.get(id);
+  if (d) return d;
+  d = {
+    id, info: { id, name: id }, controls: [], commands: [], state: {}, status: null,
+    preview: null, tally: "off", online: false, log: [], card: null, keyFingerprint: null,
+  };
+  devices.set(id, d);
+  order.push(id);
+  return d;
+}
+
+function controlById(d, cid) {
+  return d.controls.find(c => c.id === cid);
+}
+
+function isEnabled(d, c) {
+  if (c.readonly) return false;
+  if (!d.online) return false;
+  const cond = c.enabled_when;
+  if (!cond) return true;
+  // A list means any of its values.
+  return Object.entries(cond).every(([k, v]) =>
+    Array.isArray(v) ? v.some(x => same(d.state[k], x)) : same(d.state[k], v));
+}
+
+// ---------------------------------------------------------------------------
+// Cards
+// ---------------------------------------------------------------------------
+
+function buildCard(d) {
+  const img = el("img", { alt: "" });
+  img.style.display = "none";
+  const overlay = el("div", { class: "overlay" });
+  const badge = el("span", { class: "badge" });
+  badge.style.display = "none";
+  const tally = el("div", { class: "seg tally" },
+    ["off", "preview", "program"].map(t =>
+      el("button", {
+        class: "t-" + t, "data-t": t, title: "Tally " + t,
+        onclick: ev => { ev.stopPropagation(); send({ type: "tally", device: d.id, state: t }); },
+      }, t === "off" ? "Off" : t === "preview" ? "Preview" : "Program")));
+  const golive = el("button", {
+    class: "btn golive",
+    onclick: ev => {
+      ev.stopPropagation();
+      sendSet(d.id, { live: d.state.live !== true }, true);
+    },
+  }, "Go Live");
+  const card = el("div", { class: "card", onclick: () => select(d.id) },
+    el("div", { class: "card-head" },
+      el("span", { class: "dot" }), el("span", { class: "name" }), el("span", { class: "model" })),
+    el("div", { class: "media" }, img, overlay, badge),
+    el("div", { class: "stats" }),
+    el("div", { class: "card-actions" }, tally, golive));
+  d.card = { root: card, img, overlay, badge, tally, golive };
+  return card;
+}
+
+function renderGrid() {
+  const grid = document.getElementById("grid");
+  const empty = document.getElementById("empty");
+  empty.style.display = order.length ? "none" : "";
+  for (const id of order) {
+    const d = devices.get(id);
+    if (!d.card) grid.append(buildCard(d));
+    updateCard(d);
+  }
+  const online = order.filter(id => devices.get(id).online).length;
+  document.getElementById("count").textContent =
+    order.length ? `${online} online / ${order.length} cameras` : "";
+}
+
+function updateCard(d) {
+  const c = d.card;
+  if (!c) return;
+  const r = c.root;
+  r.classList.toggle("offline", !d.online);
+  r.classList.toggle("selected", selected === d.id);
+  r.classList.toggle("tally-preview", d.tally === "preview");
+  r.classList.toggle("tally-program", d.tally === "program");
+  r.querySelector(".card-head .dot").className = "dot" + (d.online ? " on" : "");
+  const name = r.querySelector(".card-head .name");
+  name.textContent = d.info.name || d.id;
+  name.title = d.id;
+  r.querySelector(".card-head .model").textContent = d.info.model || "";
+
+  updateMedia(d, c.img, c.overlay);
+  const st = d.status && d.status.stream;
+  const sstate = st && st.state;
+  if (d.online && sstate && sstate !== "idle") {
+    c.badge.style.display = "";
+    c.badge.className = "badge " + sstate;
+    c.badge.textContent = sstate.toUpperCase();
+    c.badge.title = st.error || "";
+  } else {
+    c.badge.style.display = "none";
+  }
+
+  r.querySelector(".stats").replaceChildren(...statusBits(d));
+
+  for (const b of c.tally.children) b.classList.toggle("active", b.dataset.t === d.tally);
+  const live = controlById(d, "live");
+  c.golive.style.display = live ? "" : "none";
+  const isLive = d.state.live === true;
+  c.golive.textContent = isLive ? "Stop" : "Go Live";
+  c.golive.classList.toggle("is-live", isLive);
+  c.golive.disabled = !d.online || (live && !isEnabled(d, live));
+}
+
+function updateMedia(d, img, overlay) {
+  if (d.preview && d.preview.jpeg) {
+    const src = "data:image/jpeg;base64," + d.preview.jpeg;
+    if (img.src !== src) img.src = src;
+    img.style.display = "";
+  } else {
+    img.style.display = "none";
+  }
+  overlay.textContent = !d.online ? "Offline" : (d.preview ? "" : "No preview");
+  overlay.style.background = !d.online && d.preview ? "rgba(0,0,0,.55)" : "";
+}
+
+function statusBits(d) {
+  const s = d.status;
+  const out = [];
+  if (!d.online) out.push(el("span", { class: "chip" }, "OFFLINE"));
+  if (!s) { if (d.online) out.push(el("span", {}, "no status yet")); return out; }
+  if (s.battery && typeof s.battery.level === "number") {
+    const pct = Math.round(s.battery.level * 100);
+    out.push(el("span", { class: pct < 20 ? "chip low" : "" },
+      "BAT ", el("b", {}, pct + "%"), s.battery.charging ? " chg" : ""));
+  }
+  if (s.thermal) out.push(el("span", { class: "chip " + s.thermal }, s.thermal));
+  const st = s.stream;
+  if (st) {
+    if (st.state === "live") {
+      if (typeof st.bitrate_kbps === "number")
+        out.push(el("span", {}, el("b", {}, (st.bitrate_kbps / 1000).toFixed(1)), " Mb/s"));
+      if (typeof st.rtt_ms === "number")
+        out.push(el("span", {}, "RTT ", el("b", {}, Math.round(st.rtt_ms)), " ms"));
+      if (st.dropped) out.push(el("span", { class: "chip serious" }, st.dropped + " dropped"));
+      if (st.latency) out.push(latencyBit(st));
+    } else {
+      out.push(el("span", { title: st.error || "" }, st.state + (st.error ? ": " + st.error : "")));
+    }
+  }
+  if (s.network) out.push(el("span", {}, s.network));
+  if (s.clock) out.push(clockBit(s.clock));
+  return out;
+}
+
+// The phone's own clock discipline (status.clock): health (same model as
+// Strom's clock health), estimated / maximum error, stratum and how many
+// sources are selected (*) and combined (+). The tooltip lists the sources
+// like `chronyc sources`.
+function fmtUs(us) {
+  if (typeof us !== "number") return "?";
+  const a = Math.abs(us);
+  if (a >= 1e6) return (us / 1e6).toFixed(2) + " s";
+  if (a >= 1000) return (us / 1000).toFixed(a >= 1e5 ? 0 : 1) + " ms";
+  return Math.round(us) + " \u00b5s";
+}
+
+function clockSourcesText(c) {
+  const rows = (c.sources || []).map(s => {
+    const off = typeof s.offset_us === "number" ? (s.offset_us >= 0 ? "+" : "") + fmtUs(s.offset_us) : "";
+    const err = typeof s.error_us === "number" ? "+/- " + fmtUs(s.error_us) : "";
+    const ago = typeof s.last_rx_s === "number" ? String(s.last_rx_s) : "-";
+    return "^" + (s.state || "?") + " " + String(s.addr || s.name || "").padEnd(28) + " " +
+      String(s.stratum ?? "").padStart(2) + " " + String(s.poll ?? "").padStart(4) + " " +
+      (typeof s.reach === "number" ? s.reach.toString(8) : "").padStart(5) + " " + ago.padStart(6) + "  " +
+      off.padStart(9) + " " + err;
+  });
+  return "MS Name/IP address              St Poll Reach LastRx  Last sample\n" + rows.join("\n");
+}
+
+function clockSummaryText(c) {
+  const lines = [
+    "Health: " + (c.health || "?") + (c.synced ? ", synchronised" : ", NOT synchronised"),
+    ...(c.findings || []).map(f => "  - " + f),
+    "Reference: " + (c.reference ? c.reference + (c.reference_name ? " (" + c.reference_name + ")" : "") : "-") +
+      ", stratum " + (c.stratum ?? 0),
+    "Est. error " + fmtUs(c.est_error_us) + ", max error " + fmtUs(c.max_error_us) +
+      ", correction in flight " + fmtUs((c.system_offset_ns ?? 0) / 1000),
+    "Last offset " + fmtUs((c.last_offset_ns ?? 0) / 1000) + ", RMS " + fmtUs((c.rms_offset_ns ?? 0) / 1000) +
+      ", update interval " + (c.update_interval_s ?? 0) + " s",
+    "Frequency " + (c.freq_ppm ?? 0).toFixed(3) + " ppm, skew " + (c.skew_ppm ?? 0).toFixed(3) + " ppm",
+    "Root delay " + fmtUs(c.root_delay_us) + ", root dispersion " + fmtUs(c.root_dispersion_us),
+    "Timescale " + (c.timescale || "?").toUpperCase() + ", TAI - UTC " + (c.tai_utc_s ?? "?") + " s, leap " + (c.leap || "?"),
+  ];
+  if (typeof c.device_offset_ms === "number") lines.push("Phone wall clock is " + (-c.device_offset_ms).toFixed(1) + " ms off");
+  return lines.join("\n");
+}
+
+function clockBit(c) {
+  const level = c.health || (c.synced ? "healthy" : "bad");
+  const title = clockSummaryText(c) + "\n\nSources (" + (c.reachable ?? 0) + "/" + (c.total ?? 0) +
+    " reachable):\n" + clockSourcesText(c);
+  const label = c.synced ? "CLK" : "UNSYNCED";
+  const parts = [label];
+  if (c.synced) {
+    parts.push(" \u00b1", el("b", {}, fmtUs(c.est_error_us)), " max " + fmtUs(c.max_error_us));
+    parts.push(" st" + (c.stratum ?? 0));
+  }
+  parts.push(" " + (c.selected ?? 0) + "*" + (c.combined ?? 0) + "+");
+  return el("span", { class: "chip clk-" + level, title }, ...parts);
+}
+
+// The phone's send pipeline latency (status.stream.latency): p50 / p95 / max
+// per stage over the last second, plus the SRT latency the listener agreed.
+const LATENCY_STAGES = [
+  ["capture_to_encode_ms", "capture to encoder"],
+  ["encode_ms", "encode"],
+  ["mux_ms", "mux (TS)"],
+  ["send_queue_ms", "send queue (first packet)"],
+  ["send_frame_ms", "send queue (last packet)"],
+  ["capture_to_send_ms", "capture to first packet sent"],
+  ["audio_capture_to_encode_ms", "audio capture to encoder"],
+  ["audio_encode_ms", "audio encode"],
+  ["audio_capture_to_mux_ms", "audio capture to mux"],
+];
+
+function latencyText(st) {
+  const l = st.latency || {};
+  const f = v => (typeof v === "number" ? v.toFixed(1) : "-").padStart(6);
+  const rows = LATENCY_STAGES.map(([k, label]) => {
+    const p = l[k];
+    return label.padEnd(30) + (p ? f(p.p50) + f(p.p95) + f(p.max) : "     -");
+  });
+  const lines = ["Stage (ms)                       p50   p95   max", ...rows];
+  if (typeof st.srt_latency_ms === "number") lines.push("", "SRT latency (agreed) " + st.srt_latency_ms + " ms");
+  if (st.late_video_frames || st.late_audio_frames)
+    lines.push("Late (after PCR deadline): video " + (st.late_video_frames || 0) + ", audio " + (st.late_audio_frames || 0));
+  return lines.join("\n");
+}
+
+function latencyBit(st) {
+  const send = st.latency && st.latency.capture_to_send_ms;
+  const parts = ["LAT ", el("b", {}, send ? Math.round(send.p50) : "-"), " ms"];
+  if (typeof st.srt_latency_ms === "number") parts.push(" + SRT " + st.srt_latency_ms);
+  const late = (st.late_video_frames || 0) + (st.late_audio_frames || 0);
+  return el("span", { class: "chip" + (late ? " serious" : ""), title: latencyText(st) }, ...parts);
+}
+
+function updateLatencyPanel(d) {
+  if (!panel || panel.id !== d.id || !panel.latencyEl) return;
+  const st = d.status && d.status.stream;
+  panel.latencyEl.textContent = st && st.latency ? latencyText(st) : "Not live.";
+}
+
+function updateClockPanel(d) {
+  if (!panel || panel.id !== d.id || !panel.clockEl) return;
+  const c = d.status && d.status.clock;
+  panel.clockEl.textContent = c ? clockSummaryText(c) + "\n\n" + clockSourcesText(c) : "No clock status from this camera.";
+}
+
+// ---------------------------------------------------------------------------
+// Control panel
+// ---------------------------------------------------------------------------
+
+function select(id) {
+  selected = id;
+  for (const d of devices.values()) updateCard(d);
+  buildPanel();
+}
+
+function closePanel() {
+  selected = null;
+  panel = null;
+  const p = document.getElementById("panel");
+  p.classList.remove("open");
+  p.replaceChildren();
+  for (const d of devices.values()) updateCard(d);
+}
+
+function buildPanel() {
+  const p = document.getElementById("panel");
+  const d = selected && devices.get(selected);
+  if (!d) { closePanel(); return; }
+  p.classList.add("open");
+  const scroll = p.scrollTop;
+  panel = { id: d.id, updaters: new Map() };
+
+  // Preview with click-to-focus.
+  const hasFocusAt = d.commands.some(c => c.name === "focus_at");
+  const img = el("img", { alt: "" });
+  const overlay = el("div", { class: "overlay" });
+  const marker = el("div", { class: "marker" });
+  const media = el("div", { class: "media p-media" + (hasFocusAt ? "" : " nofocus") }, img, overlay, marker);
+  if (hasFocusAt) {
+    media.addEventListener("click", ev => {
+      if (!d.online) return;
+      const r = media.getBoundingClientRect();
+      // The image is letterboxed inside a 16:9 box; map to the frame itself.
+      const iw = d.preview && d.preview.width, ih = d.preview && d.preview.height;
+      let fx = 0, fy = 0, fw = r.width, fh = r.height;
+      if (iw && ih) {
+        const s = Math.min(r.width / iw, r.height / ih);
+        fw = iw * s; fh = ih * s; fx = (r.width - fw) / 2; fy = (r.height - fh) / 2;
+      }
+      const x = (ev.clientX - r.left - fx) / fw, y = (ev.clientY - r.top - fy) / fh;
+      if (x < 0 || x > 1 || y < 0 || y > 1) return;
+      sendCommand(d.id, "focus_at", { x: Math.round(x * 1000) / 1000, y: Math.round(y * 1000) / 1000 });
+      marker.style.left = (ev.clientX - r.left) + "px";
+      marker.style.top = (ev.clientY - r.top) + "px";
+      marker.style.display = "block";
+      clearTimeout(marker._t);
+      marker._t = setTimeout(() => { marker.style.display = "none"; }, 1200);
+    });
+  }
+  panel.media = { img, overlay };
+
+  const body = el("div", { class: "p-body" },
+    el("div", {}, media, hasFocusAt ? el("div", { class: "hint" }, "Click the picture to focus and expose at that point.") : null),
+    el("div", { class: "offline-note", id: "offline-note" }));
+
+  // Commands.
+  const cmds = d.commands.filter(c => c.name);
+  if (cmds.length) {
+    body.append(el("div", { class: "group" }, el("h3", {}, "Commands"),
+      el("div", { class: "cmds" }, cmds.map(c => commandWidget(d, c)))));
+  }
+
+  // Controls grouped by group, suggested groups first.
+  const groups = new Map();
+  for (const c of d.controls) {
+    const g = c.group || "other";
+    if (!groups.has(g)) groups.set(g, []);
+    groups.get(g).push(c);
+  }
+  const names = [...groups.keys()].sort((a, b) => {
+    const ia = GROUP_ORDER.indexOf(a), ib = GROUP_ORDER.indexOf(b);
+    return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
+  });
+  for (const g of names) {
+    body.append(el("div", { class: "group" }, el("h3", {}, prettyGroup(g)),
+      el("div", { class: "rows" }, groups.get(g).map(c => controlRow(d, c)))));
+  }
+
+  // Send pipeline latency of the phone.
+  const latencyEl = el("pre", { class: "clock-pre" });
+  panel.latencyEl = latencyEl;
+  body.append(el("div", { class: "group" }, el("h3", {}, "Latency"), latencyEl));
+  updateLatencyPanel(d);
+
+  // Clock discipline of the phone.
+  const clockEl = el("pre", { class: "clock-pre" });
+  panel.clockEl = clockEl;
+  body.append(el("div", { class: "group" }, el("h3", {}, "Clock"), clockEl));
+  updateClockPanel(d);
+
+  // Message to the phone.
+  const msgInput = el("input", { type: "text", placeholder: "Message to the camera operator" });
+  const sendMsg = () => {
+    const text = msgInput.value.trim();
+    if (!text) return;
+    send({ type: "message", device: d.id, text });
+    addLog(d.id, "debug", "message sent: " + text);
+    msgInput.value = "";
+  };
+  msgInput.addEventListener("keydown", ev => { if (ev.key === "Enter") sendMsg(); });
+  panel.msgButton = el("button", { class: "btn", onclick: sendMsg }, "Send");
+  body.append(el("div", { class: "group" }, el("h3", {}, "Message"),
+    el("div", { class: "msg" }, msgInput, panel.msgButton)));
+
+  // Log.
+  const log = el("div", { id: "log" });
+  panel.logEl = log;
+  body.append(el("div", { class: "group" }, el("h3", {}, "Log"), log));
+
+  const info = d.info || {};
+  const sub = [info.model, info.platform && (info.platform + " " + (info.os_version || "")), info.app_version && ("app " + info.app_version)]
+    .filter(Boolean).join(" · ");
+  const keyLine = d.keyFingerprint
+    ? el("div", { class: "sub", title: "Device key SHA-256 " + d.keyFingerprint }, "key " + shortFingerprint(d.keyFingerprint))
+    : el("div", { class: "sub", title: "This camera joined without a device key (an older app)" }, "no device key");
+  const forget = CONFIG.devicesUrl
+    ? el("button", { class: "btn", onclick: () => forgetDevice(d), title: "Disconnect this camera and revoke its key" }, "Forget")
+    : null;
+  p.replaceChildren(
+    el("div", { class: "p-head" },
+      el("span", { class: "dot" + (d.online ? " on" : "") }),
+      el("div", {}, el("div", { class: "name" }, info.name || d.id), el("div", { class: "sub" }, sub), keyLine),
+      forget,
+      el("button", { class: "btn close", onclick: closePanel, title: "Close (Esc)" }, "Close")),
+    body);
+  p.scrollTop = scroll;
+  for (const e of d.log) appendLogLine(e);
+  updatePanel();
+}
+
+function commandWidget(d, c) {
+  const argNames = c.args ? Object.keys(c.args) : [];
+  const inputs = argNames.map(a => el("input", {
+    type: "number", step: "any", placeholder: a, title: a + " (" + c.args[a] + ")",
+  }));
+  const btn = el("button", {
+    class: "btn",
+    onclick: () => {
+      const args = {};
+      inputs.forEach((inp, i) => {
+        if (inp.value !== "") args[argNames[i]] = Number(inp.value);
+      });
+      sendCommand(d.id, c.name, args);
+    },
+  }, c.label || c.name);
+  return el("span", { class: "cmd" }, btn, inputs);
+}
+
+function controlRow(d, c) {
+  const label = el("label", { title: c.id }, c.label || c.id);
+  const ctl = el("div", { class: "ctl" });
+  const row = el("div", { class: "row" }, label, ctl);
+  let update;
+  switch (c.kind) {
+    case "range": update = rangeControl(d, c, ctl); break;
+    case "enum": update = enumControl(d, c, ctl); break;
+    case "bool": update = boolControl(d, c, ctl); break;
+    case "text": update = textControl(d, c, ctl); break;
+    default: {
+      const span = el("span", {});
+      ctl.append(span);
+      update = v => { span.textContent = v === undefined ? "" : JSON.stringify(v); };
+    }
+  }
+  panel.updaters.set(c.id, (value, enabled) => {
+    row.classList.toggle("disabled", !enabled);
+    row.title = enabled || !c.enabled_when ? "" :
+      "Writable when " + Object.entries(c.enabled_when)
+        .map(([k, v]) => k + " = " + (Array.isArray(v) ? v.join(" or ") : v)).join(", ");
+    update(value, enabled);
+  });
+  return row;
+}
+
+function rangeControl(d, c, ctl) {
+  const min = Number(c.min ?? 0), max = Number(c.max ?? 100);
+  const step = c.step ? Number(c.step) : 0;
+  const isLog = c.scale === "log" && min > 0 && max > min;
+  const POS = 1000;
+  const toPos = v => isLog ? Math.round(Math.log(v / min) / Math.log(max / min) * POS) : v;
+  const fromPos = p => {
+    let v = isLog ? min * Math.pow(max / min, p / POS) : Number(p);
+    if (step > 0) v = min + Math.round((v - min) / step) * step;
+    v = Math.min(max, Math.max(min, v));
+    return Number(v.toFixed(step > 0 ? decimalsFor(step) : 3));
+  };
+  const slider = el("input", { type: "range" });
+  if (isLog) { slider.min = 0; slider.max = POS; slider.step = 1; }
+  else { slider.min = min; slider.max = max; slider.step = step > 0 ? step : "any"; }
+  const num = el("input", { class: "num", type: "text", inputmode: "decimal" });
+  const unit = el("span", { class: "unit" }, c.unit || "");
+  ctl.append(slider, num, unit);
+
+  let dragging = false, settleTimer = null;
+  let lastSent = 0, timer = null, queued = null;
+  const flush = withId => {
+    clearTimeout(timer); timer = null;
+    if (queued === null) return;
+    lastSent = performance.now();
+    sendSet(d.id, { [c.id]: queued }, withId);
+    queued = null;
+  };
+  const showReported = () => {
+    const v = d.state[c.id];
+    if (typeof v === "number") slider.value = toPos(v);
+  };
+  // "input" fires while dragging (throttled to ~10/s), "change" on release.
+  slider.addEventListener("input", () => {
+    dragging = true;
+    clearTimeout(settleTimer);
+    queued = fromPos(slider.value);
+    const wait = 100 - (performance.now() - lastSent);
+    if (wait <= 0) flush(false);
+    else if (!timer) timer = setTimeout(() => flush(false), wait);
+  });
+  slider.addEventListener("change", () => {
+    queued = fromPos(slider.value);
+    flush(true);
+    dragging = false;
+    // Snap to the reported value once the phone had a moment to answer.
+    clearTimeout(settleTimer);
+    settleTimer = setTimeout(showReported, 600);
+  });
+  const applyNum = () => {
+    const v = Number(num.value);
+    if (num.value.trim() === "" || !isFinite(v)) { num.value = fmtNum(d.state[c.id], step); return; }
+    sendSet(d.id, { [c.id]: v }, true);
+    num.blur();
+  };
+  num.addEventListener("keydown", ev => {
+    if (ev.key === "Enter") applyNum();
+    if (ev.key === "Escape") { num.value = fmtNum(d.state[c.id], step); num.blur(); }
+  });
+  num.addEventListener("blur", () => { num.value = fmtNum(d.state[c.id], step); });
+
+  return (value, enabled) => {
+    slider.disabled = !enabled;
+    num.disabled = !enabled;
+    if (document.activeElement !== num) num.value = fmtNum(value, step);
+    if (!dragging && typeof value === "number") slider.value = toPos(value);
+  };
+}
+
+function enumControl(d, c, ctl) {
+  const opts = c.options || [];
+  const shortLabels = opts.every(o => String(o.label ?? o.value).length <= 12);
+  if (opts.length <= 6 && shortLabels) {
+    const seg = el("div", { class: "seg" });
+    const buttons = opts.map(o => el("button", {
+      onclick: () => sendSet(d.id, { [c.id]: o.value }, true),
+    }, String(o.label ?? o.value)));
+    seg.append(...buttons);
+    ctl.append(seg);
+    return (value, enabled) => {
+      buttons.forEach((b, i) => {
+        b.classList.toggle("active", same(opts[i].value, value));
+        b.disabled = !enabled;
+      });
+    };
+  }
+  const sel = el("select", {});
+  opts.forEach((o, i) => sel.append(el("option", { value: String(i) }, String(o.label ?? o.value))));
+  const unknown = el("option", { value: "" }, "");
+  sel.append(unknown);
+  sel.addEventListener("change", () => {
+    const o = opts[Number(sel.value)];
+    if (o) sendSet(d.id, { [c.id]: o.value }, true);
+  });
+  ctl.append(sel);
+  return (value, enabled) => {
+    sel.disabled = !enabled;
+    const i = opts.findIndex(o => same(o.value, value));
+    // A measured value that is not an option (auto modes) still shows.
+    unknown.textContent = i < 0 && value !== undefined ? String(value) : "";
+    sel.value = i < 0 ? "" : String(i);
+  };
+}
+
+function boolControl(d, c, ctl) {
+  const t = el("button", {
+    class: "toggle", role: "switch",
+    onclick: () => sendSet(d.id, { [c.id]: d.state[c.id] !== true }, true),
+  });
+  const txt = el("span", { class: "unit" });
+  ctl.append(t, txt);
+  return (value, enabled) => {
+    t.classList.toggle("on", value === true);
+    t.setAttribute("aria-checked", value === true ? "true" : "false");
+    t.disabled = !enabled;
+    txt.textContent = value === true ? "On" : value === false ? "Off" : "";
+  };
+}
+
+function textControl(d, c, ctl) {
+  const inp = el("input", { type: "text", spellcheck: "false" });
+  const apply = el("button", { class: "btn" }, "Apply");
+  const go = () => sendSet(d.id, { [c.id]: inp.value }, true);
+  apply.addEventListener("click", go);
+  inp.addEventListener("keydown", ev => {
+    if (ev.key === "Enter") { go(); inp.blur(); }
+    if (ev.key === "Escape") { inp.value = d.state[c.id] ?? ""; inp.blur(); }
+  });
+  ctl.append(inp, apply);
+  return (value, enabled) => {
+    inp.disabled = !enabled;
+    apply.disabled = !enabled;
+    if (document.activeElement !== inp) inp.value = value ?? "";
+  };
+}
+
+function updatePanel() {
+  if (!panel) return;
+  const d = devices.get(panel.id);
+  if (!d) return;
+  for (const c of d.controls) {
+    const u = panel.updaters.get(c.id);
+    if (u) u(d.state[c.id], isEnabled(d, c));
+  }
+  updateMedia(d, panel.media.img, panel.media.overlay);
+  const note = document.getElementById("offline-note");
+  if (note) note.textContent = d.online ? "" : "Camera offline. Showing the last known values.";
+  document.querySelectorAll("#panel .cmd button").forEach(b => { b.disabled = !d.online; });
+  if (panel.msgButton) panel.msgButton.disabled = !d.online;
+  const dot = document.querySelector("#panel .p-head .dot");
+  if (dot) dot.className = "dot" + (d.online ? " on" : "");
+}
+
+function appendLogLine(e) {
+  if (!panel || !panel.logEl) return;
+  const log = panel.logEl;
+  const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 20;
+  log.append(el("div", { class: "l " + e.level }, el("span", { class: "t" }, e.t), e.text));
+  while (log.childElementCount > LOG_MAX) log.firstElementChild.remove();
+  if (atBottom) log.scrollTop = log.scrollHeight;
+}
+
+// ---------------------------------------------------------------------------
+// Hub messages
+// ---------------------------------------------------------------------------
+
+function applySnapshotDevice(s) {
+  const d = addDevice(s.id);
+  d.info = s.info || d.info;
+  d.controls = s.controls || [];
+  d.commands = s.commands || [];
+  d.state = s.state || {};
+  d.status = s.status || null;
+  d.preview = s.preview || null;
+  d.tally = s.tally || "off";
+  d.online = !!s.online;
+  d.keyFingerprint = s.key_fingerprint || null;
+}
+
+// "3f2a 9c1d 7b0e 44a1": the start of the key fingerprint, to compare with
+// what the phone shows.
+function shortFingerprint(fp) {
+  return fp ? fp.slice(0, 16).match(/.{4}/g).join(" ") : "";
+}
+
+function removeDevice(id) {
+  const d = devices.get(id);
+  if (!d) return;
+  if (d.card) d.card.root.remove();
+  devices.delete(id);
+  const i = order.indexOf(id);
+  if (i >= 0) order.splice(i, 1);
+  if (selected === id) closePanel();
+  renderGrid();
+}
+
+async function forgetDevice(d) {
+  const name = (d.info && d.info.name) || d.id;
+  if (!confirm("Forget " + name + "? It is disconnected, and it needs a new invite to join again.")) return;
+  try {
+    const r = await fetch(CONFIG.devicesUrl + "/" + encodeURIComponent(d.id), { method: "DELETE", headers: operatorHeaders() });
+    if (!r.ok && r.status !== 404) throw new Error("HTTP " + r.status);
+    removeDevice(d.id);
+  } catch (e) {
+    addLog(d.id, "error", "forget failed: " + (e.message || e));
+  }
+}
+
+function onMessage(m) {
+  const d = typeof m.device === "string" ? devices.get(m.device) : null;
+  switch (m.type) {
+    case "snapshot": {
+      const seen = new Set();
+      for (const s of m.devices || []) { applySnapshotDevice(s); seen.add(s.id); }
+      // Devices the hub no longer knows (hub restarted) stay, but offline.
+      for (const [id, dev] of devices) if (!seen.has(id)) dev.online = false;
+      renderGrid();
+      // Deep link: open a camera's panel with #<device id>.
+      const want = decodeURIComponent(location.hash.slice(1));
+      if (!selected && want && devices.has(want)) selected = want;
+      if (selected) select(selected);
+      return;
+    }
+    case "device_hello": {
+      const nd = addDevice(m.device);
+      nd.info = m.info || nd.info;
+      nd.controls = m.controls || [];
+      nd.commands = m.commands || [];
+      nd.keyFingerprint = m.key_fingerprint || null;
+      if (!nd.online) addLog(nd.id, "debug", "online");
+      nd.online = true;
+      renderGrid();
+      if (selected === nd.id) buildPanel();
+      return;
+    }
+    case "device_state":
+      if (!d) return;
+      Object.assign(d.state, m.values || {});
+      updateCard(d);
+      if (selected === d.id) updatePanel();
+      return;
+    case "device_status":
+      if (!d) return;
+      d.status = m;
+      updateCard(d);
+      updateClockPanel(d);
+      updateLatencyPanel(d);
+      return;
+    case "device_preview":
+      if (!d) return;
+      d.preview = { jpeg: m.jpeg, width: m.width, height: m.height };
+      if (d.card) updateMedia(d, d.card.img, d.card.overlay);
+      if (selected === d.id && panel) updateMedia(d, panel.media.img, panel.media.overlay);
+      return;
+    case "device_tally":
+      if (!d) return;
+      d.tally = m.state;
+      updateCard(d);
+      return;
+    case "device_offline":
+      if (!d) return;
+      d.online = false;
+      addLog(d.id, "warn", "offline");
+      renderGrid();
+      if (selected === d.id) updatePanel();
+      return;
+    case "device_removed":
+      removeDevice(m.device);
+      return;
+    case "device_result": {
+      const p = pending.get(m.id);
+      pending.delete(m.id);
+      if (d && !m.ok) addLog(d.id, "error", (p ? p.what + ": " : "") + (m.error || "failed"));
+      // Command output, e.g. clock_log: its lines go to the log.
+      if (d && m.ok && m.data) {
+        if (typeof m.data.reports === "string" && m.data.reports) addLog(d.id, "debug", m.data.reports);
+        if (Array.isArray(m.data.lines)) for (const line of m.data.lines) addLog(d.id, "debug", line);
+      }
+      return;
+    }
+    case "device_log":
+      if (d) addLog(d.id, m.level, m.message);
+      return;
+    case "error":
+      if (d) addLog(d.id, "error", "hub: " + m.message);
+      else console.warn("hub error:", m.message);
+      return;
+    default:
+      return; // unknown types are ignored
+  }
+}
+
+// Keep the pending map bounded if a phone never answers.
+setInterval(() => {
+  if (pending.size > 500) {
+    for (const k of [...pending.keys()].slice(0, pending.size - 500)) pending.delete(k);
+  }
+}, 10000);
+
+// ---------------------------------------------------------------------------
+// Connection
+// ---------------------------------------------------------------------------
+
+let backoff = 500;
+function setConn(state, text) {
+  document.getElementById("conn-dot").className = "dot" + (state === "on" ? " on" : state === "bad" ? " bad" : "");
+  document.getElementById("conn-text").textContent = text;
+}
+
+function connect() {
+  const proto = location.protocol === "https:" ? "wss:" : "ws:";
+  const query = OPERATOR_TOKEN ? "?token=" + encodeURIComponent(OPERATOR_TOKEN) : "";
+  ws = new WebSocket(proto + "//" + location.host + CONFIG.controlPath + query);
+  setConn("", "connecting");
+  ws.onopen = () => { backoff = 500; setConn("on", "hub connected"); };
+  ws.onmessage = ev => {
+    let m;
+    try { m = JSON.parse(ev.data); } catch (e) { return; }
+    if (m && typeof m === "object") onMessage(m);
+  };
+  ws.onclose = () => {
+    setConn("bad", "hub disconnected, retrying");
+    for (const d of devices.values()) d.online = false;
+    renderGrid();
+    if (selected) updatePanel();
+    setTimeout(connect, backoff);
+    backoff = Math.min(backoff * 2, 5000);
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Add a camera (provisioning v0: the QR code carries a deep link with the
+// control and SRT URLs; see docs/PROTOCOL.md). The addresses come from the
+// hub, never from location.host: a phone cannot reach "localhost".
+// ---------------------------------------------------------------------------
+
+let hubInfo = null;
+let targetIndex = 0;
+
+async function loadInfo() {
+  try {
+    if (CONFIG.inviteUrl) {
+      // One target: a fresh one-time invite with its own QR code.
+      const r = await fetch(CONFIG.inviteUrl, { method: "POST", cache: "no-store", headers: operatorHeaders() });
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      const inv = await r.json();
+      let label = inv.control_url;
+      try { label = new URL(inv.control_url).host; } catch (e) { /* keep the URL */ }
+      hubInfo = { targets: [{ label, control_url: inv.control_url, srt_url: inv.srt_url || null,
+                              deep_link: inv.deep_link, qr_svg: inv.qr_svg,
+                              expires_in_secs: inv.expires_in_secs }] };
+    } else {
+      const r = await fetch(CONFIG.infoUrl, { cache: "no-store" });
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      hubInfo = await r.json();
+    }
+  } catch (e) {
+    hubInfo = { error: String(e.message || e), targets: [] };
+  }
+  if (targetIndex >= hubInfo.targets.length) targetIndex = 0;
+  renderAddCards();
+}
+
+function buildAddCard(closable) {
+  const info = hubInfo;
+  const targets = info ? info.targets : [];
+  const t = targets[targetIndex];
+  const qr = el("div", { class: "qr" },
+    t ? el("img", { src: t.qr_svg ? "data:image/svg+xml;charset=utf-8," + encodeURIComponent(t.qr_svg)
+                                  : CONFIG.qrUrl + "?target=" + targetIndex + "&v=" + encodeURIComponent(t.deep_link),
+                    alt: "QR code: " + t.deep_link, title: t.deep_link })
+      : el("div", { class: "noqr" },
+          !info ? "Loading..."
+            : info.error ? "Could not ask the hub for its addresses: " + info.error
+            : "No LAN address found. Connect this computer to the phone's network, or start the hub with --public-url."));
+  const rows = [];
+  if (targets.length > 1) {
+    rows.push(el("dt", {}, "Address"), el("dd", {},
+      el("select", {
+        onchange: ev => { targetIndex = Number(ev.target.value); renderAddCards(); },
+      }, targets.map((x, i) => el("option", { value: i, selected: i === targetIndex }, x.label)))));
+  }
+  if (targets.length) {
+    rows.push(el("dt", {}, targets.length > 1 ? "Control URLs" : "Control URL"),
+      el("dd", {}, targets.map(x => el("div", {}, el("code", {}, x.control_url)))));
+  }
+  if (t && t.srt_url) rows.push(el("dt", {}, "SRT URL"), el("dd", {}, el("code", {}, t.srt_url)));
+  const card = el("div", { class: "add" },
+    closable ? el("button", { class: "btn close", type: "button", onclick: closeAdd, title: "Close (Esc)" }, "Close") : null,
+    qr,
+    el("div", { class: "info" },
+      el("h2", {}, "Add a camera"),
+      el("ol", {},
+        el("li", {}, "Install TallyCam on the phone."),
+        el("li", {}, "Same Wi-Fi as this computer."),
+        el("li", {}, "Scan the code with the iPhone Camera app and open it in TallyCam.")),
+      el("dl", {}, rows),
+      t && t.srt_url && t.srt_url.includes("{device}")
+        ? el("div", { class: "note" }, "The phone replaces {device} with its own stream id (cam- and the start of its device id).")
+        : null,
+      t && t.expires_in_secs
+        ? el("div", { class: "note" }, "The code admits one new phone and expires in " +
+            Math.round(t.expires_in_secs / 60) + " minutes. The phone gets its stream address when it is used in a flow.")
+        : null));
+  return card;
+}
+
+function renderAddCards() {
+  document.getElementById("empty").replaceChildren(buildAddCard(false));
+  const modal = document.getElementById("modal");
+  if (!modal.hidden) modal.replaceChildren(buildAddCard(true));
+}
+
+function openAdd() {
+  const modal = document.getElementById("modal");
+  modal.hidden = false;
+  modal.replaceChildren(buildAddCard(true));
+  loadInfo();
+}
+
+function closeAdd() {
+  document.getElementById("modal").hidden = true;
+}
+
+document.getElementById("add-camera").addEventListener("click", openAdd);
+document.getElementById("modal").addEventListener("click", ev => {
+  if (ev.target.id === "modal") closeAdd();
+});
+
+document.addEventListener("keydown", ev => {
+  if (ev.key !== "Escape" || ev.target instanceof HTMLInputElement) return;
+  if (!document.getElementById("modal").hidden) closeAdd();
+  else if (selected) closePanel();
+});
+document.title = CONFIG.title;
+document.querySelector("header h1").textContent = CONFIG.title;
+if (CONFIG.clapperUrl) document.getElementById("clapper").href = CONFIG.clapperUrl;
+else document.getElementById("clapper").remove();
+renderAddCards();
+loadInfo();
+connect();
+</script>
+</body>
+</html>

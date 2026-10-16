@@ -103,7 +103,11 @@ struct SettingsView: View {
                 .disabled(controller.state != .idle)
             LabeledContent("Video", value: "\(controller.videoCodec.label), \(controller.bitrateKbps) kbit/s"
                 + (controller.bitrateIsAuto ? " (auto)" : ""))
+            Toggle("Adaptive bitrate", isOn: $controller.adaptiveBitrate)
             if let stats = controller.stats, controller.state == .live {
+                if controller.adaptiveBitrate, let target = stats.targetKbps {
+                    LabeledContent("Encoder now", value: "\(target) kbit/s")
+                }
                 if let rtt = stats.rttMs {
                     LabeledContent("Round trip", value: String(format: "%.0f ms", rtt))
                 }
@@ -114,9 +118,10 @@ struct SettingsView: View {
         } header: {
             Text("Stream (SRT)")
         } footer: {
-            Text(controller.state == .idle
+            Text((controller.state == .idle
                 ? "Set by the QR code. Edit only if you know the address."
                 : "Stop the stream to change the address.")
+                + " Adaptive bitrate lowers the video bitrate when the network cannot carry it, and raises it again up to the bitrate set.")
         }
     }
 

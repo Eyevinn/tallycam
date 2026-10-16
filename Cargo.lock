@@ -1598,6 +1598,7 @@ dependencies = [
  "log",
  "rand 0.8.8",
  "srt-protocol",
+ "tallycam-core",
 ]
 
 [[package]]

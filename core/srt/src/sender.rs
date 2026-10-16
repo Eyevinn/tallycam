@@ -3,12 +3,13 @@
 //! Payloads come in through a lock-free queue, so `send` never blocks on
 //! the network or the engine.
 
+use std::cell::RefCell;
 use std::collections::{HashSet, VecDeque};
 use std::io::{self, ErrorKind};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs, UdpSocket};
 use std::os::fd::AsRawFd;
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -26,6 +27,8 @@ use srt_protocol::protocol::pending_connection::connect::Connect;
 use srt_protocol::protocol::pending_connection::ConnectionResult;
 use srt_protocol::settings::{ConnInitSettings, KeyMaterialRefreshSettings, KeySettings};
 
+use tallycam_core::bitrate::adaptive::{AdaptiveBitrate, LinkSample, LinkState};
+
 use crate::config::CallerConfig;
 use crate::queue::{PushError, SpscQueue, MARK_FRAME_END, MARK_FRAME_START};
 
@@ -42,6 +45,13 @@ const UNREACHABLE_GRACE: Duration = Duration::from_millis(1500);
 const QUEUE_SLOTS: usize = 1024;
 /// SRT send buffer, packets (libsrt's default SRTO_SNDBUF is 8192 packets).
 const SEND_BUFFER_PACKETS: u32 = 8192;
+/// How often the engine refreshes its statistics (send buffer, in flight);
+/// adaptive bitrate takes a sample on each refresh.
+pub const STATS_INTERVAL: Duration = Duration::from_millis(250);
+
+/// Adaptive bitrate's report: the bitrate the encoder should run, kbit/s.
+/// Called on the SRT thread; hop to your own queue.
+pub type BitrateCallback = Arc<dyn Fn(u32) + Send + Sync>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SrtEvent {
@@ -77,6 +87,10 @@ pub struct SrtStats {
     pub dropped_packets: u64,
     /// Sent but not acknowledged yet.
     pub packets_in_flight: u64,
+    /// Span of the send buffer (not acknowledged, or not sent yet), ms:
+    /// about one RTT on a link that keeps up, growing toward the latency
+    /// when it does not. Refreshed every [`STATS_INTERVAL`].
+    pub send_buffer_ms: f64,
     /// TSBPD latency both sides agreed to, ms; 0 before the first connect.
     pub negotiated_latency_ms: u32,
     /// Bytes handed to the network, with IP/UDP headers; all connections.
@@ -85,6 +99,10 @@ pub struct SrtStats {
     pub packets_sent: u64,
     /// Successful handshakes so far.
     pub connections: u32,
+    /// Adaptive bitrate's bitrate now, kbit/s; 0 while it is off.
+    pub target_kbps: u32,
+    /// What adaptive bitrate last saw; None while it is off.
+    pub link: Option<LinkState>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -127,16 +145,51 @@ struct Shared {
     dropped: AtomicU64,
     queue_dropped: AtomicU64,
     in_flight: AtomicU64,
+    send_buffer_us: AtomicU64,
     latency_ms: AtomicU32,
     bytes_sent: AtomicU64,
     packets_sent: AtomicU64,
     connections: AtomicU32,
+    // Adaptive bitrate: set by the handle, run by the SRT thread.
+    /// The operator's bitrate, kbit/s; 0 = off.
+    abr_ceiling_kbps: AtomicU32,
+    /// Bumped on every start and stop, so the thread starts afresh.
+    abr_generation: AtomicU32,
+    abr_callback: Mutex<Option<BitrateCallback>>,
+    abr_target_kbps: AtomicU32,
+    /// 0 = off, else 1 + the LinkState.
+    abr_link: AtomicU8,
 }
 
 impl Shared {
     fn wake(&self) {
         if self.parked.load(Ordering::Acquire) {
             self.waker.wake();
+        }
+    }
+
+    fn stats(&self) -> SrtStats {
+        let r = |a: &AtomicU64| a.load(Ordering::Relaxed);
+        SrtStats {
+            connected: self.connected.load(Ordering::Relaxed),
+            rtt_ms: r(&self.rtt_us) as f64 / 1000.0,
+            retransmitted_packets: r(&self.retransmitted),
+            received_naks: r(&self.naks),
+            lost_packets: r(&self.lost),
+            dropped_packets: r(&self.dropped) + r(&self.queue_dropped),
+            packets_in_flight: r(&self.in_flight),
+            send_buffer_ms: r(&self.send_buffer_us) as f64 / 1000.0,
+            negotiated_latency_ms: self.latency_ms.load(Ordering::Relaxed),
+            bytes_sent: r(&self.bytes_sent),
+            packets_sent: r(&self.packets_sent),
+            connections: self.connections.load(Ordering::Relaxed),
+            target_kbps: self.abr_target_kbps.load(Ordering::Relaxed),
+            link: match self.abr_link.load(Ordering::Relaxed) {
+                1 => Some(LinkState::Clear),
+                2 => Some(LinkState::Congested),
+                3 => Some(LinkState::Overloaded),
+                _ => None,
+            },
         }
     }
 }
@@ -170,10 +223,16 @@ impl SrtSender {
             dropped: AtomicU64::new(0),
             queue_dropped: AtomicU64::new(0),
             in_flight: AtomicU64::new(0),
+            send_buffer_us: AtomicU64::new(0),
             latency_ms: AtomicU32::new(0),
             bytes_sent: AtomicU64::new(0),
             packets_sent: AtomicU64::new(0),
             connections: AtomicU32::new(0),
+            abr_ceiling_kbps: AtomicU32::new(0),
+            abr_generation: AtomicU32::new(0),
+            abr_callback: Mutex::new(None),
+            abr_target_kbps: AtomicU32::new(0),
+            abr_link: AtomicU8::new(0),
         });
         let thread_shared = shared.clone();
         let now_ns = options.host_now_ns.clone();
@@ -186,6 +245,8 @@ impl SrtSender {
                     config,
                     observer,
                     now_ns,
+                    epoch: Instant::now(),
+                    abr: RefCell::new(None),
                 }
                 .run()
             })
@@ -242,21 +303,45 @@ impl SrtSender {
     }
 
     pub fn stats(&self) -> SrtStats {
+        self.shared.stats()
+    }
+
+    /// Turns adaptive bitrate on (core/src/bitrate/adaptive.rs), from
+    /// `ceiling_kbps`, the operator's bitrate. The SRT thread samples the
+    /// link on each statistics refresh and calls `on_bitrate` with each new
+    /// bitrate; it calls it once at the start too. Calling it again starts
+    /// afresh with the new callback.
+    pub fn start_adaptive_bitrate(&self, ceiling_kbps: u32, on_bitrate: BitrateCallback) {
         let s = &self.shared;
-        let r = |a: &AtomicU64| a.load(Ordering::Relaxed);
-        SrtStats {
-            connected: s.connected.load(Ordering::Relaxed),
-            rtt_ms: r(&s.rtt_us) as f64 / 1000.0,
-            retransmitted_packets: r(&s.retransmitted),
-            received_naks: r(&s.naks),
-            lost_packets: r(&s.lost),
-            dropped_packets: r(&s.dropped) + r(&s.queue_dropped),
-            packets_in_flight: r(&s.in_flight),
-            negotiated_latency_ms: s.latency_ms.load(Ordering::Relaxed),
-            bytes_sent: r(&s.bytes_sent),
-            packets_sent: r(&s.packets_sent),
-            connections: s.connections.load(Ordering::Relaxed),
+        *s.abr_callback.lock().unwrap_or_else(|e| e.into_inner()) = Some(on_bitrate);
+        s.abr_ceiling_kbps
+            .store(ceiling_kbps.max(1), Ordering::Release);
+        s.abr_generation.fetch_add(1, Ordering::AcqRel);
+        s.wake();
+    }
+
+    /// The operator changed the bitrate while adaptive bitrate runs; the
+    /// encoder hears the result through the callback. Ignored while off.
+    pub fn set_adaptive_ceiling(&self, ceiling_kbps: u32) {
+        let s = &self.shared;
+        let set = s
+            .abr_ceiling_kbps
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |c| {
+                (c != 0).then_some(ceiling_kbps.max(1))
+            });
+        if set.is_ok() {
+            s.wake();
         }
+    }
+
+    /// Turns adaptive bitrate off; no callbacks after the SRT thread's next
+    /// round. The app returns its encoder to the operator's bitrate.
+    pub fn stop_adaptive_bitrate(&self) {
+        let s = &self.shared;
+        s.abr_ceiling_kbps.store(0, Ordering::Release);
+        *s.abr_callback.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        s.abr_generation.fetch_add(1, Ordering::AcqRel);
+        s.wake();
     }
 
     /// Sends a shutdown to the listener, stops the thread and waits for it.
@@ -288,6 +373,16 @@ struct Worker {
     config: CallerConfig,
     observer: Arc<dyn SrtObserver>,
     now_ns: Arc<dyn Fn() -> i64 + Send + Sync>,
+    /// Time base of adaptive bitrate's samples.
+    epoch: Instant,
+    abr: RefCell<Option<AbrRun>>,
+}
+
+/// Adaptive bitrate on the SRT thread, for one start (generation).
+struct AbrRun {
+    generation: u32,
+    abr: AdaptiveBitrate,
+    on_bitrate: BitrateCallback,
 }
 
 enum End {
@@ -303,6 +398,8 @@ struct SessionState {
     nak_wanted: HashSet<u32>,
     retransmits: u64,
     rto_suppressed: u64,
+    /// The engine refreshed its statistics since the last round.
+    stats_updated: bool,
 }
 
 /// A payload that starts or ends a video frame, waiting to go out.
@@ -324,10 +421,14 @@ impl Worker {
                 Err(_) => End::Failed("SRT engine error".into()),
             };
             self.shared.connected.store(false, Ordering::Release);
+            self.shared.in_flight.store(0, Ordering::Relaxed);
+            self.shared.send_buffer_us.store(0, Ordering::Relaxed);
             let dropped = self.shared.queue.clear();
             self.shared
                 .dropped
                 .fetch_add(dropped as u64, Ordering::Relaxed);
+            // Not connected: adaptive bitrate forgets this path.
+            self.adaptive(true);
             match end {
                 End::Closed => break,
                 End::Failed(reason) => {
@@ -345,6 +446,72 @@ impl Worker {
             }
         }
         self.shared.connected.store(false, Ordering::Release);
+    }
+
+    /// One round of adaptive bitrate: follows starts, stops and ceiling
+    /// changes, and with `sample` takes a sample of the stats just
+    /// published (or of the lost connection).
+    fn adaptive(&self, sample: bool) {
+        let s = &self.shared;
+        let mut slot = self.abr.borrow_mut();
+        let generation = s.abr_generation.load(Ordering::Acquire);
+        if slot.as_ref().map(|r| r.generation) != Some(generation) {
+            let ceiling = s.abr_ceiling_kbps.load(Ordering::Acquire);
+            let callback = s
+                .abr_callback
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
+            *slot = match callback {
+                Some(on_bitrate) if ceiling != 0 => {
+                    info!("Adaptive bitrate on, up to {ceiling} kbit/s");
+                    on_bitrate(ceiling);
+                    Some(AbrRun {
+                        generation,
+                        abr: AdaptiveBitrate::new(ceiling),
+                        on_bitrate,
+                    })
+                }
+                _ => None,
+            };
+        }
+        let Some(run) = slot.as_mut() else {
+            s.abr_target_kbps.store(0, Ordering::Relaxed);
+            s.abr_link.store(0, Ordering::Relaxed);
+            return;
+        };
+        let before = run.abr.current_kbps();
+        let ceiling = s.abr_ceiling_kbps.load(Ordering::Acquire);
+        if ceiling != 0 && ceiling != run.abr.ceiling_kbps() {
+            run.abr.set_ceiling(ceiling);
+        }
+        if sample {
+            let st = s.stats();
+            run.abr.update(&LinkSample {
+                t_ms: self.epoch.elapsed().as_millis() as u64,
+                connected: st.connected,
+                rtt_ms: st.rtt_ms,
+                send_buffer_ms: st.send_buffer_ms,
+                latency_ms: st.negotiated_latency_ms,
+                packets_sent: st.packets_sent,
+                lost_packets: st.lost_packets,
+                dropped_packets: st.dropped_packets,
+            });
+        }
+        let now = run.abr.current_kbps();
+        s.abr_target_kbps.store(now, Ordering::Relaxed);
+        s.abr_link
+            .store(1 + run.abr.state() as u8, Ordering::Relaxed);
+        if now != before {
+            let st = s.stats();
+            info!(
+                "Adaptive bitrate {now} kbit/s ({}, send buffer {:.0} ms, RTT {:.0} ms)",
+                run.abr.state().as_str(),
+                st.send_buffer_ms,
+                st.rtt_ms
+            );
+            (run.on_bitrate)(now);
+        }
     }
 
     fn closed(&self) -> bool {
@@ -504,6 +671,7 @@ impl Worker {
             nak_wanted: HashSet::with_capacity(256),
             retransmits: 0,
             rto_suppressed: 0,
+            stats_updated: false,
         };
         let mut peer_shutdown = false;
         let mut unreachable_since: Option<Instant> = None;
@@ -623,6 +791,7 @@ impl Worker {
             let wait = self.pump(&mut st, &mut conn, &socket, now, Input::Timer);
             timers_at = now;
             self.publish(&conn, &st, base);
+            self.adaptive(std::mem::take(&mut st.stats_updated));
             let wait = match (open, wait) {
                 (true, Some(w)) => w,
                 _ => {
@@ -670,7 +839,7 @@ impl Worker {
             recv_latency: latency,
             peer_idle_timeout: cfg.peer_idle_timeout,
             bandwidth,
-            statistics_interval: Duration::from_secs(1),
+            statistics_interval: STATS_INTERVAL,
             too_late_packet_drop: true,
             recv_buffer_size: PacketCount(8192),
             send_buffer_size: PacketCount(SEND_BUFFER_PACKETS.into()),
@@ -722,7 +891,10 @@ impl Worker {
                     self.send_packet(socket, &p);
                 }
                 Action::ReleaseData(_) => input = Input::DataReleased,
-                Action::UpdateStatistics(_) => input = Input::StatisticsUpdated,
+                Action::UpdateStatistics(_) => {
+                    st.stats_updated = true;
+                    input = Input::StatisticsUpdated;
+                }
                 Action::WaitForData(w) => return Some(w),
                 Action::Close => return None,
             }
@@ -784,8 +956,10 @@ impl Worker {
             .store(base.3 + st.tx_dropped_data, Ordering::Relaxed);
         s.packets_sent
             .store(base.4 + st.tx_unique_data, Ordering::Relaxed);
-        // Refreshed with the engine's statistics interval (1 s).
+        // Refreshed with the engine's statistics interval.
         s.in_flight.store(st.tx_buffered_data, Ordering::Relaxed);
+        s.send_buffer_us
+            .store(st.tx_buffered_time.as_micros() as u64, Ordering::Relaxed);
     }
 }
 
@@ -945,5 +1119,44 @@ impl Drop for Waker {
             libc::close(self.read_fd);
             libc::close(self.write_fd);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct NoObserver;
+
+    impl SrtObserver for NoObserver {
+        fn on_event(&self, _event: SrtEvent) {}
+        fn on_frame_sent(&self, _capture_ns: i64, _enqueued_ns: i64, _sent_ns: i64, _last: bool) {}
+    }
+
+    #[test]
+    fn adaptive_bitrate_runs_on_the_srt_thread() {
+        // Nobody answers on the discard port: the handshake times out and
+        // the thread takes its round of adaptive bitrate on the way out.
+        let mut config = CallerConfig::from_url("srt://127.0.0.1:9").unwrap();
+        config.connect_timeout = Duration::from_millis(300);
+        let sender =
+            SrtSender::start(config, SenderOptions::default(), Arc::new(NoObserver)).unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        sender.start_adaptive_bitrate(
+            4000,
+            Arc::new(move |kbps| {
+                let _ = tx.send(kbps);
+            }),
+        );
+        sender.set_adaptive_ceiling(5000);
+        assert_eq!(rx.recv_timeout(Duration::from_secs(5)), Ok(5000));
+        sender.close();
+        let stats = sender.stats();
+        assert_eq!(stats.target_kbps, 5000);
+        assert_eq!(stats.link, Some(LinkState::Clear));
+        // Off: ceiling changes are ignored.
+        sender.stop_adaptive_bitrate();
+        sender.set_adaptive_ceiling(6000);
+        assert_eq!(sender.shared.abr_ceiling_kbps.load(Ordering::Relaxed), 0);
     }
 }

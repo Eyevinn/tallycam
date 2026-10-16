@@ -2,7 +2,9 @@
 //!
 //! The default of 1080p30 H.264 is 6 Mbit/s; it scales with the pixel rate
 //! (sub-linearly: more pixels and frames compress better), HEVC needs about
-//! 30% less.
+//! 30% less. [`adaptive`] moves the bitrate below that with the network.
+
+pub mod adaptive;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VideoCodec {

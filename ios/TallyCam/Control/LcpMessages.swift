@@ -180,6 +180,11 @@ struct StatusMessage: Encodable {
         /// Frames muxed after their PCR deadline since the stream started.
         var lateVideoFrames: Int?
         var lateAudioFrames: Int?
+        /// The encoder's bitrate now, kbit/s (`bitrate_kbps` is measured).
+        var targetKbps: Int?
+        /// Adaptive bitrate's view of the link: `clear | congested |
+        /// overloaded`; omitted when it is off.
+        var link: String?
     }
 
     let type = "status"

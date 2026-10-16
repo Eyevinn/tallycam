@@ -33,6 +33,14 @@ final class LiveStream: @unchecked Sendable {
         /// Samples muxed after their PCR deadline, since the start.
         var lateVideoFrames: Int
         var lateAudioFrames: Int
+        /// The video encoder's bitrate now, kbit/s: below `ceilingKbps`
+        /// while adaptive bitrate holds it down. Nil before media starts.
+        var targetKbps: Int?
+        /// The operator's bitrate at the same moment, kbit/s.
+        var ceilingKbps: Int
+        /// What adaptive bitrate last saw (`clear | congested |
+        /// overloaded`); nil when it is off.
+        var link: String?
     }
 
     private let queue = DispatchQueue(label: "live.stream", qos: .userInteractive)
@@ -47,6 +55,10 @@ final class LiveStream: @unchecked Sendable {
     // Owned by `queue`.
     private var connection: SrtConnection?
     private var videoEncoder: VideoEncoder?
+    /// Adaptive bitrate runs on the SRT thread while the encoders do.
+    private var adaptive: Bool
+    /// The bitrate the video encoder was last given, kbit/s.
+    private var encoderKbps = 0
     private var stopped = false
     /// The muxer and the latency meter; any thread.
     private let mux = MuxPath()
@@ -56,10 +68,12 @@ final class LiveStream: @unchecked Sendable {
          mic: MicCapture?,
          audioCodec: AudioCodec,
          outputs: CaptureOutputs,
+         adaptiveBitrate: Bool,
          onEvent: @escaping @Sendable (Event) -> Void)
     {
         self.url = url
         self.videoSettings = videoSettings
+        adaptive = adaptiveBitrate
         self.mic = mic
         self.audioCodec = audioCodec
         self.outputs = outputs
@@ -109,10 +123,39 @@ final class LiveStream: @unchecked Sendable {
         }
     }
 
+    /// The operator's bitrate; with adaptive bitrate on, the ceiling, and
+    /// the encoder hears the result from the SRT thread.
     func setBitrate(_ bitrate: Int) {
         queue.async { [self] in
             videoSettings.bitrate = bitrate
-            videoEncoder?.setBitrate(bitrate)
+            guard videoEncoder != nil else {
+                return
+            }
+            if adaptive {
+                connection?.setAdaptiveCeiling(kbps: bitrate / 1000)
+            } else {
+                applyEncoderBitrate(kbps: bitrate / 1000)
+            }
+        }
+    }
+
+    /// Turns adaptive bitrate on or off while live; off returns to the
+    /// operator's bitrate.
+    func setAdaptiveBitrate(_ on: Bool) {
+        queue.async { [self] in
+            guard on != adaptive else {
+                return
+            }
+            adaptive = on
+            guard videoEncoder != nil else {
+                return
+            }
+            if on {
+                startAdaptive()
+            } else {
+                connection?.stopAdaptiveBitrate()
+                applyEncoderBitrate(kbps: videoSettings.bitrate / 1000)
+            }
         }
     }
 
@@ -130,7 +173,10 @@ final class LiveStream: @unchecked Sendable {
             completion(Stats(bytesSent: srt?.bytesSent ?? 0, srt: srt,
                              latency: latency,
                              lateVideoFrames: muxStats?.lateVideoFrames ?? 0,
-                             lateAudioFrames: muxStats?.lateAudioFrames ?? 0))
+                             lateAudioFrames: muxStats?.lateAudioFrames ?? 0,
+                             targetKbps: videoEncoder == nil ? nil : encoderKbps,
+                             ceilingKbps: videoSettings.bitrate / 1000,
+                             link: adaptive ? srt?.link : nil))
         }
     }
 
@@ -165,6 +211,7 @@ final class LiveStream: @unchecked Sendable {
             return
         }
         self.videoEncoder = videoEncoder
+        encoderKbps = videoSettings.bitrate / 1000
 
         if let mic {
             // Used only on the microphone's delivery thread.
@@ -181,14 +228,40 @@ final class LiveStream: @unchecked Sendable {
             }
         }
         outputs.setVideoSink { videoEncoder.encode($0) }
+        if adaptive {
+            startAdaptive()
+        }
         log.info("Live, video \(self.videoSettings.codec.label) \(self.videoSettings.width)x\(self.videoSettings.height)@\(self.videoSettings.frameRate), audio \(self.mic == nil ? "none" : self.audioCodec.label)")
         onEvent(.connected(video: videoDescription))
+    }
+
+    /// Starts adaptive bitrate on the SRT thread, from the operator's
+    /// bitrate; its reports come back to `queue`.
+    private func startAdaptive() {
+        let queue = queue
+        connection?.startAdaptiveBitrate(ceilingKbps: videoSettings.bitrate / 1000) { [weak self] kbps in
+            queue.async {
+                // A report from before adaptive bitrate was turned off.
+                guard let self, self.adaptive else {
+                    return
+                }
+                self.applyEncoderBitrate(kbps: kbps)
+            }
+        }
+    }
+
+    private func applyEncoderBitrate(kbps: Int) {
+        guard kbps != encoderKbps, let videoEncoder else {
+            return
+        }
+        encoderKbps = kbps
+        videoEncoder.setBitrate(kbps * 1000)
     }
 
     /// What the video encoder runs, for the log.
     private var videoDescription: String {
         "\(videoSettings.codec.label) \(videoSettings.width)x\(videoSettings.height)"
-            + " at \(videoSettings.frameRate) fps, \(videoSettings.bitrate / 1000) kbit/s"
+            + " at \(videoSettings.frameRate) fps, \(encoderKbps == 0 ? videoSettings.bitrate / 1000 : encoderKbps) kbit/s"
             + (videoEncoder?.lowLatency == true ? ", low-latency rate control" : "")
     }
 

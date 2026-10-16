@@ -13,7 +13,7 @@
 //! `wasm32-unknown-unknown`; the `driver` feature adds a std driver (UDP
 //! sockets, DNS, timer thread) for macOS, iOS and Linux.
 
-/// Default and maximum video bitrate per format and codec.
+/// Default and maximum video bitrate per format and codec; adaptive bitrate.
 pub mod bitrate;
 pub mod clock;
 /// Device keys: ids from public keys, the signed `auth` handshake.

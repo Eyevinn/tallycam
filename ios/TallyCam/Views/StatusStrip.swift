@@ -16,7 +16,9 @@ struct StatusStrip: View {
                 HStack(spacing: 12) {
                     liveIndicator(now: context.date)
                     if controller.state == .live, let kbps = controller.stats?.bitrateKbps {
+                        // Yellow while adaptive bitrate holds the encoder down.
                         Text(Self.bitrate(kbps))
+                            .foregroundStyle(adapting ? .yellow : .white.opacity(0.85))
                     }
                     Spacer(minLength: 8)
                     if capture.orientationChangePending {
@@ -44,6 +46,17 @@ struct StatusStrip: View {
         .padding(.trailing, 2)
         .frame(height: 32)
         .background(.black.opacity(0.35), in: Capsule())
+    }
+
+    private var adapting: Bool {
+        // Both from the same stats, so an operator change in between does
+        // not count.
+        guard let stats = controller.stats, stats.link != nil,
+              let target = stats.targetKbps, let ceiling = stats.ceilingKbps
+        else {
+            return false
+        }
+        return target < ceiling
     }
 
     @ViewBuilder

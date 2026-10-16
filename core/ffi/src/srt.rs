@@ -134,7 +134,7 @@ impl tallycam_srt::SrtObserver for ListenerBridge {
     }
 }
 
-#[derive(Debug, Clone, Copy, uniffi::Record)]
+#[derive(Debug, Clone, uniffi::Record)]
 pub struct SrtStats {
     pub connected: bool,
     pub rtt_ms: f64,
@@ -145,12 +145,27 @@ pub struct SrtStats {
     /// Dropped by the sender (too late, or the send queue was full).
     pub dropped_packets: u64,
     pub packets_in_flight: u64,
+    /// Span of the send buffer (not acknowledged, or not sent yet), ms;
+    /// the main signal of adaptive bitrate.
+    pub send_buffer_ms: f64,
     /// 0 before the first connection.
     pub negotiated_latency_ms: u32,
     /// With IP/UDP headers, all connections.
     pub bytes_sent: u64,
     pub packets_sent: u64,
     pub connections: u32,
+    /// Adaptive bitrate's bitrate now, kbit/s; 0 while it is off.
+    pub target_kbps: u32,
+    /// What adaptive bitrate last saw (`clear | congested | overloaded`, as
+    /// in `status.stream.link`); None while it is off.
+    pub link: Option<String>,
+}
+
+/// Implemented in Swift. Called on the SRT thread: hop to your own queue.
+#[uniffi::export(with_foreign)]
+pub trait BitrateListener: Send + Sync {
+    /// Adaptive bitrate's bitrate for the encoder, kbit/s.
+    fn on_bitrate(&self, kbps: u32);
 }
 
 #[derive(uniffi::Object)]
@@ -204,11 +219,33 @@ impl SrtCaller {
             lost_packets: s.lost_packets,
             dropped_packets: s.dropped_packets,
             packets_in_flight: s.packets_in_flight,
+            send_buffer_ms: s.send_buffer_ms,
             negotiated_latency_ms: s.negotiated_latency_ms,
             bytes_sent: s.bytes_sent,
             packets_sent: s.packets_sent,
             connections: s.connections,
+            target_kbps: s.target_kbps,
+            link: s.link.map(|l| l.as_str().to_string()),
         }
+    }
+
+    /// Adaptive bitrate on the SRT thread, from `ceiling_kbps` (the
+    /// operator's bitrate); `listener` hears each new bitrate, and the
+    /// first one at once. Again: starts afresh.
+    pub fn start_adaptive_bitrate(&self, ceiling_kbps: u32, listener: Arc<dyn BitrateListener>) {
+        self.sender.start_adaptive_bitrate(
+            ceiling_kbps,
+            Arc::new(move |kbps| listener.on_bitrate(kbps)),
+        );
+    }
+
+    /// The operator's bitrate changed; ignored while adaptive bitrate is off.
+    pub fn set_adaptive_ceiling(&self, ceiling_kbps: u32) {
+        self.sender.set_adaptive_ceiling(ceiling_kbps);
+    }
+
+    pub fn stop_adaptive_bitrate(&self) {
+        self.sender.stop_adaptive_bitrate();
     }
 
     /// Sends SRT SHUTDOWN, stops and joins the thread. No events after it

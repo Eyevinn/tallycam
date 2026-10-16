@@ -19,6 +19,14 @@ final class StreamController: ObservableObject {
         var latency: LatencyReport?
         var lateVideoFrames: Int?
         var lateAudioFrames: Int?
+        /// The encoder's bitrate now; below `ceilingKbps` while adaptive
+        /// bitrate holds it down.
+        var targetKbps: Int?
+        /// The operator's bitrate when these stats were taken.
+        var ceilingKbps: Int?
+        /// What adaptive bitrate last saw (`clear | congested |
+        /// overloaded`); nil when it is off.
+        var link: String?
     }
 
     private static let urlKey = "srtUrl"
@@ -27,6 +35,8 @@ final class StreamController: ObservableObject {
     private static let bitrateKey = "videoBitrateKbps"
     private static let audioCodecKey = "audioCodec"
     private static let videoCodecKey = "videoCodec"
+    /// Stored only when turned off (on by default).
+    private static let adaptiveBitrateKey = "adaptiveBitrate"
     /// Launch argument `-videoLowLatency NO` turns VideoToolbox low-latency
     /// rate control off (for latency comparisons).
     private static let lowLatencyKey = "videoLowLatency"
@@ -66,6 +76,19 @@ final class StreamController: ObservableObject {
             } else {
                 UserDefaults.standard.removeObject(forKey: Self.bitrateKey)
             }
+        }
+    }
+
+    /// Lowers the bitrate below `bitrateKbps` when the network cannot carry
+    /// it (core/src/bitrate/adaptive.rs). Applied live.
+    @Published var adaptiveBitrate: Bool {
+        didSet {
+            if adaptiveBitrate {
+                UserDefaults.standard.removeObject(forKey: Self.adaptiveBitrateKey)
+            } else {
+                UserDefaults.standard.set(false, forKey: Self.adaptiveBitrateKey)
+            }
+            stream?.setAdaptiveBitrate(adaptiveBitrate)
         }
     }
 
@@ -113,6 +136,7 @@ final class StreamController: ObservableObject {
         cameraName = CameraName.stored ?? ""
         let storedBitrate = UserDefaults.standard.integer(forKey: Self.bitrateKey)
         manualBitrateKbps = storedBitrate == 0 ? nil : storedBitrate
+        adaptiveBitrate = UserDefaults.standard.object(forKey: Self.adaptiveBitrateKey) as? Bool ?? true
         audioCodec = UserDefaults.standard.string(forKey: Self.audioCodecKey)
             .flatMap(AudioCodec.init(rawValue:)) ?? .defaultCodec
         videoCodec = UserDefaults.standard.string(forKey: Self.videoCodecKey)
@@ -230,7 +254,8 @@ final class StreamController: ObservableObject {
                                                                     lowLatency: lowLatency),
                                 mic: capture.hasAudio ? capture.mic : nil,
                                 audioCodec: audioCodec,
-                                outputs: capture.outputs)
+                                outputs: capture.outputs,
+                                adaptiveBitrate: adaptiveBitrate)
         { [weak self] event in
             Task { @MainActor in
                 self?.handle(event: event, streamId: id)
@@ -353,6 +378,9 @@ final class StreamController: ObservableObject {
         numbers.latency = stats.latency
         numbers.lateVideoFrames = stats.lateVideoFrames
         numbers.lateAudioFrames = stats.lateAudioFrames
+        numbers.targetKbps = stats.targetKbps
+        numbers.ceilingKbps = stats.ceilingKbps
+        numbers.link = stats.link
         self.stats = numbers
     }
 }

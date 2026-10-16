@@ -81,7 +81,9 @@ final class StatusReporter {
                                           srtLatencyMs: stats?.srtLatencyMs,
                                           latency: stats?.latency,
                                           lateVideoFrames: stats?.lateVideoFrames,
-                                          lateAudioFrames: stats?.lateAudioFrames)
+                                          lateAudioFrames: stats?.lateAudioFrames,
+                                          targetKbps: stats?.targetKbps,
+                                          link: stats?.link)
         }
         return StatusMessage(battery: battery,
                              thermal: Self.thermalName(ProcessInfo.processInfo.thermalState),

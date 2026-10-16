@@ -9,10 +9,15 @@
 //! - [`CallerConfig`]: host, port, streamid, latency, passphrase, pbkeylen.
 //! - [`SrtSender`]: `start`, `send` (lock-free; one allocation per 64
 //!   payloads), `stats`, `close`; events through [`SrtObserver`].
+//! - Adaptive bitrate on the SRT thread: `start_adaptive_bitrate`,
+//!   `set_adaptive_ceiling`, `stop_adaptive_bitrate`.
 
 mod config;
 mod queue;
 mod sender;
 
 pub use config::{CallerConfig, DEFAULT_LATENCY_MS, PAYLOAD_SIZE};
-pub use sender::{SendError, SenderOptions, SrtEvent, SrtObserver, SrtSender, SrtStats};
+pub use sender::{
+    BitrateCallback, SendError, SenderOptions, SrtEvent, SrtObserver, SrtSender, SrtStats,
+    STATS_INTERVAL,
+};

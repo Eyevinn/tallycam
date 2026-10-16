@@ -269,6 +269,7 @@ what auto exposure picked.
   "stream": { "state": "live", "url": "srt://192.0.2.10:9000?streamid=cam1&latency=120",
               "bitrate_kbps": 6012, "rtt_ms": 12.5, "retransmits": 3, "dropped": 0,
               "srt_latency_ms": 120, "late_video_frames": 0, "late_audio_frames": 0,
+              "target_kbps": 6000, "link": "clear",
               "latency": { "capture_to_encode_ms": { "p50": 37.5, "p95": 38.7, "max": 39.5 },
                            "encode_ms": { "p50": 10.3, "p95": 10.7, "max": 31.8 },
                            "mux_ms": { "p50": 0.5, "p95": 0.8, "max": 4.2 },
@@ -291,6 +292,10 @@ what auto exposure picked.
 `stream.state`: `idle | connecting | live | error` (with `stream.error`).
 `connecting` carries `stream.error` too when a live stream lost its
 connection and is reconnecting.
+`stream.bitrate_kbps` is measured on the wire; `stream.target_kbps` is
+what the video encoder runs now, below the `bitrate_kbps` control while
+adaptive bitrate holds it down. `stream.link`, while adaptive bitrate is on:
+`clear | congested | overloaded` (core/src/bitrate/adaptive.rs).
 `clock`: the phone's clock discipline, see "Time and frame timestamps".
 `genlock`, while genlock is on: `state` (`free_run`, `acquiring` or
 `locked`), `phase_error_ms` and `phase_error_max_ms` (mean and largest error
@@ -402,6 +407,7 @@ puts it in `data`.
 | `stream_url` | text | SRT URL, see "Stream URL" (streamid, latency, passphrase, pbkeylen) |
 | `srt_latency_ms` | range | SRT latency in ms (0 to 8000). Sets the `latency` parameter of `stream_url`, which stays the one place it is kept; applies on the next Go Live. SRT uses the larger of both ends, see `status.stream.srt_latency_ms` |
 | `bitrate_kbps` | range | video bitrate, applied live. Follows the format and codec (1080p30 H.264 6000; about 0.7x for HEVC) until set; changing `resolution`, `frame_rate` or `video_codec` returns it to that default. The range's maximum follows them too (20000 at 1080p30, up to 50000), so `hello` is sent again when it changes |
+| `adaptive_bitrate` | bool | on by default, persisted, applied live. Lowers the video bitrate when the network cannot carry it (SRT send buffer growing toward the latency, RTT rise, loss, drops) and raises it again, slowly, up to `bitrate_kbps`, which becomes the ceiling. See `status.stream.target_kbps` and `link` |
 | `video_codec` | enum | `h264` (default; High, or Constrained High with VideoToolbox's low-latency rate control, the default) or `hevc` (Main); applies on the next Go Live. HEVC is stream_type 0x24 with AUD, VPS/SPS/PPS on keyframes and the timestamp as a prefix SEI |
 | `audio_codec` | enum | `opus` (default) or `aac`; applies on the next Go Live. See "MPEG-TS timing" for how each is carried |
 | `lens` | enum | `ultra_wide`, `wide`, `tele` (those that exist) |

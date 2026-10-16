@@ -7,6 +7,8 @@ license.workspace = true
 publish = false
 
 [dependencies]
+# Adaptive bitrate (bitrate::adaptive), pure: no driver.
+tallycam-core = { path = "..", default-features = false }
 srt-protocol = "0.4.4"
 bytes = "1"
 rand = "0.8"

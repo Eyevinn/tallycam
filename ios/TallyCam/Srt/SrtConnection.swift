@@ -58,6 +58,23 @@ final class SrtConnection {
         }
     }
 
+    /// Adaptive bitrate on the core's SRT thread (core/src/bitrate/adaptive.rs),
+    /// from the operator's bitrate. `onBitrate` hears each new bitrate for
+    /// the encoder, and the first one at once, on the SRT thread.
+    func startAdaptiveBitrate(ceilingKbps: Int, onBitrate: @escaping @Sendable (Int) -> Void) {
+        caller?.startAdaptiveBitrate(ceilingKbps: UInt32(clamping: max(ceilingKbps, 1)),
+                                     listener: BitrateReport(onBitrate))
+    }
+
+    /// The operator's bitrate changed while adaptive bitrate runs.
+    func setAdaptiveCeiling(kbps: Int) {
+        caller?.setAdaptiveCeiling(ceilingKbps: UInt32(clamping: max(kbps, 1)))
+    }
+
+    func stopAdaptiveBitrate() {
+        caller?.stopAdaptiveBitrate()
+    }
+
     /// Sends SRT SHUTDOWN to the listener and stops the caller's thread.
     func close() {
         guard !closed else {
@@ -125,5 +142,18 @@ private final class Listener: SrtListener, @unchecked Sendable {
 
     func onFrameSent(captureNs: Int64, enqueuedNs: Int64, sentNs: Int64, last: Bool) {
         frameSent(captureNs, enqueuedNs, sentNs, last)
+    }
+}
+
+/// Adaptive bitrate's reports, on the core's SRT thread.
+private final class BitrateReport: BitrateListener, @unchecked Sendable {
+    private let report: @Sendable (Int) -> Void
+
+    init(_ report: @escaping @Sendable (Int) -> Void) {
+        self.report = report
+    }
+
+    func onBitrate(kbps: UInt32) {
+        report(Int(kbps))
     }
 }

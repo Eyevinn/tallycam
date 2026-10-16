@@ -4,8 +4,8 @@ import Foundation
 /// camera device: the `stream` group and `orientation`.
 @MainActor
 enum StreamControls {
-    static let ids: Set<String> = ["camera_name", "live", "stream_url", "srt_latency_ms", "bitrate_kbps", "video_codec",
-                                   "audio_codec", "orientation"]
+    static let ids: Set<String> = ["camera_name", "live", "stream_url", "srt_latency_ms", "bitrate_kbps",
+                                   "adaptive_bitrate", "video_codec", "audio_codec", "orientation"]
 
     /// The bitrate range follows the capture format and codec.
     static func descriptors(_ controller: StreamController) -> [ControlDescriptor] { [
@@ -21,6 +21,7 @@ enum StreamControls {
                           kind: .range(min: Double(controller.bitrateRange.lowerBound),
                                        max: Double(controller.bitrateRange.upperBound),
                                        step: 100, unit: "kbit/s")),
+        ControlDescriptor(id: "adaptive_bitrate", label: "Adaptive bitrate", group: "stream", kind: .bool),
         ControlDescriptor(id: "video_codec", label: "Video codec", group: "stream",
                           kind: .enumeration(VideoCodec.allCases.map {
                               ControlOption(value: .string($0.rawValue), label: $0.label)
@@ -42,6 +43,7 @@ enum StreamControls {
             "stream_url": .string(controller.url),
             "srt_latency_ms": .int(Int((try? SrtUrl(string: controller.url))?.latency ?? SrtUrl.defaultLatency)),
             "bitrate_kbps": .int(controller.bitrateKbps),
+            "adaptive_bitrate": .bool(controller.adaptiveBitrate),
             "video_codec": .string(controller.videoCodec.rawValue),
             "audio_codec": .string(controller.audioCodec.rawValue),
         ]
@@ -105,6 +107,12 @@ enum StreamControls {
                 kbps: Int(min(max(wanted, Double(range.lowerBound)), Double(range.upperBound)))
             )
             return Double(applied) == wanted ? nil : "clamped to \(applied)"
+        case "adaptive_bitrate":
+            guard let on = value.bool else {
+                return "expected a bool"
+            }
+            controller.adaptiveBitrate = on
+            return nil
         case "video_codec":
             guard let codec = value.string.flatMap(VideoCodec.init(rawValue:)) else {
                 return "expected " + VideoCodec.allCases.map(\.rawValue).joined(separator: " or ")

@@ -356,6 +356,32 @@ puts it in `data`.
 { "type": "log", "level": "warn", "message": "Thermal state serious, lowering frame rate" }
 ```
 
+### `ownership` (protocol 2)
+
+Who owns each control group: `auto`, `local` (the camera operator) or
+`remote` (the server, with the `holder` it named in `own`). In full after the
+full `state` on admission, and again in full on every change. See SHADING.md.
+
+```json
+{ "type": "ownership",
+  "groups": { "exposure": { "owner": "remote", "holder": { "id": "c7f3a1", "label": "Shader" } },
+              "white_balance": { "owner": "local" }, "focus": { "owner": "auto" } } }
+```
+
+### `image_stats` (protocol 2)
+
+Exposure and colour statistics of the encoded picture, only while the server
+asked for them with `stats`. Fields and their meaning: SHADING.md, "Image
+statistics"; computed by `core/src/image_stats.rs`.
+
+```json
+{ "type": "image_stats",
+  "luma": { "mean": 0.43, "p01": 0.04, "p50": 0.41, "p99": 0.96, "clipped": 0.012, "crushed": 0.003,
+            "histogram": "<32 bytes base64>", "waveform": "<32 x 16 bytes base64>" },
+  "colour": { "neutral_rg": 0.98, "neutral_bg": 1.04, "neutral_fraction": 0.21 },
+  "camera": { "iso": 400, "shutter": 50, "wb_temperature": 5150, "wb_tint": 4 } }
+```
+
 ## Server → device
 
 | type | fields | meaning |
@@ -366,6 +392,15 @@ puts it in `data`.
 | `message` | `text` | shown to the person at the phone |
 | `preview` | `enabled`, `fps?` (default 1), `width?` (default 480) | start or stop preview images |
 | `challenge` | `server`, `nonce` | prove the device key, see "Device keys" |
+| `own` | `id?`, `groups`, `holder: {id, label}` | protocol 2: the remote takes these groups (`exposure`, `white_balance`, `focus`); values stay. Skipped groups are named in `result.error` |
+| `release` | `id?`, `groups` | protocol 2: these remote groups go back to auto |
+| `production` | `mains_hz`, `shutter` (`"mains"`, `"free"` or a denominator) | protocol 2: the production's mains frequency and shutter; kept until the stream stops when it arrives while live |
+| `stats` | `enabled`, `fps?` (default 1, 0.2 to 4) | protocol 2: start or stop `image_stats` |
+
+From protocol 2 a `set` key or `command` of a group the server does not own
+(owner not `remote`) is refused for that key, with the reason in
+`result.error`; the other keys apply. Controls outside the groups (stream,
+lens, zoom, image) work as before. See SHADING.md.
 
 ## Control descriptor
 
@@ -391,6 +426,8 @@ puts it in `data`.
   these values; a list means any of them (`{"exposure_mode": ["manual",
   "auto_iso"]}`). The UI greys it out otherwise, but still shows its value.
 - `readonly: true`: shown, never set.
+- `locked_while_live: true`: refused while the stream is live (format and
+  codecs).
 
 ## Command descriptor
 
@@ -408,19 +445,19 @@ puts it in `data`.
 | `srt_latency_ms` | range | SRT latency in ms (0 to 8000). Sets the `latency` parameter of `stream_url`, which stays the one place it is kept; applies on the next Go Live. SRT uses the larger of both ends, see `status.stream.srt_latency_ms` |
 | `bitrate_kbps` | range | video bitrate, applied live. Follows the format and codec (1080p30 H.264 6000; about 0.7x for HEVC) until set; changing `resolution`, `frame_rate` or `video_codec` returns it to that default. The range's maximum follows them too (20000 at 1080p30, up to 50000), so `hello` is sent again when it changes |
 | `adaptive_bitrate` | bool | on by default, persisted, applied live. Lowers the video bitrate when the network cannot carry it (SRT send buffer growing toward the latency, RTT rise, loss, drops) and raises it again, slowly, up to `bitrate_kbps`, which becomes the ceiling. See `status.stream.target_kbps` and `link` |
-| `video_codec` | enum | `h264` (default; High, or Constrained High with VideoToolbox's low-latency rate control, the default) or `hevc` (Main); applies on the next Go Live. HEVC is stream_type 0x24 with AUD, VPS/SPS/PPS on keyframes and the timestamp as a prefix SEI |
-| `audio_codec` | enum | `opus` (default) or `aac`; applies on the next Go Live. See "MPEG-TS timing" for how each is carried |
+| `video_codec` | enum | refused while live (`locked_while_live`); `h264` (default; High, or Constrained High with VideoToolbox's low-latency rate control, the default) or `hevc` (Main). HEVC is stream_type 0x24 with AUD, VPS/SPS/PPS on keyframes and the timestamp as a prefix SEI |
+| `audio_codec` | enum | refused while live (`locked_while_live`); `opus` (default) or `aac`; see "MPEG-TS timing" for how each is carried |
 | `lens` | enum | `ultra_wide`, `wide`, `tele` (those that exist) |
 | `zoom` | range | zoom factor within the lens, log scale |
-| `resolution` | enum | `720p`, `1080p`, `2160p`, those the lens has in 8-bit 4:2:0 (SDR); group `image`. While live the frame size stays, a change applies when the stream stops. A lens without it falls back to the nearest smaller one |
-| `frame_rate` | enum | 24, 25, 30, 50, 60, 100, 120, 240 where the lens has them at the active resolution; the label says "binned" where the format is sensor binned. Applied live. On an iPhone 16: 2160p up to 60, 1080p up to 240 |
+| `resolution` | enum | `720p`, `1080p`, `2160p`, those the lens has in 8-bit 4:2:0 (SDR); group `image`. Refused while live (`locked_while_live`). A lens without it falls back to the nearest smaller one |
+| `frame_rate` | enum | 24, 25, 30, 50, 60, 100, 120, 240 where the lens has them at the active resolution; the label says "binned" where the format is sensor binned. Refused while live (`locked_while_live`). On an iPhone 16: 2160p up to 60, 1080p up to 240 |
 | `stabilization` | enum | `off`, `standard`, `cinematic`, ... where supported |
 | `torch` | bool | where the lens has a torch |
-| `exposure_mode` | enum | `auto`, `auto_iso`, `locked`, `manual`. `auto_iso`: the shutter stays where the operator put it and the core's loop sets the ISO from the metered exposure (iOS auto exposure changes the frame duration, which genlock owns) |
+| `exposure_mode` | enum | `auto`, `locked`, `manual`. `auto`: the core's auto ISO loop at the production shutter (iOS auto exposure moves the shutter and the frame duration, which genlock owns); under a free shutter the loop shortens the shutter once the ISO is at its minimum. `manual` sets the ISO (and the shutter under a free shutter). `auto_iso` is accepted as `auto` |
 | `iso` | range | manual only |
-| `shutter` | enum | denominator of 1/x seconds, e.g. 50 = 1/50 s; manual and auto_iso. At most one frame time (1/240 at 240 fps). In auto_iso it is rounded to a flicker-free value (`mains_hz`), so a measured value may be outside the options |
+| `shutter` | enum | denominator of 1/x seconds, e.g. 50 = 1/50 s. A production setting (`production.shutter`, SHADING.md): `readonly` unless the production shutter is free, then writable in manual. A shutter longer than the frame becomes the longest flicker-free one that fits |
 | `ev_bias` | range | exposure compensation in EV, auto and auto_iso |
-| `mains_hz` | enum | 50, 60, or 0 (off: no mains-lit light in the picture, for example outdoors, so auto ISO may use any shutter); default from the device region, persisted. In auto_iso (and when genlock moves exposure to auto_iso) the shutter is rounded to a whole number of half mains periods that fits the frame (2% room while genlock runs); the ISO compensates. No flicker-free shutter fits above 100 fps at 50 Hz or 120 fps at 60 Hz, and the shutter is then left alone |
+| `mains_hz` | enum | `readonly` while a server's `production` applies; refused while live. 50, 60, or 0 (off: no mains-lit light in the picture, for example outdoors, so auto ISO may use any shutter); default from the device region, persisted. In auto_iso (and when genlock moves exposure to auto_iso) the shutter is rounded to a whole number of half mains periods that fits the frame (2% room while genlock runs); the ISO compensates. No flicker-free shutter fits above 100 fps at 50 Hz or 120 fps at 60 Hz, and the shutter is then left alone |
 | `genlock` | bool | soft genlock: the frame timing locks to the TAI frame grid (docs/GENLOCK.md). Moves auto exposure to auto_iso; status in `status.genlock` |
 | `genlock_offset_us` | range | where frames land after each grid point, µs (per-model calibration, or measurement sweeps); -50000 to 50000 |
 | `wb_mode` | enum | `auto`, `locked`, `manual` |

@@ -116,11 +116,22 @@ fun SettingsScreen(model: AppModel, onScan: () -> Unit, onDone: () -> Unit) {
                 }
                 // Stream (SRT).
                 val live = model.streamState != LiveStream.State.IDLE
-                Section("Stream (SRT)", if (!live) "Set by the QR code. Edit only if you know the address." else "Stop the stream to change the address.", width) {
+                Section("Stream (SRT)", (if (!live) "Set by the QR code. Edit only if you know the address." else "Stop the stream to change the address.") +
+                        " Adaptive bitrate lowers the video bitrate when the network cannot carry it, and raises it again up to the bitrate set.", width) {
                     Field(srt, { srt = it }, "srt://host:port?streamid=...", url = true, enabled = !live)
                     Divider()
                     Labeled("Video", model.videoSummary)
+                    Divider()
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("Adaptive bitrate", color = Color.White)
+                        Spacer(Modifier.weight(1f))
+                        androidx.compose.material3.Switch(checked = model.adaptiveOn, onCheckedChange = model::setAdaptiveBitrate)
+                    }
                     model.lastStats?.takeIf { model.streamState == LiveStream.State.LIVE }?.let { s ->
+                        if (model.adaptiveOn && s.targetKbps > 0) {
+                            Divider()
+                            Labeled("Encoder now", "${s.targetKbps} kbit/s")
+                        }
                         Divider()
                         Labeled("Round trip", "%.0f ms".format(s.rttMs))
                         Divider()

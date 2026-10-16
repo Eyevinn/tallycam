@@ -56,6 +56,10 @@ class LiveStream(private val listener: Listener) {
         val lateAudioFrames: Long,
         /** Capture to muxed, ms over the last interval: p50 and max; null without frames. */
         val captureToMuxMs: Pair<Double, Double>?,
+        /** The encoder's bitrate now (below the operator's while adaptive bitrate holds it down). */
+        val targetKbps: Int,
+        /** What adaptive bitrate last saw: clear, congested or overloaded; null while it is off. */
+        val link: String?,
     )
 
     private val main = Handler(Looper.getMainLooper())
@@ -72,11 +76,12 @@ class LiveStream(private val listener: Listener) {
      * had started.
      */
     fun start(srtUrl: String, width: Int, height: Int, frameRate: Int, bitrateKbps: Int,
-              timestampOffsetNs: Long, withAudio: Boolean, hevc: Boolean = false, aac: Boolean = false): Surface {
+              timestampOffsetNs: Long, withAudio: Boolean, hevc: Boolean = false, aac: Boolean = false,
+              adaptive: Boolean = true): Surface {
         check(state == State.IDLE && session == null) { "already live" }
         val s = Session(timestampOffsetNs)
         try {
-            val surface = s.start(srtUrl, width, height, frameRate, bitrateKbps, withAudio, hevc, aac)
+            val surface = s.start(srtUrl, width, height, frameRate, bitrateKbps, withAudio, hevc, aac, adaptive)
             session = s
             lastBytes = 0
             lastStatsNs = Hot.hostNowNs()
@@ -97,8 +102,14 @@ class LiveStream(private val listener: Listener) {
         setState(State.IDLE, null)
     }
 
+    /** The operator's bitrate: with adaptive bitrate on, its ceiling. */
     fun setBitrate(kbps: Int) {
         session?.setBitrate(kbps)
+    }
+
+    /** Adaptive bitrate on or off while live; off returns to the operator's bitrate. */
+    fun setAdaptive(on: Boolean) {
+        session?.setAdaptive(on)
     }
 
     /** Since the last call. Main thread; the muxer's counters are read on the stream thread. */
@@ -112,7 +123,8 @@ class LiveStream(private val listener: Listener) {
         lastStatsNs = now
         val (late, latency) = s.takeStats()
         return Stats(kbps, srt.rttMs, srt.retransmittedPackets.toLong(), srt.droppedPackets.toLong(),
-                     srt.negotiatedLatencyMs.toInt(), late.first, late.second, latency)
+                     srt.negotiatedLatencyMs.toInt(), late.first, late.second, latency,
+                     s.encoderKbps, if (s.adaptive) srt.link else null)
     }
 
     private fun setState(state: State, message: String?) {
@@ -152,6 +164,12 @@ class LiveStream(private val listener: Listener) {
         private var frameCounter = 0
         /** A keyframe was asked for and has not come out yet. */
         private var keyframeRequested = false
+        @Volatile var adaptive = false
+            private set
+        /** The operator's bitrate (the ceiling) and what the encoder runs now. */
+        @Volatile private var ceilingKbps = 0
+        @Volatile var encoderKbps = 0
+            private set
         private var avcc: ByteBuffer = ByteBuffer.allocateDirect(256 * 1024)
         private val config: ByteBuffer = ByteBuffer.allocateDirect(1024)
         /** Stream thread only: the clock mapping of the frame being muxed. */
@@ -182,7 +200,7 @@ class LiveStream(private val listener: Listener) {
         }
 
         fun start(srtUrl: String, width: Int, height: Int, frameRate: Int, bitrateKbps: Int,
-                  withAudio: Boolean, hevc: Boolean, aac: Boolean): Surface {
+                  withAudio: Boolean, hevc: Boolean, aac: Boolean, adaptive: Boolean): Surface {
             val options = srtCallerOptionsFromUrl(srtUrl).copy(reconnect = true)
             val session = this
             val caller = SrtCaller.start(options, object : SrtListener {
@@ -214,12 +232,57 @@ class LiveStream(private val listener: Listener) {
             val video = VideoEncoder(mime, width, height, frameRate, bitrateKbps, handler, videoSink)
             this.video = video
             video.start()
+            ceilingKbps = bitrateKbps
+            encoderKbps = bitrateKbps
+            this.adaptive = adaptive
+            if (adaptive) startAdaptive()
             return video.inputSurface
         }
 
+        /**
+         * Adaptive bitrate on the core's SRT thread (core/src/bitrate): its
+         * reports set the encoder, on the stream thread, as on iOS.
+         */
+        private fun startAdaptive() {
+            caller?.startAdaptiveBitrate(ceilingKbps.toUInt(), bitrateListener)
+        }
+
+        private val bitrateListener = object : se.eyevinn.tallycam.core.BitrateListener {
+            override fun onBitrate(kbps: UInt) {
+                handler.post {
+                    // A report from before adaptive bitrate was turned off.
+                    if (closed || !adaptive) return@post
+                    encoderKbps = kbps.toInt()
+                    video?.setBitrate(encoderKbps)
+                }
+            }
+        }
+
         fun setBitrate(kbps: Int) {
+            ceilingKbps = kbps
+            if (adaptive) {
+                // The controller answers through onBitrate.
+                caller?.setAdaptiveCeiling(kbps.toUInt())
+                return
+            }
             val video = video ?: return
-            handler.post { if (!closed) video.setBitrate(kbps) }
+            handler.post {
+                if (!closed) {
+                    encoderKbps = kbps
+                    video.setBitrate(kbps)
+                }
+            }
+        }
+
+        fun setAdaptive(on: Boolean) {
+            if (on == adaptive || closed) return
+            adaptive = on
+            if (on) {
+                startAdaptive()
+            } else {
+                caller?.stopAdaptiveBitrate()
+                setBitrate(ceilingKbps)
+            }
         }
 
         /** Main thread: the late counters (read on the stream thread at the last tick) and the latency window. */

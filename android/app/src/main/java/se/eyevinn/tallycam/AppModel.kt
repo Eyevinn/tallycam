@@ -151,6 +151,17 @@ class AppModel(private val context: Context) : LcpClient.Listener, LiveStream.Li
     fun clockSummary(): se.eyevinn.tallycam.control.ClockSummary? =
         clock?.let { c -> runCatching { c.statusJson() }.getOrNull()?.let(se.eyevinn.tallycam.control.ClockSummary::parse) }
 
+    var adaptiveOn by mutableStateOf(settings.adaptiveBitrate)
+        private set
+
+    /** On by default, persisted, applied live (docs/PROTOCOL.md, `adaptive_bitrate`). */
+    fun setAdaptiveBitrate(on: Boolean) {
+        settings.adaptiveBitrate = on
+        adaptiveOn = on
+        stream.setAdaptive(on)
+        publishState()
+    }
+
     fun setSrtUrl(url: String) {
         if (url.isEmpty() || url.startsWith("srt://")) settings.srtUrl = url
         publishState()
@@ -207,7 +218,8 @@ class AppModel(private val context: Context) : LcpClient.Listener, LiveStream.Li
             val surface = stream.start(ProvisioningLink.resolveSrtUrl(url, id), camera.streamSize.width,
                                        camera.streamSize.height, camera.settings.frameRate, kbps,
                                        camera.timestampOffsetNs(), withAudio = mic,
-                                       hevc = settings.videoCodec == "hevc", aac = settings.audioCodec == "aac")
+                                       hevc = settings.videoCodec == "hevc", aac = settings.audioCodec == "aac",
+                                       adaptive = settings.adaptiveBitrate)
             bitrateKbps = kbps
             streamMessage = null
             camera.setEncoderSurface(surface)
@@ -335,6 +347,7 @@ class AppModel(private val context: Context) : LcpClient.Listener, LiveStream.Li
             Controls.range("srt_latency_ms", "SRT latency", "stream", SrtUrl.LATENCY_RANGE.first.toDouble(),
                            SrtUrl.LATENCY_RANGE.last.toDouble(), 10.0, "ms"),
             Controls.range("bitrate_kbps", "Video bitrate", "stream", 500.0, 20000.0, 100.0, "kbit/s"),
+            Controls.bool("adaptive_bitrate", "Adaptive bitrate", "stream"),
             enumOf("video_codec", "Video codec", buildList {
                 add("h264" to "H.264")
                 if (VideoEncoder.hasEncoder(android.media.MediaFormat.MIMETYPE_VIDEO_HEVC)) add("hevc" to "HEVC")
@@ -361,6 +374,7 @@ class AppModel(private val context: Context) : LcpClient.Listener, LiveStream.Li
             .put("stream_url", settings.srtUrl)
             .put("srt_latency_ms", SrtUrl.latency(settings.srtUrl) ?: SrtUrl.DEFAULT_LATENCY_MS)
             .put("bitrate_kbps", settings.bitrateKbps.takeIf { it > 0 } ?: DEFAULT_KBPS)
+            .put("adaptive_bitrate", settings.adaptiveBitrate)
             .put("video_codec", settings.videoCodec)
             .put("audio_codec", settings.audioCodec)
         return v
@@ -454,6 +468,7 @@ class AppModel(private val context: Context) : LcpClient.Listener, LiveStream.Li
                         }
                     }
                 }
+                "adaptive_bitrate" -> if (value is Boolean) { setAdaptiveBitrate(value); null } else "expected a bool"
                 "video_codec" -> if (value == "h264" || (value == "hevc" &&
                         VideoEncoder.hasEncoder(android.media.MediaFormat.MIMETYPE_VIDEO_HEVC))) {
                     settings.videoCodec = value as String
@@ -547,6 +562,8 @@ class AppModel(private val context: Context) : LcpClient.Listener, LiveStream.Li
                 .put("retransmits", it.retransmits).put("dropped", it.dropped)
                 .put("late_video_frames", it.lateVideoFrames).put("late_audio_frames", it.lateAudioFrames)
             if (it.srtLatencyMs > 0) streamJson.put("srt_latency_ms", it.srtLatencyMs)
+            if (it.targetKbps > 0) streamJson.put("target_kbps", it.targetKbps)
+            it.link?.let { link -> streamJson.put("link", link) }
             it.captureToMuxMs?.let { (p50, max) ->
                 streamJson.put("latency", JSONObject().put("capture_to_mux_ms",
                     JSONObject().put("p50", Math.round(p50 * 10) / 10.0).put("max", Math.round(max * 10) / 10.0)))

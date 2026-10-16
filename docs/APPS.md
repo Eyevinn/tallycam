@@ -67,7 +67,6 @@ its own dark (#16181E), so launchers' masks keep the tally dot.
 | QR scanning | The system Camera app | The system camera, or the in-app scanner | Not every Android camera app opens `tallycam://` links |
 | `torch_probe` | Yes | No | A measurement tool (docs/GENLOCK.md); add when Android genlock is measured |
 | `frame_duration` (Debug) | Yes | No | A measurement tool |
-| Adaptive bitrate | In progress | No | Follows once it lands in the core and iOS |
 | Protocol 2 (ownership, docs/SHADING.md) | In progress | No (sends 1; the hub accepts it) | Through the core's state machine once iOS has it |
 | Device key store | Secure Enclave | Android Keystore (StrongBox where present) | Platform equivalents |
 | Thermal state in the status line | When serious | Not shown (reported in `status.thermal`) | To add |

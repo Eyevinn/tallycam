@@ -38,6 +38,11 @@ class Settings(context: Context) {
         get() = prefs.getInt("mainsHz", -1)
         set(value) = prefs.edit().putInt("mainsHz", value).apply()
 
+    /** Adaptive bitrate (docs/PROTOCOL.md, `adaptive_bitrate`): on unless turned off. */
+    var adaptiveBitrate: Boolean
+        get() = prefs.getBoolean("adaptiveBitrate", true)
+        set(value) = prefs.edit().putBoolean("adaptiveBitrate", value).apply()
+
     /** 0: the default for the format. */
     var bitrateKbps: Int
         get() = prefs.getInt("bitrateKbps", 0)

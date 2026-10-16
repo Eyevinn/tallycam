@@ -8,6 +8,8 @@
 //!   key, the challenge payload the Secure Enclave signs, the `auth` message.
 //! - UniFFI: camera logic (`camera`): the mains frequency per region and the
 //!   bitrate defaults.
+//! - UniFFI: shading (`ownership`): the ownership state machine of exposure,
+//!   colour and focus, the group of a control, and the image statistics.
 //! - C ABI (`include/tallycam_core_hot.h`): the per-frame calls: the clock
 //!   mapping, the SEI writer, the MPEG-TS muxer (which queues straight onto
 //!   the SRT caller; `lc_srt_send` sends a ready payload the same way), the
@@ -28,6 +30,7 @@ mod camera;
 mod clock;
 mod device_key;
 mod genlock;
+mod ownership;
 mod sei;
 mod srt;
 mod ts;

@@ -21,6 +21,10 @@ pub mod device_key;
 /// Auto ISO and flicker-free shutters.
 pub mod exposure;
 pub mod genlock;
+/// Exposure and colour statistics from a sampled picture.
+pub mod image_stats;
+/// Who owns exposure, colour and focus: auto, local or remote.
+pub mod ownership;
 pub mod protocol;
 pub mod sei;
 pub mod ts;

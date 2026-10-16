@@ -7,13 +7,17 @@
 //! not interpret are kept in `extra` maps so they can be forwarded unchanged.
 //! Controller-side envelopes (operator UI <-> server) belong to the server.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 /// LCP protocol version. 1 added device keys: `hello.public_key`, the
 /// server's `challenge` and the device's `auth` (docs/PROTOCOL.md, "Device
-/// keys"). A version 0 `hello` comes from an app without a key.
-pub const PROTOCOL_VERSION: u32 = 1;
+/// keys"). A version 0 `hello` comes from an app without a key. 2 added
+/// ownership of exposure, colour and focus (`own`, `release`, `ownership`)
+/// and the production settings (`production`), docs/SHADING.md.
+pub const PROTOCOL_VERSION: u32 = 2;
 
 pub const DEVICE_PATH: &str = "/lcp/v0/device";
 pub const CONTROL_PATH: &str = "/lcp/v0/control";
@@ -303,6 +307,12 @@ pub enum DeviceMessage {
     },
     Ping(Ping),
     Pong(Ping),
+    /// Who owns each control group, in full on admission and on every change.
+    Ownership {
+        groups: BTreeMap<String, GroupOwnership>,
+    },
+    /// Exposure and colour statistics, only while the server asked for them.
+    ImageStats(ImageStats),
     #[serde(other)]
     Unknown,
 }
@@ -358,6 +368,158 @@ pub enum ServerToDevice {
     },
     Ping(Ping),
     Pong(Ping),
+    /// The holder takes the named groups (`exposure`, `white_balance`,
+    /// `focus`). Values stay as they are.
+    Own {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<Value>,
+        groups: Vec<String>,
+        holder: Holder,
+    },
+    /// The named groups go back to auto.
+    Release {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<Value>,
+        groups: Vec<String>,
+    },
+    /// Production settings, after admission and when they change.
+    Production(Production),
+    /// Start or stop `image_stats` (default 1 per second, at most 4).
+    Stats {
+        enabled: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        fps: Option<f64>,
+    },
+}
+
+// ---------------------------------------------------------------------------
+// Ownership and production (docs/SHADING.md)
+// ---------------------------------------------------------------------------
+
+/// Who owns a control group.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Owner {
+    Auto,
+    Local,
+    Remote,
+}
+
+/// The remote owner of a group: chosen by the hub, `id` opaque to the
+/// phone, `label` shown on it. Each at most 64 bytes.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Holder {
+    pub id: String,
+    #[serde(default)]
+    pub label: String,
+}
+
+/// One group in `ownership`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GroupOwnership {
+    pub owner: Owner,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub holder: Option<Holder>,
+}
+
+/// The production's shutter. On the wire `"mains"`, `"free"` or the
+/// denominator of a fixed flicker-free shutter (`100` for 1/100 s). An
+/// unknown value reads as `mains`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ShutterPolicy {
+    /// One mains period: 1/50 at 50 Hz, 1/60 at 60 Hz.
+    #[default]
+    Mains,
+    /// No mains-lit light in the picture: the shutter joins the exposure
+    /// group, and auto shortens it once ISO is at its minimum.
+    Free,
+    /// A fixed shutter, 1/x s.
+    Fixed(u32),
+}
+
+impl Serialize for ShutterPolicy {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        match self {
+            ShutterPolicy::Mains => s.serialize_str("mains"),
+            ShutterPolicy::Free => s.serialize_str("free"),
+            ShutterPolicy::Fixed(x) => s.serialize_u32(*x),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for ShutterPolicy {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        Ok(match Value::deserialize(d)? {
+            Value::String(s) if s == "free" => ShutterPolicy::Free,
+            Value::Number(n) => match n.as_f64() {
+                Some(x) if (1.0..=100_000.0).contains(&x) && x.fract() == 0.0 => {
+                    ShutterPolicy::Fixed(x as u32)
+                }
+                _ => ShutterPolicy::Mains,
+            },
+            _ => ShutterPolicy::Mains,
+        })
+    }
+}
+
+/// Production-wide settings (docs/SHADING.md, "Shutter"): the same for
+/// every camera of the production, not changeable while live.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Production {
+    /// 50, 60, or 0 (no mains-lit light).
+    pub mains_hz: u32,
+    #[serde(default)]
+    pub shutter: ShutterPolicy,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+// ---------------------------------------------------------------------------
+// image_stats (docs/SHADING.md, "Image statistics")
+// ---------------------------------------------------------------------------
+
+/// Luma of the encoded picture. Levels are 0..1 of the nominal range.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct LumaStats {
+    pub mean: f64,
+    pub p01: f64,
+    pub p50: f64,
+    pub p99: f64,
+    /// Share of the picture at the top of the range.
+    pub clipped: f64,
+    /// Share of the picture at the bottom of the range.
+    pub crushed: f64,
+    /// 32 bins from black to white, one byte each (relative to the fullest
+    /// bin, 255), standard base64.
+    pub histogram: String,
+    /// 32 columns left to right, each 16 levels from black up, one byte each
+    /// (share of the column, 255 = all of it), standard base64.
+    pub waveform: String,
+}
+
+/// Colour of the near-grey pixels: their mean R'/G' and B'/G' (1.0 when
+/// neutral) and their share of the picture. The ratios are absent when no
+/// pixel is near grey.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct ColourStats {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub neutral_rg: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub neutral_bg: Option<f64>,
+    #[serde(default)]
+    pub neutral_fraction: f64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct ImageStats {
+    pub luma: LumaStats,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub colour: Option<ColourStats>,
+    /// Camera settings at the moment of measurement (`iso`, `shutter`,
+    /// `wb_temperature`, `wb_tint`, `exposure_offset_ev`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub camera: Option<Values>,
 }
 
 // ---------------------------------------------------------------------------

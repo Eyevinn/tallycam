@@ -138,6 +138,19 @@ pub unsafe extern "C" fn lc_auto_iso_set_mains(a: *mut LcAutoIso, mains_hz: u32)
     }
 }
 
+/// Free shutter (no mains-lit light): hold `base_ns` and shorten it only
+/// once the ISO is at its minimum. 0 turns it off.
+///
+/// # Safety
+/// `a` from `lc_auto_iso_new`, calls serialized.
+#[no_mangle]
+pub unsafe extern "C" fn lc_auto_iso_set_free_shutter(a: *mut LcAutoIso, base_ns: f64) {
+    if !a.is_null() {
+        // SAFETY: the caller guarantees a live loop and serialized calls.
+        unsafe { (*a).0.set_free_shutter(Some(base_ns)) };
+    }
+}
+
 /// One sample. Returns true and writes the ISO and exposure duration (ns)
 /// to apply when they change.
 ///

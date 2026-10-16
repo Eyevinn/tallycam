@@ -245,6 +245,8 @@ void lc_auto_iso_reset(LcAutoIso *a);
 /// Target offset, EV (exposure compensation).
 void lc_auto_iso_set_bias(LcAutoIso *a, double bias_ev);
 void lc_auto_iso_set_mains(LcAutoIso *a, uint32_t mains_hz);
+/// Free shutter: hold base_ns, shorten only at the lowest ISO; 0 turns it off.
+void lc_auto_iso_set_free_shutter(LcAutoIso *a, double base_ns);
 /// Returns true and writes the ISO and exposure duration to apply.
 bool lc_auto_iso_on_sample(LcAutoIso *a, const LcAutoIsoInput *input, double *out_iso, double *out_exposure_ns);
 void lc_auto_iso_status(const LcAutoIso *a, LcAutoIsoStatus *out);

@@ -202,6 +202,10 @@ enum Phase {
 
 pub struct AutoIso {
     cfg: AutoIsoConfig,
+    /// Free shutter (docs/SHADING.md, D1): the shutter to hold, which the
+    /// loop shortens only once the ISO is at its minimum. None: the shutter
+    /// stays (rounded flicker-free for `mains_hz`).
+    free_base_ns: Option<f64>,
     bias_ev: f64,
     bias_changed: bool,
     gain: f64,
@@ -219,6 +223,7 @@ impl AutoIso {
     pub fn new(cfg: AutoIsoConfig) -> Self {
         Self {
             cfg,
+            free_base_ns: None,
             bias_ev: 0.0,
             bias_changed: false,
             gain: cfg.gain_initial,
@@ -258,6 +263,16 @@ impl AutoIso {
 
     pub fn set_mains_hz(&mut self, mains_hz: u32) {
         self.cfg.mains_hz = mains_hz;
+    }
+
+    /// Free shutter with `base_ns` as the shutter to hold (no mains-lit
+    /// light, so no flicker rounding); None or a value <= 0 turns it off.
+    pub fn set_free_shutter(&mut self, base_ns: Option<f64>) {
+        self.free_base_ns = base_ns.filter(|b| b.is_finite() && *b > 0.0);
+    }
+
+    pub fn free_shutter(&self) -> Option<f64> {
+        self.free_base_ns
     }
 
     /// Starts over (auto ISO turned on, or the device changed). Keeps the
@@ -399,6 +414,11 @@ impl AutoIso {
     /// the limits.
     fn duration(&self, s: &AutoIsoInput) -> f64 {
         let current = s.exposure_ns.clamp(s.min_exposure_ns, s.max_exposure_ns);
+        if let Some(base) = self.free_base_ns {
+            // Never longer than the shutter to hold; shorter only while the
+            // ISO is at its minimum (see `step`).
+            return current.min(base.clamp(s.min_exposure_ns, s.max_exposure_ns));
+        }
         flicker_free_exposure_ns(
             current,
             self.cfg.mains_hz,
@@ -414,8 +434,21 @@ impl AutoIso {
         let bias = std::mem::take(&mut self.bias_changed);
         let wanted = (-error / self.gain * self.cfg.step_share)
             .clamp(-self.cfg.max_step_ev, self.cfg.max_step_ev);
-        let duration = self.duration(s);
         let now = (s.iso * s.exposure_ns).log2();
+        let duration = match self.free_base_ns {
+            Some(base) => {
+                // ISO first at the held shutter; below the lowest ISO the
+                // shutter gets shorter instead.
+                let base = base.clamp(s.min_exposure_ns, s.max_exposure_ns);
+                let product = (now + wanted).exp2();
+                if product / base < s.min_iso {
+                    (product / s.min_iso).clamp(s.min_exposure_ns, base)
+                } else {
+                    base
+                }
+            }
+            None => self.duration(s),
+        };
         let iso_wanted = (now + wanted).exp2() / duration;
         let iso = iso_wanted.clamp(s.min_iso, s.max_iso);
         self.status.limit = if iso_wanted > s.max_iso * 1.001 {
@@ -650,6 +683,42 @@ mod tests {
         let mut ai = AutoIso::new(AutoIsoConfig::default());
         run(&mut cam, &mut ai, ms, |_, _| {});
         (cam, ai)
+    }
+
+    #[test]
+    fn free_shutter_shortens_only_below_the_lowest_iso_and_comes_back() {
+        // Daylight: 6 EV brighter than the ISO range at 1/100 s can take.
+        let mut cam = Camera::new(3.0, 30, 50.0);
+        cam.scene = Box::new(|t| if t < 2000 * MS { 0.0 } else if t < 12_000 * MS { 6.0 } else { 0.0 });
+        let mut ai = AutoIso::new(AutoIsoConfig {
+            mains_hz: 0,
+            ..Default::default()
+        });
+        ai.set_free_shutter(Some(10_000_000.0));
+        let mut shortest = f64::MAX;
+        run(&mut cam, &mut ai, 11_500, |c, _| shortest = shortest.min(c.exposure_ns));
+        assert!(shortest < 3_000_000.0, "shutter stayed at {shortest} ns");
+        assert!((cam.iso - 34.0).abs() < 1.0, "ISO {} not at its minimum", cam.iso);
+        assert!(cam.picture_ev().abs() < 0.3, "picture {} EV off", cam.picture_ev());
+        assert_eq!(ai.status().limit, AutoIsoLimit::None);
+        // Back indoors: the shutter returns to the held 1/100 before the
+        // ISO rises.
+        run(&mut cam, &mut ai, 10_000, |_, _| {});
+        assert_eq!(cam.exposure_ns, 10_000_000.0);
+        assert!(cam.picture_ev().abs() < 0.3, "picture {} EV off", cam.picture_ev());
+    }
+
+    #[test]
+    fn without_free_shutter_bright_light_clips_at_the_lowest_iso() {
+        let mut cam = Camera::new(3.0, 30, 50.0);
+        cam.scene = Box::new(|t| if t < 2000 * MS { 0.0 } else { 6.0 });
+        let mut ai = AutoIso::new(AutoIsoConfig {
+            mains_hz: 0,
+            ..Default::default()
+        });
+        run(&mut cam, &mut ai, 11_500, |_, _| {});
+        assert_eq!(cam.exposure_ns, 10_000_000.0);
+        assert_eq!(ai.status().limit, AutoIsoLimit::TooBright);
     }
 
     #[test]

@@ -3,8 +3,8 @@
 Draft, prototype. Breaking changes are expected until v1.
 
 LCP lets a server (Strom, Open Live, or the standalone `control-hub`) see and
-control a camera phone. It is platform neutral: an Android app speaks the same
-protocol.
+control a camera phone. It is platform neutral: the iOS and Android apps
+speak the same protocol.
 
 ## Principles
 
@@ -31,8 +31,9 @@ protocol.
 
 ## Provisioning v0
 
-How a phone learns where to connect: the server shows a QR code, the phone's
-Camera app opens it in the app. On an open server anyone on the network who
+How a phone learns where to connect: the server shows a QR code, which the
+app's own scanner reads, or the phone's Camera app opens in the app. On an
+open server anyone on the network who
 sees the code can join (as with the open device endpoint itself); an
 invite-only server puts a one-time invite in the link instead (see
 "Admission").
@@ -44,8 +45,9 @@ tallycam://connect?control=<ws url>&srt=<srt url>
 ```
 
 - The scheme `tallycam` is one constant on each side: `DEEP_LINK_SCHEME` in
-  the hub library, `ProvisioningLink.scheme` in the app, and
-  `CFBundleURLTypes` in `ios/project.yml`.
+  the hub library, `ProvisioningLink.scheme` in the apps, and the URL
+  scheme registration (`CFBundleURLTypes` in `ios/project.yml`, the intent
+  filter in Android's manifest).
 - Both values are percent-encoded (everything but RFC 3986 unreserved
   characters).
 - `control` (required): the device endpoint, `ws://` or `wss://`.
@@ -55,10 +57,13 @@ tallycam://connect?control=<ws url>&srt=<srt url>
   `{device}` is used as is (a fixed `streamid`).
 - Unknown parameters are ignored.
 
-The phone saves both URLs (they replace any earlier ones) and reconnects the
-control channel. While it is live, the new SRT URL applies on the next Go
-Live. A link with an unusable `control` (not ws/wss) or `srt` (not srt) is
-ignored as a whole.
+A link for the control server in use (same host and port) applies at once.
+A link for another server, or the first one, asks the person at the phone
+first ("Join <hub>?", docs/UI_DESIGN.md, "Joining a hub"). Applying saves
+both URLs (they replace any earlier ones; a link without `srt` keeps the
+current stream URL) and reconnects the control channel. While live, the new
+SRT URL applies on the next Go Live. A link with an unusable `control` (not
+ws/wss) or `srt` (not srt) is ignored as a whole.
 
 ### Stream URL
 
@@ -78,7 +83,9 @@ The phone is always the SRT caller; the receiver (Strom) listens.
   listener must have the same passphrase; a listener with another passphrase,
   or without one, rejects the connection and the phone stops with the reason.
   Percent-encode it in the URL (`+` decodes to a space). `status.stream.url`
-  and the phone's log lines show it as `***`; the `stream_url` value keeps it.
+  and the phone's log lines show it as `***`; the `stream_url` value keeps
+  it. The hub keeps that value too but shows controllers `passphrase=***`; a
+  controller that sends such a URL back keeps the phone's passphrase.
 - `pbkeylen` (optional): AES key length in bytes, 16 (AES-128, the default
   with a passphrase), 24 or 32 (AES-256). libsrt listeners take the key length
   from the caller.
@@ -135,6 +142,13 @@ again every second (`status.stream.state` `connecting` with the reason in
   settings (the key file of the hub's own tools is written owner-only, 0600,
   and never overwritten); `--mains-hz` and `--shutter`, when given, replace
   the stored production at startup.
+- Limits: at most 1024 known devices (a new one beyond is refused, "too
+  many cameras"), 512 control values per device, 64 phone sockets waiting
+  for admission, messages of 8 MiB (`limit_upgrade` applies the same to an
+  embedding server's sockets), device ids of 256 bytes without control
+  characters. A phone that does not read its socket is dropped. A
+  controller upgrade from another origin (a browser on another site) is
+  refused (`same_origin`, which also accepts `X-Forwarded-Host`).
 
 ## Device keys
 
@@ -144,9 +158,10 @@ trusts a claimed device id alone. Code is the source of truth
 
 ### Key and id
 
-- The app creates the key on first launch: in the Secure Enclave on a
-  device, a software key in the Keychain on the simulator, stored "this
-  device only" (no backup, no sync). A reinstall creates a new key, so a
+- The app creates the key on first launch: on iOS in the Secure Enclave (a
+  software key in the Keychain on the simulator), stored "this device only"
+  (no backup, no sync); on Android in the Keystore (StrongBox where
+  present). A reinstall creates a new key, so a
   reinstalled app is a new camera. Only a key that is missing or unusable
   is replaced. A Keychain that cannot be read yet (before the first unlock
   after a reboot) keeps the stored key, and the app does not connect until
@@ -418,8 +433,8 @@ D13). Earlier protocol 2 builds had ownership (`own`, `release`,
   these values; a list means any of them (`{"exposure_mode": ["manual",
   "locked"]}`). The UI greys it out otherwise, but still shows its value.
 - `readonly: true`: shown, never set.
-- `locked_while_live: true`: refused while the stream is live (format and
-  codecs).
+- `locked_while_live: true`: refused while the stream is live (format,
+  codecs, `mains_hz`).
 
 ## Command descriptor
 
@@ -427,11 +442,14 @@ D13). Earlier protocol 2 builds had ownership (`own`, `release`,
 { "name": "focus_at", "label": "Focus at point", "args": { "x": "0..1", "y": "0..1" } }
 ```
 
-## Controls in the iOS prototype
+## Controls
+
+The iOS app's controls. The Android app uses the same ids; what it lacks or
+does differently is in docs/APPS.md.
 
 | id | kind | notes |
 |---|---|---|
-| `camera_name` | text | the display name sent as `hello.device.name`, persisted; set by the operator or in the app's Settings. The value reported is the name in use; an empty value goes back to the default (model and the start of the id). Shown large on the phone, in the tally chip when on air or on preview |
+| `camera_name` | text | the display name sent as `hello.device.name`, persisted; set by the operator or in the app's Settings. The value reported is the name in use; an empty value goes back to the default (model and the start of the id). Shown in the phone's name chip, with the tally |
 | `live` | bool | start/stop the SRT stream |
 | `stream_url` | text | SRT URL, see "Stream URL" (streamid, latency, passphrase, pbkeylen) |
 | `srt_latency_ms` | range | SRT latency in ms (0 to 8000). Sets the `latency` parameter of `stream_url`, which stays the one place it is kept; applies on the next Go Live. SRT uses the larger of both ends, see `status.stream.srt_latency_ms` |
@@ -449,7 +467,7 @@ D13). Earlier protocol 2 builds had ownership (`own`, `release`,
 | `iso` | range | manual only |
 | `shutter` | enum | denominator of 1/x seconds, e.g. 50 = 1/50 s. A production setting (`production.shutter`, SHADING.md): `readonly` unless the shutter is free (policy `free`, or `mains` with mains 0), then writable in manual; auto ISO then holds a 180° shutter (half the frame period, 1/60 at 30 fps) and shortens it only at the lowest ISO. A shutter longer than the frame becomes the longest flicker-free one that fits |
 | `ev_bias` | range | exposure compensation in EV, in `auto` |
-| `mains_hz` | enum | `readonly` while a server's `production` applies (which overrides the phone's own setting without overwriting it; forgetting the server returns to it); refused while live. 50, 60, or 0 (off: no mains-lit light in the picture, for example outdoors, so the shutter is free); default from the device region, persisted in the phone's Settings. In `auto` the shutter is rounded to a whole number of half mains periods that fits the frame (2% room while genlock runs); the ISO compensates. No flicker-free shutter fits above 100 fps at 50 Hz or 120 fps at 60 Hz, and the shutter is then left alone |
+| `mains_hz` | enum | `readonly` while a server's `production` applies (which overrides the phone's own setting without overwriting it; forgetting the server returns to it); refused while live (`locked_while_live`). 50, 60, or 0 (off: no mains-lit light in the picture, for example outdoors, so the shutter is free); default from the device region, persisted in the phone's Settings. In `auto` the shutter is rounded to a whole number of half mains periods that fits the frame (2% room while genlock runs); the ISO compensates, and at the lowest ISO the shutter drops to fewer half periods (1/100 from 1/50 at 50 Hz) before the loop reports too bright. No flicker-free shutter fits above 100 fps at 50 Hz or 120 fps at 60 Hz, and the shutter is then left alone |
 | `genlock` | bool | soft genlock: the frame timing locks to the TAI frame grid (docs/GENLOCK.md). Status in `status.genlock` |
 | `genlock_offset_us` | range | where frames land after each grid point, µs (per-model calibration, or measurement sweeps); -50000 to 50000 |
 | `wb_mode` | enum | `auto`, `locked`, `manual` |
@@ -483,8 +501,8 @@ model (REST API, SDI/Bluetooth protocol) expose, and not in the prototype yet:
 - Audio: input select, gain, level meters in `status`.
 - Image: color bars, display LUT, simple color correction (lift, gamma, gain,
   offset), sharpening.
-- Operator aids on the phone screen, switched remotely: focus peaking, zebra,
-  false color, frame guides. Mostly useful in contribution mode, where a
+- Operator aids switched remotely (the phone has guides and focus peaking,
+  switched on the phone), and zebra and false color. Mostly useful in contribution mode, where a
   person frames the shot.
 - Presets: save and recall a full control set per camera.
 - Front camera as a `lens` option.
@@ -648,11 +666,12 @@ bitstream parser. Byte vectors for both codecs are in
 ## Rules settled by the prototype
 
 - `ping` / `pong` messages (`id` optional, echoed) exist in either direction,
-  but the iOS app ignores a JSON `ping` and keeps the link alive with
-  WebSocket pings, as the server does; a phone silent for 10 s is offline. Phones send
-  `status` every second.
-- The first message must be `hello`. Earlier messages are ignored; a `hello`
-  without `device.id` closes the socket. A `hello` with a `public_key` is
+  but the apps ignore a JSON `ping` and keep the link alive with WebSocket
+  pings, as the server does; a phone silent for 10 s is offline. Phones
+  send `status` every second.
+- The first message must be `hello`. Other valid messages before admission
+  are ignored; a first message that is not valid JSON, or a `hello`
+  without a usable `device.id`, closes the socket. A `hello` with a `public_key` is
   answered with `challenge`, and the phone is admitted only after `auth`.
 - After every `hello` the server sends the current `tally` (also `off`) and the
   `preview` setting.

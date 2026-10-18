@@ -11,8 +11,6 @@ Background: [CAMERA_READOUTS](CAMERA_READOUTS.md).
   upper right, side controls lower left and right) and information in the
   top bar along the top edge. Only short messages show at the top centre,
   and they go away by themselves.
-- **Information in the middle, controls at the sides.** The top centre shows
-  state and values; the thumbs reach the controls on the left and right edges.
 - **Everything a shot needs is under a thumb.** Two identical side
   controls, one per edge, each a rocker with its selector and mode beside it
   on the inner side. Either can run zoom, exposure, white balance or focus;
@@ -34,22 +32,23 @@ Background: [CAMERA_READOUTS](CAMERA_READOUTS.md).
 
 ## Zones
 
-Landscape, the main orientation:
+Landscape on a phone, the main case:
 
 ```
-┌──────────────────────────────────────────────────────────────┐
-│ ● STANDBY        ON AIR · Kamera 2               ((•)) ◷  ⚙  │ 1 status row
-│      1080p30 │ ISO 26 │ 1/100 │ +0.3 EV │ 5200 K +4 │ AF     │ 2 values row
-│                    [ message slot ]                          │ 3 messages
-│ ┌─┐ [ZOOM]                                    [ZOOM] ┌─┐      │
-│ │T│ [EXP ]                                    [EXP▪] │+│      │
-│ │ │ [WB  ]                                    [WB  ] │ │      │
-│ │●│ [FOC ]        4/5 side controls           [FOC ] │●│      │
-│ │ │ [ 4× ]                                    [ A  ] │ │      │
-│ │W│ [ 1×▪]                                    [ M▪ ] │−│      │
-│ └─┘  2.3×                                    +0.3 EV └─┘      │
-│ ▦  ⌗  🔒                                   ▮▮      ( GO LIVE ) │ 6 bottom row
-└──────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────────┐
+│ ● STANDBY  ON AIR · Kamera 2  1080p30 │ ISO 26 │ 1/100 │ AF    ● ● ▭ ⚙ │ top bar
+│ ▦                      [ message slot ]                  ▮ ( GO LIVE ) │ tools, live
+│ ⌗                                                                      │
+│ ⊡                                                                      │
+│                                                                        │
+│ ┌─┐ ┌────┬────┐                                        ┌────┬────┐ ┌─┐ │ side controls
+│ │T│ │ZOOM│EXP │                                        │ZOOM│EXP▪│ │+│ │
+│ │ │ ├────┼────┤                                        ├────┼────┤ │ │ │
+│ │●│ │ WB │FOC │                                        │ WB │FOC │ │●│ │
+│ │ │ ├────┼────┤                                        ├────┼────┤ │ │ │
+│ │W│ │ 4× │ 1×▪│  2.3×                         +0.3 EV  │ A  │ M▪ │ │−│ │
+│ └─┘ └────┴────┘                                        └────┴────┘ └─┘ │
+└────────────────────────────────────────────────────────────────────────┘
 ```
 
 **Landscape: one top bar.** Rows 1 and 2 merge into a single bar so the
@@ -59,9 +58,8 @@ not fit, the values drop focus, then white balance, then the name chip
 shortens to the name alone (the tally border still shows tally).
 
 Portrait: the same zones. Rows 1 and 2 stack at the top (the tally chip may
-take its own line), the side controls sit on the long edges at the same
-height, mirror images of each other, and the live button is bottom centre
-with the bottom row above it.
+take its own line) and the side controls sit in the bottom corners, mirror
+images of each other. Tools and the live button: see 6.
 
 1. **Status row.** Left: stream state (STANDBY, CONNECTING, LIVE with the
    bitrate, yellow while adaptive bitrate holds it down). Centre: the tally
@@ -72,20 +70,21 @@ with the bottom row above it.
    (see "Values").
 3. **Message slot.** Centred under the values row: the yellow banner (8 s)
    for operator messages and the app's connection messages ("Connecting to
-   …", "Not a valid connect code", control errors), and toasts (stream errors and hints, 4 s). Nothing else goes
-   there and nothing else shows messages.
+   …", "Not a valid connect code", control errors), and toasts (stream
+   errors and hints, 4 s). Nothing else goes there and nothing else shows
+   messages.
 4. **Left edge** and 5. **right edge.** A side control each, mirror images,
    where the thumbs rest, the same height on both sides (see "Side
    control"). **Phones:** in the bottom-left and bottom-right corners,
    against the bottom edge. **iPad:** the centre at 65 % of the screen height
-   from the top, moved up only as far as it must to clear the bottom row. The upper part
-   of the picture stays clear. Zoom on the
-   left and exposure on the right by default; each side remembers its
-   choice.
+   from the top, moved up only as far as it must to clear the bottom row.
+   The upper part of the picture stays clear. Zoom on the left and exposure
+   on the right by default; each side remembers its choice.
 6. **Tools and the live button.** The tools are the aids menu, QR scan (only
    while no hub is connected and not live) and the screen lock.
-   - **iPad:** a bottom row as before: tools left; microphone meter, then
-     (landscape) the live button in the bottom-right corner.
+   - **iPad:** a bottom row: tools left; microphone meter, then the live
+     button in the bottom-right corner (landscape) or bottom centre
+     (portrait).
    - **Phones (both orientations):** the bottom corners belong to the side
      controls, so everything else goes to the upper corners, just under the
      top rows: the tools in the upper-left corner (a column in landscape, a
@@ -98,9 +97,9 @@ with the bottom row above it.
    - **Screen lock on a phone:** the slide to unlock sits at the bottom edge
      between the side controls in landscape, just above them in portrait.
 
-   The live button is dark at standby, orange connecting, red live; a tap starts,
-   a hold stops (with a filling ring and a "Hold to stop" hint), with a
-   haptic when it goes live or stops.
+   The live button is dark at standby, orange connecting, red live; a tap
+   starts, a hold stops (with a filling ring and a "Hold to stop" hint),
+   with a haptic when it goes live or stops.
 
 The tally border (14 pt, red on program, green on preview) frames the screen;
 all chrome stays inside it and the safe areas.
@@ -157,8 +156,8 @@ Right side shown; the left one is its mirror image.
   switch; the values are kept. There are only two modes: `A` (auto) and `M`
   (manual). Going to `M` from auto (the switch, a long press on the picture,
   white balance once) holds the camera's current values as numbers, which
-  the rocker then changes. Moving the rocker in auto switches white balance and focus
-  to manual; exposure stays in auto and changes the compensation. For zoom
+  the rocker then changes. Moving the rocker in auto switches white balance
+  and focus to manual; exposure stays in auto and changes the compensation. For zoom
   the lens buttons take this row (only on a camera with more than one lens).
   For white balance a third cell, `◎`, sits beside `A` and `M`: a tap sets
   the white balance once from the picture (`wb_one_shot`) and holds it (`M`).
@@ -188,8 +187,8 @@ Right side shown; the left one is its mirror image.
   alike; it never grows to fill the screen. The block and the rocker are
   bottom-aligned. The value and the K / Tint row sit beside the block on its
   inner side, level with the mode row, so the whole side control is no
-  taller than the rocker. Lens buttons share the mode row's width (at least 30 pt wide each,
-  full height); the A | M cells stay full size. **Nothing moves
+  taller than the rocker. Lens buttons share the mode row's width; the
+  A | M cells stay full size. **Nothing moves
   when a group changes:** every slot has a fixed size worked out from the
   screen once, and the K / Tint row is kept (empty) for every group.
 - **Rocker.** The same component as zoom, same size, with the direction
@@ -218,7 +217,7 @@ The K/Tint switch is back on K each time white balance is chosen. On zoom
 the value is the zoom factor (`2.3×`), counted against the wide lens like
 the lens buttons, which follow the active lens.
 
-- **White balance once:** long press on the mode switch.
+- **White balance once:** the `◎` cell, or a long press on the mode switch.
 - The shutter is shown, not adjusted: it is the production's (docs/SHADING.md,
   "Shutter").
 
@@ -243,11 +242,11 @@ the lens buttons, which follow the active lens.
 ## States
 
 - **Screen lock.** Everything stays visible but the rockers, which hide; only
-  the slide to unlock takes touches (in the bottom row's centre in
-  landscape, on its own row above the bottom row in portrait). A toast
-  suggests it at Go Live.
+  the slide to unlock takes touches (phones: see 6; iPad: the bottom row's
+  centre in landscape, its own row above the bottom row in portrait). A
+  toast suggests it at Go Live.
 - **Not connected.** A centred card: "Scan QR code" (the in-app scanner),
-  "Enter manually", "Not now". The QR button stays in the bottom row.
+  "Enter manually", "Not now". The QR button stays with the tools.
 - **Scanning.** A viewfinder square, the instruction and Cancel over the
   picture.
 - **Joining a hub.** A connect link (scanned in the app or opened from the
@@ -258,7 +257,8 @@ the lens buttons, which follow the active lens.
   Live"), and Join / Cancel. A link for the hub already in use applies
   without asking. A restored or recreated screen never asks again.
 - **Live.** Settings that cannot change mid-stream (resolution, frame rate,
-  video and audio codec, mains) are disabled with a note; the values row and the rockers work as always.
+  video and audio codec, mains) are disabled with a note; the values row and
+  the rockers work as always.
 
 ## Settings
 
@@ -287,11 +287,10 @@ row's footer says why instead of the usual text.
 
 ## Look
 
-- Round buttons and rockers: 46 pt wide, black at 35 % with a thin white
-  outline at 25 % (a rocker's outline, 1.5 pt, and its knob's ring, 2 pt,
-  in the group colour); rockers 180 pt long (shorter on a landscape phone, both the
-  same).
-- Rows: 34 pt high, dark capsules, tabular digits, white text.
+- Round buttons: 46 pt. Every surface is see-through (see "Side control"):
+  black at 15 % with a 1 pt white border at 40 %; a rocker's outline and
+  its knob's ring are in the group colour.
+- Top rows: 34 pt high, tabular digits, white text with a soft shadow.
 - Group colours (controls only): zoom blue `#3B82F6`, exposure red
   `#EF4444`, white balance violet `#A855F7`, focus green `#22C55E`.
 - Colours: yellow manual, red program and clipping, green preview,

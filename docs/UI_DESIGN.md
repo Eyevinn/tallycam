@@ -138,8 +138,11 @@ Right side shown; the left one is its mirror image.
   sides and on zoom.
 - **Sizes: easy to hit without looking.** Every cell is at least 44 pt high
   and 46 pt wide (Android 48 dp), the whole selector and mode switch about
-  100 pt wide; they never shrink below that. The rocker is as long as the
-  selector and the mode row together, both sides the same. **Nothing moves
+  100 pt wide; they never shrink below that. **The rocker is as big as the
+  screen allows:** 56 pt wide and as tall as the space between the top rows
+  and the bottom row (leaving room for the value and K / Tint rows under
+  it), never shorter than the selector and mode row beside it; both sides
+  the same. **Nothing moves
   when a group changes:** every slot has a fixed size worked out from the
   screen once, and the K / Tint row is kept (empty) for every group.
 - **Rocker.** The same component as zoom, same size, with the direction

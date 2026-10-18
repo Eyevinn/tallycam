@@ -8,10 +8,11 @@ Background: [CAMERA_READOUTS](CAMERA_READOUTS.md).
 
 - **Information in the middle, controls at the sides.** The top centre shows
   state and values; the thumbs reach the controls on the left and right edges.
-- **Everything a shot needs is under a thumb.** Zoom and lenses on the left
-  edge; the adjustment, what it adjusts and its mode on the right edge. The
-  same vertical rocker on both, always there, with its buttons beside it on
-  the inner side, so neither hand has to change its grip.
+- **Everything a shot needs is under a thumb.** Two identical side
+  controls, one per edge, each a rocker with its selector and mode beside it
+  on the inner side. Either can run zoom, exposure, white balance or focus;
+  zoom on the left and exposure on the right until the operator picks
+  otherwise. Neither hand has to change its grip.
 - **The value is also a way in.** Tapping a value in the values row selects
   its group too, as on cinema camera apps; it is a shortcut, not the only
   way.
@@ -35,20 +36,21 @@ Landscape, the main orientation:
 │ ● STANDBY        ON AIR · Kamera 2               ((•)) ◷  ⚙  │ 1 status row
 │      1080p30 │ ISO 26 │ 1/100 │ +0.3 EV │ 5200 K +4 │ AF     │ 2 values row
 │                    [ message slot ]                          │ 3 messages
-│ [4×]                                                  [A|M]  │
-│ [1×] ┌─┐                                         ┌─┐         │
-│      │T│                                         │+│         │
-│      │●│  4 left edge          picture           │●│ 5 right │
-│      │W│                                         │−│         │
-│      └─┘                                         └─┘ +0.3 EV │
+│ ┌─┐ [ZOOM]                                    [ZOOM] ┌─┐      │
+│ │T│ [EXP ]                                    [EXP▪] │+│      │
+│ │ │ [WB  ]                                    [WB  ] │ │      │
+│ │●│ [FOC ]        4/5 side controls           [FOC ] │●│      │
+│ │ │ [ 4× ]                                    [ A  ] │ │      │
+│ │W│ [ 1×▪]                                    [ M▪ ] │−│      │
+│ └─┘  2.3×                                    +0.3 EV └─┘      │
 │ ▦  ⌗  🔒                                   ▮▮      ( GO LIVE ) │ 6 bottom row
 └──────────────────────────────────────────────────────────────┘
 ```
 
 Portrait: the same zones. Rows 1 and 2 stack at the top (the tally chip may
-take its own line), the rockers sit on the long edges at the same height,
-mirror images of each other, and the live button is bottom centre with the
-bottom row above it.
+take its own line), the side controls sit on the long edges at the same
+height, mirror images of each other, and the live button is bottom centre
+with the bottom row above it.
 
 1. **Status row.** Left: stream state (STANDBY, CONNECTING, LIVE with the
    bitrate, yellow while adaptive bitrate holds it down). Centre: the tally
@@ -60,12 +62,10 @@ bottom row above it.
 3. **Message slot.** Centred under the values row: operator messages (yellow
    banner, 8 s) and toasts (stream errors and hints, 4 s). Nothing else goes
    there and nothing else shows messages.
-4. **Left edge.** The zoom rocker at the edge, the lens buttons (longest on
-   top) beside it on the inner side, vertically centred.
-5. **Right edge.** The adjust control, always: the rocker at the edge, the
-   group selector and the mode switch beside it on the inner side, the value
-   label below. It adjusts the selected group, exposure until another is
-   chosen; the choice is remembered.
+4. **Left edge** and 5. **right edge.** A side control each, mirror images,
+   vertically centred at the same height (see "Side control"). Zoom on the
+   left and exposure on the right by default; each side remembers its
+   choice.
 6. **Bottom row.** Left: aids menu, QR scan (only while no hub is connected and
    not live), screen lock. Right: microphone meter, then (landscape) the live
    button in the bottom-right corner, at a fixed place that never moves. The
@@ -78,7 +78,7 @@ all chrome stays inside it and the safe areas.
 
 ## Values
 
-| Item | Shows | Tap opens |
+| Item | Shows | Tap selects |
 |---|---|---|
 | Format | Stream size and frame rate: `1080p30`, `4K30`, `720p60` | Settings |
 | ISO | `ISO 26`; with a warning word from the image statistics: `CLIP` in red, `DARK` in orange | Exposure |
@@ -87,22 +87,27 @@ all chrome stays inside it and the safe areas.
 | WB | `5200 K`, tint after it when not 0: `5200 K +4` (+ magenta, − green) | White balance |
 | Focus | `AF` in auto, `AF-L` when locked, `F 0.42` in manual | Focus |
 
-The values of the selected group are underlined. On a narrow screen the row
-drops focus first, then white balance; it never wraps.
+The values of the groups on the side controls are underlined. A tap on a
+value puts its group on the right side control, unless one of the sides
+already shows it. On a narrow screen the row drops focus first, then white
+balance; it never wraps.
 
-## Adjust control
+## Side control
+
+Right side shown; the left one is its mirror image.
 
 ```
-            ┌─┐
- [EXP]      │+│   group selector: EXP / WB / FOC, the selected one filled
- [WB ]      │ │
- [FOC]      │●│   rocker: push up for more, down for less;
-            │ │   speed rises with the square of the deflection;
- [ A ]      │ │   release: stops and springs back; tap an end: one step;
- [ M ]      │−│   double tap the knob: back to the neutral value
-            └─┘
- mode switch: A / M, the active one filled (white auto, yellow held)
-       +0.3 EV    what the rocker changes, and its value
+ [ZOOM]  ┌─┐   selector: ZOOM / EXP / WB / FOC, the chosen one filled
+ [EXP▪]  │+│
+ [WB  ]  │ │
+ [FOC ]  │●│   rocker: push up for more, down for less;
+         │ │   speed rises with the square of the deflection;
+ [ A  ]  │ │   release: stops and springs back; tap an end: one step;
+ [ M▪ ]  │−│   double tap the knob: back to the neutral value
+         └─┘
+ under the selector: A / M for exposure, white balance and focus;
+ the lens buttons for zoom (longest on top)
+ +0.3 EV         the value (zoom: the factor, 2.3×); K / Tint under it for WB
 ```
 
 - **Mode switch.** A vertical two-segment switch, `A` over `M`, 46 wide with
@@ -114,12 +119,18 @@ drops focus first, then white balance; it never wraps.
   difference does not matter to the operator; the rocker turns locked into
   manual anyway. Moving the rocker in auto switches white balance and focus to
   manual; exposure stays in auto and changes the compensation.
-- **Group selector.** Three segments, `EXP` / `WB` / `FOC`, beside the upper
-  half of the rocker, the same look as the mode switch; the selected group is
-  filled white, and its values are underlined in the values row. Tap one to
-  select it; a tap on a value in the values row does the same. It replaces
-  the caption: the rocker's job is never a guess. The mode switch sits beside
-  the lower half, the K/Tint switch (white balance only) under the value.
+- **Selector.** Four segments, `ZOOM` / `EXP` / `WB` / `FOC`, beside the
+  upper half of the rocker on the inner side, the same look as the mode
+  switch; the chosen group is filled white. Tap one to put it on this side.
+  Both sides may not run the same group: choosing the group the other side
+  runs swaps the two. The rocker's job is never a guess.
+- **Under the selector,** beside the lower half of the rocker: the mode
+  switch for exposure, white balance and focus; the lens buttons for zoom
+  (only on a camera with more than one lens). The K/Tint switch (white
+  balance only) sits under the value.
+- **Sizes.** Segments 30 pt high on the selector and the mode switch; the
+  rocker is as long as the selector and what is under it, and both sides'
+  rockers are the same length.
 - **Rocker.** The same component as zoom, same size, with the direction
   written at its ends. Three gestures, the same on every rocker:
   - **Drag** for a move: speed rises with the square of the deflection, about
@@ -139,11 +150,11 @@ drops focus first, then white balance; it never wraps.
 | White balance, K | `K+` / `K−` | `wb_temperature` 1500 K/s | 100 K | white balance once |
 | White balance, Tint | `M` / `G` (magenta, green) | `wb_tint` 60/s | 1 | tint 0 |
 | Focus | `Far` / `Near` | `focus_position` 0.4/s | 0.02 | back to auto |
-| Zoom (left edge) | `T` / `W` | 2 doublings/s | 1/4 doubling | the lens's own 1× (no digital zoom) |
+| Zoom | `T` / `W` | 2 doublings/s | 1/4 doubling | the lens's own 1× (no digital zoom) |
 
-The K/Tint switch sits above the WB rocker and is back on K each time white
-balance is chosen. The zoom rocker shows the zoom factor (`2.3×`) beside its
-knob while it moves; the lens buttons follow the active lens.
+The K/Tint switch is back on K each time white balance is chosen. On zoom
+the value is the zoom factor (`2.3×`), counted against the wide lens like
+the lens buttons, which follow the active lens.
 
 - **White balance once:** long press on the mode switch.
 - The shutter is shown, not adjusted: it is the production's (docs/SHADING.md,

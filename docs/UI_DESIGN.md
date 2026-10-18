@@ -47,6 +47,12 @@ Landscape, the main orientation:
 └──────────────────────────────────────────────────────────────┘
 ```
 
+**Landscape: one top bar.** Rows 1 and 2 merge into a single bar so the
+picture gets the room: stream state left, the name chip (in its tally
+colour) and the values centre, the dots and the gear right. When it does
+not fit, the values drop focus, then white balance, then the name chip
+shortens to the name alone (the tally border still shows tally).
+
 Portrait: the same zones. Rows 1 and 2 stack at the top (the tally chip may
 take its own line), the side controls sit on the long edges at the same
 height, mirror images of each other, and the live button is bottom centre
@@ -115,6 +121,11 @@ Right side shown; the left one is its mirror image.
   colour with white text. Tap a cell to put that group on this side. Both
   sides may not run the same group: choosing the group the other side runs
   swaps the two. The rocker's job is never a guess.
+- **Hide a side ("–").** A tap on the chosen cell again sets that side to
+  "–": the side control folds into a small tab at the edge (46 × 46, the
+  last group's colour, a chevron), so the picture is clear. A tap on the
+  tab brings the side control back with its last group. Either side or both
+  may be hidden; the choice is remembered like the group.
 - **Mode switch.** Two cells side by side, `A` and `M`, under the selector,
   the same size and look. It shows the state, not an action: the filled cell
   is the current mode (white auto, yellow held). Tap the other cell to
@@ -132,6 +143,10 @@ Right side shown; the left one is its mirror image.
   values in the values row. Values never take it as text colour, so yellow
   (held), red and green (tally), cyan (hub change) and orange (warning) keep
   their meaning.
+- **Light backgrounds.** Selector, mode row, value and K / Tint sit on black
+  at 30 % with a background blur (iOS thin material; Android a translucent
+  surface), not near-black; text and labels white with a soft shadow so they
+  read over a bright picture. The rocker track uses the same.
 - **Shape: square-ish, not pills.** Selector and mode cells have an 8 pt
   corner radius, the rocker track a 10 pt radius (a rounded rectangle, not a
   capsule), the knob a rounded square with an 8 pt radius. The same on both

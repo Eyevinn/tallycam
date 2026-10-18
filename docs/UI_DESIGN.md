@@ -81,14 +81,12 @@ with the bottom row above it.
    while no hub is connected and not live) and the screen lock.
    - **iPad:** a bottom row as before: tools left; microphone meter, then
      (landscape) the live button in the bottom-right corner.
-   - **Phone, landscape:** the corners belong to the side controls. The
-     tools stand in a column at the left edge above the left side control;
-     the live button at the right edge above the right side control, at a
-     fixed place; the microphone meter at the bottom centre between the side
-     controls.
-   - **Phone, portrait:** the tools in a row at the left under the top rows;
-     the live button centred just above the side controls; the meter beside
-     it.
+   - **Phones (both orientations):** the bottom corners belong to the side
+     controls, so everything else goes to the upper corners, just under the
+     top rows: the tools in the upper-left corner (a column in landscape, a
+     row in portrait), the live button in the upper-right corner at a fixed
+     place with the microphone meter beside it on the inner side. The middle
+     of the screen stays clear.
 
    The live button is dark at standby, orange connecting, red live; a tap starts,
    a hold stops (with a filling ring and a "Hold to stop" hint), with a

@@ -131,6 +131,13 @@
     { "seconds": 65, "expect": "01:05" },
     { "seconds": 3725, "expect": "1:02:05" }
   ],
+  "timecode": [
+    { "name": "25 fps, UTC+2", "utc_ns": 1792327906500000000, "utc_offset_s": 7200, "fps": 25, "synced": true, "expect": "14:51:46:12" },
+    { "name": "30 fps", "utc_ns": 1792327906500000000, "utc_offset_s": 7200, "fps": 30, "synced": true, "expect": "14:51:46:15" },
+    { "name": "not synchronised", "utc_ns": 1792327906500000000, "utc_offset_s": 7200, "fps": 25, "synced": false, "expect": "14:51:46:--" },
+    { "name": "past midnight, last frame", "utc_ns": 1792367999990000000, "utc_offset_s": 7200, "fps": 30, "synced": true, "expect": "01:59:59:29" },
+    { "name": "west of UTC", "utc_ns": 1792327906500000000, "utc_offset_s": -18000, "fps": 25, "synced": true, "expect": "07:51:46:12" }
+  ],
   "descriptors": {
     "ev_bias": { "min": -2, "max": 2, "step": 0.1 },
     "iso": { "min": 25, "max": 3200, "step": 1 },

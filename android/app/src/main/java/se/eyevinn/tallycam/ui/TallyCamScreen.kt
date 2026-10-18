@@ -582,6 +582,7 @@ private fun StatusStrip(model: AppModel, centre: (@Composable () -> Unit)?, onSe
             AppModel.Link.CONNECTING -> Chrome.orange
             AppModel.Link.NOT_SET_UP -> Color.White.copy(alpha = 0.4f)
         }
+        Timecode(model, clockHealth)
         Box(Modifier.size(9.dp).background(link, CircleShape).semantics { contentDescription = "Control hub link" })
         val clock = when (clockHealth) {
             "healthy" -> Chrome.green
@@ -813,22 +814,29 @@ private fun EdgeTab(group: String, leading: Boolean, hidden: Boolean, modifier: 
 /**
  * The centre of the landscape top bar: the name chip and the values. Where
  * they do not fit, the values drop focus, then white balance, then the
- * chip shortens to the name alone (docs/UI_DESIGN.md, "Landscape: one top bar").
+ * chip shortens to the name alone, cut with an ellipsis to the room left
+ * (docs/UI_DESIGN.md, "Landscape: one top bar"); the timecode stays.
  */
 @Composable
 private fun TopBarCentre(chip: @Composable () -> Unit, shortChip: @Composable () -> Unit, values: @Composable (Int) -> Unit) {
     Layout({ chip(); shortChip(); values(0); values(1); values(2) }) { measurables, constraints ->
-        val loose = constraints.copy(minWidth = 0, minHeight = 0)
         val gap = Chrome.gap.roundToPx()
-        val p = measurables.map { it.measure(loose.copy(maxWidth = androidx.compose.ui.unit.Constraints.Infinity)) }
-        // In order: the full chip with all values, without focus, without white balance, then the short chip.
-        val choices = listOf(0 to 2, 0 to 3, 0 to 4, 1 to 4)
-        val (c, v) = choices.firstOrNull { (c, v) -> p[c].width + gap + p[v].width <= constraints.maxWidth } ?: choices.last()
-        val height = maxOf(p[c].height, p[v].height)
-        val width = minOf(constraints.maxWidth, p[c].width + gap + p[v].width)
+        val free = constraints.copy(minWidth = 0, minHeight = 0, maxWidth = androidx.compose.ui.unit.Constraints.Infinity)
+        val chipFull = measurables[0].measure(free)
+        val values = (2..4).map { measurables[it].measure(free) }
+        // The full chip with all values, without focus, without white balance;
+        // then the name alone, cut to the room that is left.
+        val v = values.firstOrNull { chipFull.width + gap + it.width <= constraints.maxWidth }
+        val chip = if (v != null) chipFull else {
+            val room = (constraints.maxWidth - gap - values.last().width).coerceAtLeast(0)
+            measurables[1].measure(free.copy(maxWidth = room))
+        }
+        val shown = v ?: values.last()
+        val height = maxOf(chip.height, shown.height)
+        val width = minOf(constraints.maxWidth, chip.width + gap + shown.width)
         layout(width, height) {
-            p[c].placeRelative(0, (height - p[c].height) / 2)
-            p[v].placeRelative(p[c].width + gap, (height - p[v].height) / 2)
+            chip.placeRelative(0, (height - chip.height) / 2)
+            shown.placeRelative(chip.width + gap, (height - shown.height) / 2)
         }
     }
 }
@@ -862,3 +870,35 @@ private fun SideSlot(leading: Boolean, modifier: Modifier, content: @Composable 
 
 /** A side control's centre, as a share of the screen's height from the top. */
 private const val SIDE_CENTRE = 0.65f
+
+/**
+ * The time-of-day timecode next to the dots (docs/UI_DESIGN.md, zone 1):
+ * "14:51:46:12" from the disciplined clock in local time, frames at the
+ * stream rate, redrawn every frame; white while the clock is healthy,
+ * orange when degraded, dim with "--" frames while not synchronised. The
+ * same on every camera, so two phones in shot can be compared at a glance.
+ */
+@Composable
+private fun Timecode(model: AppModel, health: String?) {
+    val fps = model.camera.settings.frameRate.coerceAtLeast(1)
+    var text by remember { mutableStateOf("") }
+    var synced by remember { mutableStateOf(false) }
+    LaunchedEffect(fps) {
+        while (true) {
+            val now = runCatching { se.eyevinn.tallycam.core.ClockMapping.at(se.eyevinn.tallycam.core.Hot.hostNowNs()) }.getOrNull()
+            // Without a running clock, the phone's own time, shown as not synchronised.
+            val utcNs = now?.utcNs?.takeIf { it > 0 } ?: (System.currentTimeMillis() * 1_000_000L)
+            synced = now?.synced == true
+            val offset = java.util.TimeZone.getDefault().getOffset(utcNs / 1_000_000L) / 1000L
+            text = timecode(utcNs, offset, fps, synced)
+            delay(1000L / fps)
+        }
+    }
+    val color = when {
+        !synced -> Color.White.copy(alpha = 0.45f)
+        health == "degraded" -> Chrome.orange
+        else -> Color.White
+    }
+    Text(text, color = color, fontSize = 12.sp, style = Chrome.tabular, fontWeight = FontWeight.Medium, maxLines = 1,
+         softWrap = false, modifier = Modifier.semantics { contentDescription = "Timecode $text" })
+}

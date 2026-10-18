@@ -15,6 +15,7 @@ import se.eyevinn.tallycam.ui.adjustValueText
 import se.eyevinn.tallycam.ui.bitrate
 import se.eyevinn.tallycam.ui.neutral
 import se.eyevinn.tallycam.ui.tapStep
+import se.eyevinn.tallycam.ui.timecode
 import se.eyevinn.tallycam.ui.uptime
 import se.eyevinn.tallycam.ui.valueItems
 import se.eyevinn.tallycam.ui.zoomFactorText
@@ -91,6 +92,10 @@ class UiVectorsTest {
         for (c in vectors.getJSONArray("zoom_factor").objects()) assertEquals(c.getString("expect"), zoomFactorText(c.getDouble("factor")))
         for (c in vectors.getJSONArray("bitrate").objects()) assertEquals(c.getString("expect"), bitrate(c.getInt("kbps")))
         for (c in vectors.getJSONArray("uptime").objects()) assertEquals(c.getString("expect"), uptime(c.getLong("seconds")))
+        for (c in vectors.getJSONArray("timecode").objects()) {
+            assertEquals(c.getString("name"), c.getString("expect"),
+                         timecode(c.getLong("utc_ns"), c.getLong("utc_offset_s"), c.getInt("fps"), c.getBoolean("synced")))
+        }
     }
 
     @Test

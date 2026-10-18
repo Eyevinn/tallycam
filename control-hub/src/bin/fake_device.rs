@@ -295,11 +295,7 @@ fn lens_caps(lens: &str) -> LensCaps {
 }
 
 fn mode_options() -> Vec<(Value, &'static str)> {
-    vec![
-        (json!("auto"), "Auto"),
-        (json!("locked"), "Locked"),
-        (json!("manual"), "Manual"),
-    ]
+    vec![(json!("auto"), "Auto"), (json!("manual"), "Manual")]
 }
 
 /// The descriptors for `lens`; the shutter is `readonly` unless it is free,
@@ -794,6 +790,11 @@ impl Camera {
         let mut errors = Vec::new();
         let values: Values = values
             .into_iter()
+            // "locked" from an older hub page or app: manual where it is.
+            .map(|(k, v)| match (k.ends_with("_mode"), v.as_str()) {
+                (true, Some("locked")) => (k, json!("manual")),
+                _ => (k, v),
+            })
             .filter(|(k, _)| match self.refuses(k).filter(|_| from_hub) {
                 Some(why) => {
                     errors.push(why);
@@ -913,10 +914,11 @@ impl Camera {
             "wb_one_shot" => {
                 let k = (5600.0 + (self.rand() - 0.5) * 400.0) / 50.0;
                 let k = (k.round() * 50.0) as i64;
-                self.state.insert("wb_mode".into(), json!("locked"));
+                // As the phones: measure, then manual at what was measured.
+                self.state.insert("wb_mode".into(), json!("manual"));
                 self.state.insert("wb_temperature".into(), json!(k));
                 let mut values = Values::new();
-                values.insert("wb_mode".into(), json!("locked"));
+                values.insert("wb_mode".into(), json!("manual"));
                 values.insert("wb_temperature".into(), json!(k));
                 out.push(DeviceMessage::State { values });
                 Ok(())
@@ -1057,7 +1059,8 @@ impl Camera {
             3 => json!({ "exposure_mode": "auto", "ev_bias": 0.7 }),
             4 => json!({ "mains_hz": 60 }),
             5 => json!({ "wb_mode": "auto" }),
-            6 => json!({ "focus_mode": "locked" }),
+            // A touch-and-hold focus lock: manual where autofocus was.
+            6 => json!({ "focus_mode": "manual", "focus_position": 0.6 }),
             7 => json!({ "ev_bias": 0.0, "focus_mode": "auto" }),
             _ => json!({ "mains_hz": 50 }),
         };

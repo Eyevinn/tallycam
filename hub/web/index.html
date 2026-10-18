@@ -19,7 +19,7 @@
   --pgm: #e5302f;
   --warn: #f0a020;
   --ok: #3ccf6e;
-  /* As on the phones: held (manual or locked) yellow, a change from the
+  /* As on the phones: manual yellow, a change from the
      other side cyan, CLIP red, DARK orange. */
   --held: #ffd23f;
   --other: #3fd8f0;
@@ -147,7 +147,7 @@ main { flex: 1; display: flex; min-height: 0; }
 }
 .media .xwarn.clip { background: var(--clip); color: #fff; }
 .media .xwarn:empty { display: none; }
-/* The current values on one line, as on the phones: manual or locked in yellow. */
+/* The current values on one line, as on the phones: manual in yellow. */
 /* Every value stays visible: a narrow card wraps between values, never
    inside one. */
 .readout {
@@ -191,7 +191,7 @@ main { flex: 1; display: flex; min-height: 0; }
 .seg button:last-child { border-right: 0; }
 .seg button:hover:not(:disabled):not(.active) { background: #2d3440; }
 .seg button.active { background: var(--accent); color: #fff; }
-/* A held mode (manual or locked) stands out from auto, as on the phones. */
+/* Manual stands out from auto, as on the phones. */
 .seg button.active.held { background: var(--held); color: #000; }
 .seg.tally button.active.t-off { background: #4a5160; }
 .seg.tally button.active.t-preview { background: var(--pvw); color: #04140a; }
@@ -622,7 +622,7 @@ function isAuto(mode) {
 // ---------------------------------------------------------------------------
 // Readout: the current values on one line, as the phones show them
 // ("1080p30 · ISO 26 · 1/100 · +0.3 EV · 5200 K +4 · AF", docs/UI_DESIGN.md).
-// A value of a group in a held mode (manual or locked) is yellow, auto is
+// A value of a group in manual is yellow (an older phone's "locked" too), auto is
 // plain; a value changed from the other side (the phone, or another page)
 // is cyan for a second.
 // ---------------------------------------------------------------------------
@@ -667,8 +667,8 @@ function fmtWb(s) {
 
 function fmtFocus(s) {
   if (s.focus_mode === "auto") return "AF";
-  if (s.focus_mode === "locked") return "AF-L";
-  if (s.focus_mode === "manual")
+  // An older phone's "locked" is manual focus too.
+  if (s.focus_mode === "manual" || s.focus_mode === "locked")
     return typeof s.focus_position === "number" ? "F " + s.focus_position.toFixed(2) : "F";
   return "";
 }
@@ -740,7 +740,7 @@ function updateReadout(d, line) {
     if (i < parts.length - 1) part.append(el("span", { class: "sep" }, "\u2502"));
     out.push(part);
   });
-  line.title = "Held values (manual or locked) are yellow; cyan: just changed on the phone";
+  line.title = "Manual values are yellow; cyan: just changed on the phone";
   line.replaceChildren(...out);
 }
 
@@ -1333,7 +1333,7 @@ function enumControl(d, c, ctl) {
     }, String(o.label ?? o.value)));
     seg.append(...buttons);
     ctl.append(seg);
-    // A mode: held (manual or locked) in yellow, auto in blue.
+    // A mode: manual in yellow, auto in blue.
     const isMode = c.id in MODE_GROUP;
     return (value, enabled) => {
       buttons.forEach((b, i) => {
@@ -1832,9 +1832,9 @@ function shadeSlider(label, desc, fmt, sendValue, neutral) {
   return api;
 }
 
-// The mode of a group as the phones show it: A (auto) or M (held: manual,
-// or locked, which the camera may use instead). M sends manual where the
-// camera has it.
+// The mode of a group as the phones show it: A (auto) or M (manual, at the
+// camera's current values). An older phone may offer only "locked" for a
+// group; M sends that there.
 function shadeModes(d, c, label, first) {
   const opts = (c.options || []).map(o => o.value);
   const hold = opts.includes("manual") ? "manual" : opts.includes("locked") ? "locked" : null;
@@ -1844,7 +1844,7 @@ function shadeModes(d, c, label, first) {
     onclick: () => { if (!isAuto(d.state[c.id])) sendSet(d.id, { [c.id]: "auto" }, true); },
   }, "A");
   const m = el("button", {
-    type: "button", title: "Hold " + group + " (M: manual or locked)",
+    type: "button", title: "Manual " + group + " (M: holds the current values)",
     onclick: () => { if (isAuto(d.state[c.id]) && hold) sendSet(d.id, { [c.id]: hold }, true); },
   }, "M");
   const why = el("span", { class: "why" });
@@ -1865,7 +1865,7 @@ function shadeModes(d, c, label, first) {
       a.classList.toggle("active", v !== undefined && !held);
       m.classList.toggle("active", held);
       m.classList.toggle("held", held);
-      word.textContent = v === undefined ? "" : v === "auto" ? "Auto" : v === "locked" ? "Locked" : v === "manual" ? "Manual" : String(v);
+      word.textContent = v === undefined ? "" : isAuto(v) ? "Auto" : "Manual";
     },
   };
 }

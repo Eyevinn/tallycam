@@ -431,8 +431,8 @@ that does not own them).
 - `group`: UI grouping. Suggested: `stream`, `lens`, `exposure`,
   `white_balance`, `focus`, `image`, `audio`.
 - `enabled_when`: the control is only writable when the other controls have
-  these values; a list means any of them (`{"exposure_mode": ["manual",
-  "locked"]}`). The UI greys it out otherwise, but still shows its value.
+  these values; a list means any of them (`{"focus_mode": ["manual",
+  "auto"]}`). The UI greys it out otherwise, but still shows its value.
 - `readonly: true`: shown, never set.
 - `locked_while_live: true`: refused while the stream is live (format,
   codecs, `mains_hz`).
@@ -464,19 +464,30 @@ does differently is in docs/APPS.md.
 | `frame_rate` | enum | 24, 25, 30, 50, 60, 100, 120, 240 where the lens has them at the active resolution; the label says "binned" where the format is sensor binned. Refused while live (`locked_while_live`). On an iPhone 16: 2160p up to 60, 1080p up to 240 |
 | `stabilization` | enum | `off`, `standard`, `cinematic`, ... where supported |
 | `torch` | bool | where the lens has a torch |
-| `exposure_mode` | enum | `auto`, `locked`, `manual`. `auto`: the core's auto ISO loop at the production shutter (iOS auto exposure moves the shutter and the frame duration, which genlock owns); under a free shutter the loop shortens the shutter once the ISO is at its minimum. `manual` sets the ISO (and the shutter under a free shutter). `auto_iso` is accepted as `auto` |
+| `exposure_mode` | enum | `auto`, `manual` (see "Modes" below). `auto`: the core's auto ISO loop at the production shutter (iOS auto exposure moves the shutter and the frame duration, which genlock owns); under a free shutter the loop shortens the shutter once the ISO is at its minimum. `manual` sets the ISO (and the shutter under a free shutter). `auto_iso` is accepted as `auto` |
 | `iso` | range | manual only |
 | `shutter` | enum | denominator of 1/x seconds, e.g. 50 = 1/50 s. A production setting (`production.shutter`, SHADING.md): `readonly` unless the shutter is free (policy `free`, or `mains` with mains 0), then writable in manual; auto ISO then holds a 180° shutter (half the frame period, 1/60 at 30 fps) and shortens it only at the lowest ISO. A shutter longer than the frame becomes the longest flicker-free one that fits |
 | `ev_bias` | range | exposure compensation in EV, in `auto` |
 | `mains_hz` | enum | Never `readonly`: the server's `production` and a `set` (from the server or the phone's Settings) both change it, the last write wins. A `set` under a production holds until the server sends a different `production` (a repeat keeps it); a production otherwise overrides the phone's own setting without overwriting it, and forgetting the server returns to it. Refused while live (`locked_while_live`). 50, 60, or 0 (off: no mains-lit light in the picture, for example outdoors, so the shutter is free); default from the device region, persisted in the phone's Settings. In `auto` the shutter is rounded to a whole number of half mains periods that fits the frame (2% room while genlock runs); the ISO compensates, and at the lowest ISO the shutter drops to fewer half periods (1/100 from 1/50 at 50 Hz) before the loop reports too bright. No flicker-free shutter fits above 100 fps at 50 Hz or 120 fps at 60 Hz, and the shutter is then left alone |
 | `genlock` | bool | soft genlock: the frame timing locks to the TAI frame grid (docs/GENLOCK.md). Status in `status.genlock` |
 | `genlock_offset_us` | range | where frames land after each grid point, µs (per-model calibration, or measurement sweeps); -50000 to 50000 |
-| `wb_mode` | enum | `auto`, `locked`, `manual` |
+| `wb_mode` | enum | `auto`, `manual` |
 | `wb_temperature` | range | Kelvin, manual only |
 | `wb_tint` | range | manual only |
-| `focus_mode` | enum | `auto`, `locked`, `manual` |
+| `focus_mode` | enum | `auto`, `manual` |
 | `focus_position` | range | 0 (near) to 1 (far), manual only |
 | `orientation` | enum | `auto` (follow the phone), `landscape` (for example 1920x1080), `portrait` (1080x1920, width and height of the resolution swapped); group `image`. While live the stream keeps its geometry, a change applies when it stops |
+
+**Modes.** Exposure, white balance and focus are `auto` or `manual`; there
+is no third mode. Holding a group (the operator's A→M, a touch-and-hold
+focus lock, `wb_one_shot` once it has measured) puts it in `manual` at the
+camera's current values, and the phone reports them as numbers (`iso`,
+`wb_temperature` and `wb_tint`, `focus_position`), so the other side sees
+and can copy them. A camera that can hold a group but not set its value
+(an Android phone without manual sensor control) still reports `manual`,
+with that value control `readonly`. Phones accept `locked`, from older
+servers, as `manual` at the current values; servers treat a `locked` from
+an older phone as `manual`.
 
 Commands: `focus_at {x, y}` (point of interest for focus and exposure, in
 normalized frame coordinates), `wb_one_shot` (measure white balance once, then

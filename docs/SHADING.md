@@ -12,8 +12,8 @@ person who sets iris and colour on every camera from one desk). A central
 shader must still be possible when there is one. The shader is optional and
 never required.
 
-The phone has per-control modes (`exposure_mode`, `wb_mode`, `focus_mode`:
-auto, locked, manual). **The shader (hub page) and the camera operator
+The phone has per-group modes (`exposure_mode`, `wb_mode`, `focus_mode`:
+auto or manual, D14). **The shader (hub page) and the camera operator
 (phone) can both change exposure, colour and focus at any time. Nothing is
 locked either way: the last write wins** (D13). Both see the values the
 other set: the phone in its values row (a value the hub just set flashes
@@ -45,8 +45,7 @@ Each group is in one of the descriptor's modes, set by whoever wrote last:
 | Mode | Values from | Phone values row |
 |---|---|---|
 | **auto** (default) | the phone's auto exposure (the core's auto ISO loop at the production shutter, see "Shutter"), auto white balance, autofocus | plain |
-| **locked** | held where auto left them | yellow |
-| **manual** | set by the operator or the shader | yellow |
+| **manual** | set by the operator or the shader, or held where auto left them (A→M, a focus lock, white balance once) | yellow |
 
 - `ev_bias` works on top of auto exposure, from either side.
 - Tap to focus changes only the focus group, plus the exposure metering
@@ -153,8 +152,8 @@ So:
   returns to the production shutter when the light drops. With a free
   shutter it holds 180° and shortens it freely once ISO is at its minimum
   (D1).
-- `exposure_mode` options are `auto`, `locked` and `manual`. The phone
-  accepts an old `auto_iso` as `auto`.
+- `exposure_mode` options are `auto` and `manual`. The phone accepts an
+  old `auto_iso` as `auto`, and `locked` as `manual` at the current values.
 - `manual` sets ISO only, and the shutter too when the shutter is free.
 
 ## Locked while live
@@ -177,8 +176,8 @@ changed while live:
 The shooting screen is specified in docs/UI_DESIGN.md (one design for iOS and
 Android; differences in docs/APPS.md). For shading it means:
 
-- **Values row:** the camera's values, always shown; a manual or locked
-  group's value is yellow, auto white.
+- **Values row:** the camera's values, always shown; a manual group's value
+  is yellow, auto white.
 - **Adjust control:** exposure ramps `ev_bias` in auto and ISO in manual;
   colour `wb_temperature` or `wb_tint`; focus `focus_position`. Moving
   colour or focus in auto switches it to manual. A long press on colour's
@@ -297,7 +296,7 @@ controls next to the phone's.
 
 ## Decisions
 
-Taken on 2026-10-16, D13 on 2026-10-18. The references above point here.
+Taken on 2026-10-16, D13 and D14 on 2026-10-18. The references above point here.
 
 - **D1. Bright light: a free shutter.** At 1/50 and f/1.8 a sunny exterior
   needs about ISO 1, far below the sensor's minimum (32 or so), and without
@@ -332,6 +331,15 @@ Taken on 2026-10-16, D13 on 2026-10-18. The references above point here.
   neither locks the other out. Ownership (an owner per group, take over and
   release, remote groups read-only on the phone) cost more in confusion than
   it saved in fights. Production settings and image statistics stay.
+- **D14. Two modes: auto and manual.** `locked` (held where auto left it,
+  with no value to show) is gone: holding a group is manual at the
+  camera's current values, reported as numbers. A held value the other
+  side cannot see, copy or restore was a third concept for no gain; the
+  phones and the hub already showed only A and M. Where a camera can hold
+  but not set a value, the value control is `readonly` instead of a mode.
+  Android gets manual white balance by colour temperature and tint
+  (Camera2 colour correction gains, the DNG colour model in the core)
+  instead of the AWB presets and lock.
 
 ## Phases
 

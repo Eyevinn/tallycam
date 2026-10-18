@@ -46,8 +46,8 @@ import kotlin.math.roundToLong
  * The adjust control at the right edge, always there, mirroring zoom on
  * the left (docs/UI_DESIGN.md, "Adjust control"; iOS
  * ios/TallyCam/Views/AdjustControl.swift). It adjusts the group picked in
- * the camera values row: the mode as an A / M switch (M is L where the
- * group is locked; both always shown, a tap on the other switches,
+ * the camera values row: the mode as an A / M switch (M is any held mode,
+ * manual or locked; both always shown, a tap on the other switches,
  * keeping the values), a rocker as long as the zoom rocker that ramps the group's value
  * (up is more; hidden while the screen is [locked]), and the value. The
  * mode switch and the value sit above and below the rocker where [maxHeight]
@@ -147,10 +147,11 @@ fun AdjustControl(model: AppModel, group: String, rockerLength: Dp, maxHeight: D
 }
 
 /**
- * The group's mode as a vertical two-way switch, [A] over [M] (or [L]
- * where the group is locked, or held means locked on this camera): both
- * modes always shown, the one in use lit (white for auto, yellow for held),
- * a tap on the other switches to it, keeping the values. A long press on
+ * The group's mode as a vertical two-way switch, [A] over [M]: both always
+ * shown, the one in use lit (white for auto, yellow for held), a tap on the
+ * other switches to it, keeping the values. M is any held mode: manual,
+ * locked (by the hub, or focus locked on the picture), or the lock a camera
+ * uses where it has no manual (Android's white balance). A long press on
  * colour's is "white balance once".
  */
 @OptIn(ExperimentalFoundationApi::class)
@@ -164,7 +165,7 @@ private fun ModeSwitch(model: AppModel, group: String, mode: String) {
             .border(1.dp, Color.White.copy(alpha = 0.25f), RoundedCornerShape(Chrome.control / 2)).padding(3.dp),
         verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
-        for ((value, label) in listOf("auto" to "A", held to if (held == "manual") "M" else "L")) {
+        for ((value, label) in listOf("auto" to "A", held to "M")) {
             val on = (value == "auto") == auto
             Box(
                 Modifier.fillMaxWidth().height(Chrome.rowHeight)

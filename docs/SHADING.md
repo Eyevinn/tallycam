@@ -171,7 +171,7 @@ Android; differences in docs/APPS.md). What it does for shading:
 | Part | Notes |
 |---|---|
 | **Values row** | Under the status line, always shown, also with the screen locked: `1080p30 │ ISO 26 │ 1/100 │ +0.3 EV │ 5200 K +4 │ AF`. A manual or locked group's value is yellow, auto white. Each value is a button that picks the group the adjust control changes (the format opens Settings) |
-| **Adjust control** | At the right edge, always there, mirroring zoom on the left: an A / M switch (A / L where the group is locked), a rocker like the zoom rocker, the value. Exposure ramps `ev_bias` in auto and ISO in manual; colour `wb_temperature` (or `wb_tint`); focus `focus_position`. Moving colour or focus in auto switches it to manual. A long press on colour's switch is `wb_one_shot` |
+| **Adjust control** | At the right edge, always there, mirroring zoom on the left: an A / M switch (M is any held mode, manual or locked), a rocker like the zoom rocker, the value. Exposure ramps `ev_bias` in auto and ISO in manual; colour `wb_temperature` (or `wb_tint`); focus `focus_position`. Moving colour or focus in auto switches it to manual. A long press on colour's switch is `wb_one_shot` |
 | **Hub changes** | A value the hub just set flashes cyan for a second, so the operator sees the shader act; nothing else changes on the phone (D13) |
 | **Exposure warning** | `CLIP` (red) or `DARK` (orange) after ISO, from the image statistics (below). The auto ISO limits (`TooDark`, `TooBright`) are a badge on the hub |
 | **Grid, horizon, frame guides** | Rule of thirds; a horizon line from the gravity sensor, green when level; 16:9 action and title safe areas, and 4:3 and 9:16 centre-cut guides. Drawn over the preview only, never in the stream |

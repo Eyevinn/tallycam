@@ -42,6 +42,7 @@ struct StatusStrip<Centre: View>: View {
                         .fixedSize()
                     linkDot
                     clockDot
+                    genlockBadge
                     DeviceIndicators()
                 }
             }
@@ -126,6 +127,25 @@ struct StatusStrip<Centre: View>: View {
         return Image(systemName: "clock")
             .foregroundStyle(color)
             .accessibilityLabel("Clock \(remote.clock?.health.rawValue ?? "not running")")
+    }
+
+    /// "GL" while genlock is on: green locked, orange locking, red in free
+    /// run (refreshed with the line, once a second). Never dropped.
+    @ViewBuilder
+    private var genlockBadge: some View {
+        let genlock = capture.controls.genlock
+        if genlock.isEnabled {
+            let (color, word): (Color, String) = switch genlock.status?.state {
+            case .locked: (.green, "locked")
+            case .freeRun: (.red, "free run")
+            case .acquiring, nil: (.orange, "locking")
+            }
+            Text("GL")
+                .fontWeight(.bold)
+                .foregroundStyle(color)
+                .fixedSize()
+                .accessibilityLabel("Genlock \(word)")
+        }
     }
 
     static func uptime(_ seconds: TimeInterval) -> String {

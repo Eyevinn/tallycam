@@ -21,10 +21,13 @@ struct TallyOverlay: View {
 struct TallyChip: View {
     let tally: RemoteControl.Tally
     let cameraName: String
+    /// The name alone, without ON AIR or PREVIEW (a crowded top bar; the
+    /// tally border still shows it).
+    var nameOnly = false
 
     var body: some View {
         HStack(spacing: 6) {
-            if let label = tally.label {
+            if !nameOnly, let label = tally.label {
                 Text(label)
                     .font(.system(size: 15, weight: .heavy, design: .rounded))
             }

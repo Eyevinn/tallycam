@@ -1,41 +1,6 @@
 import SwiftUI
 
-/// What a side control runs (docs/UI_DESIGN.md, "Side control").
-enum SideGroup: String, CaseIterable, Identifiable {
-    case zoom
-    case exposure
-    case whiteBalance = "white_balance"
-    case focus
-
-    var id: String {
-        rawValue
-    }
-
-    init(_ group: ShadingGroup) {
-        switch group {
-        case .exposure: self = .exposure
-        case .whiteBalance: self = .whiteBalance
-        case .focus: self = .focus
-        }
-    }
-
-    var shading: ShadingGroup? {
-        switch self {
-        case .zoom: nil
-        case .exposure: .exposure
-        case .whiteBalance: .whiteBalance
-        case .focus: .focus
-        }
-    }
-
-    var caption: String {
-        shading?.caption ?? "ZOOM"
-    }
-
-    var title: String {
-        shading?.title ?? "Zoom"
-    }
-
+extension SideGroup {
     /// Marks the control only (rocker, chosen segment, the values row's
     /// underline), never a value's text (docs/UI_DESIGN.md, "Look").
     var color: Color {
@@ -48,18 +13,12 @@ enum SideGroup: String, CaseIterable, Identifiable {
     }
 }
 
-/// The screen edge a side control sits on; the left one is the right one's
-/// mirror image.
-enum Side {
-    case left
-    case right
-}
-
-/// The sizes both side controls share, whatever group they run, so that
-/// nothing moves when a group changes (docs/UI_DESIGN.md, "Side control",
-/// "Sizes"): cells easy to hit without looking, and a rocker as tall as the
-/// side's zone allows. Worked out from the zone's height only.
-struct SideMetrics {
+/// The sizes both side controls share, the same on every screen and for
+/// every group, so that nothing moves when a group changes
+/// (docs/UI_DESIGN.md, "Side control", "Sizes"): cells easy to hit without
+/// looking, a rocker of a fixed, moderate size as tall as the selector and
+/// mode row beside it.
+enum SideMetrics {
     /// A selector or mode cell, never smaller.
     static let cellHeight: CGFloat = 44
     static let cellWidth: CGFloat = 46
@@ -71,70 +30,110 @@ struct SideMetrics {
     static let modeHeight = cellHeight + 2 * cellGap
     static let blockHeight = selectorHeight + Chrome.gap + modeHeight
     static let rockerWidth: CGFloat = 56
+    static let rocker = blockHeight
     /// The value label's and the K / Tint switch's rows.
     static let rowHeight = Chrome.rowHeight - 6
     static let rowsHeight = 2 * rowHeight + Chrome.gap
-    /// The value and K / Tint column beside the block (a landscape phone).
+    /// The value and K / Tint column beside the block.
     static let besideWidth: CGFloat = 104
 
-    /// The rocker's length.
-    let rocker: CGFloat
-    /// The value and K / Tint rows beside the block (centred on the rocker)
-    /// instead of under the rocker, where the stack does not fit.
-    let beside: Bool
-
-    /// Under the rocker where the stack fits, the rocker taking the rest;
-    /// else beside the block, the rocker the full height.
-    static func fitting(height: CGFloat) -> SideMetrics {
-        let stacked = height - Chrome.gap - rowsHeight
-        if stacked >= blockHeight {
-            return SideMetrics(rocker: stacked, beside: false)
-        }
-        return SideMetrics(rocker: max(height, blockHeight), beside: true)
-    }
-
-    var width: CGFloat {
-        Self.blockWidth + Chrome.gap + Self.rockerWidth + (beside ? Chrome.gap + Self.besideWidth : 0)
-    }
+    /// The rocker and the block, without the value column.
+    static let coreWidth = blockWidth + Chrome.gap + rockerWidth
+    /// With the value column beside the block.
+    static let fullWidth = coreWidth + Chrome.gap + besideWidth
 }
 
 /// One side control (docs/UI_DESIGN.md, "Side control"): the rocker at the
 /// screen edge and, on its inner side, the selector over the mode switch or
-/// lens buttons; the value and, for white balance, the K / Tint switch under
-/// the rocker (beside the block on a landscape phone). Runs zoom
-/// (`ZoomControl`) or a shading group (`AdjustControl`). Takes its zone's
-/// full height, centred in it.
+/// lens buttons; the value and, for white balance, the K / Tint switch
+/// beside the block on its inner side (above it where the screen is too
+/// narrow for that, a portrait phone). Runs zoom (`ZoomControl`) or a
+/// shading group (`AdjustControl`). Its centre sits at 65 % of the screen's
+/// height, where the thumbs rest, moved up only as far as it must to clear
+/// the bottom row (the bottom of its zone); the same on both sides.
 struct SideControl: View {
     let side: Side
-    /// This side's group.
-    @Binding var group: SideGroup
-    /// The other side's: choosing it swaps the two.
-    @Binding var other: SideGroup
+    /// Both sides' choices: choosing the other side's group swaps the two,
+    /// the chosen one again hides this side.
+    @Binding var sides: Sides
     let remote: RemoteControl
     let controls: CameraControls
     @ObservedObject var shading: Shading
+    /// The value and K / Tint rows beside the block; else above it.
+    let rowsBeside: Bool
+    /// The whole screen's height, safe areas included.
+    let screenHeight: CGFloat
 
-    /// The zone's height, measured; the same on both sides.
-    @State private var zoneHeight: CGFloat = 0
+    /// Where thumbs rest, from the top of the screen.
+    private static let restShare: CGFloat = 0.65
+
+    /// The zone this side control has (between the top rows and the bottom
+    /// row), in screen coordinates.
+    @State private var zone: CGRect = .zero
+
+    /// The control's height: the rocker, with the value rows above it where
+    /// they are not beside the block.
+    private var height: CGFloat {
+        rowsBeside ? SideMetrics.rocker : SideMetrics.rocker + Chrome.gap + SideMetrics.rowsHeight
+    }
+
+    /// From the top of the zone to the control's top.
+    private var top: CGFloat {
+        let wanted = Self.restShare * screenHeight - zone.minY - height / 2
+        return max(0, min(wanted, zone.height - height))
+    }
+
+    private var group: SideGroup {
+        sides.group(side) ?? (side == .left ? .zoom : .exposure)
+    }
 
     var body: some View {
-        let metrics = SideMetrics.fitting(height: zoneHeight)
+        Group {
+            if sides.hidden(side) {
+                tab
+            } else {
+                control
+            }
+        }
+        .offset(y: top)
+        .frame(maxHeight: .infinity, alignment: .top)
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { zone = $0 }
+    }
+
+    /// A hidden side: a tab at the edge in its group's colour; a tap brings
+    /// the side control back.
+    private var tab: some View {
+        Button {
+            sides = sides.show(side)
+        } label: {
+            Image(systemName: side == .left ? "chevron.right" : "chevron.left")
+                .font(.system(size: 17, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: Chrome.control, height: Chrome.control)
+                .background(group.color.opacity(0.85), in: RoundedRectangle(cornerRadius: 10))
+                .shadow(color: .black.opacity(0.3), radius: 2)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Show the \(side == .left ? "left" : "right") control (\(group.title))")
+    }
+
+    private var control: some View {
         Group {
             if let shadingGroup = group.shading {
-                AdjustControl(remote: remote, shading: shading, group: shadingGroup, side: side, metrics: metrics) {
+                AdjustControl(remote: remote, shading: shading, group: shadingGroup, side: side,
+                              rowsBeside: rowsBeside)
+                {
                     selector
                 }
             } else {
-                ZoomControl(controls: controls, shading: shading, side: side, metrics: metrics) {
+                ZoomControl(controls: controls, shading: shading, side: side, rowsBeside: rowsBeside) {
                     selector
                 }
             }
         }
         // A new group starts with fresh state (the K / Tint switch on K).
         .id(group)
-        .frame(width: metrics.width)
-        .frame(maxHeight: .infinity)
-        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { zoneHeight = $0 }
+        .frame(width: rowsBeside ? SideMetrics.fullWidth : SideMetrics.coreWidth)
     }
 
     private var selector: some View {
@@ -142,26 +141,22 @@ struct SideControl: View {
             .init(title: $0.caption, on: $0 == group, fill: $0.color, text: .white)
         }, columns: 2, fontSize: 13)
         { index in
-            let chosen = SideGroup.allCases[index]
-            guard chosen != group else {
-                return
-            }
-            if chosen == other {
-                other = group
-            }
-            group = chosen
+            sides = sides.choose(side, SideGroup.allCases[index])
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(side == .left ? "Left" : "Right") control: \(group.title)")
     }
 }
 
-/// The skeleton both kinds of side control share, mirrored on the left.
-/// Every slot has a fixed size; what does not fit its slot (a wide value)
-/// overflows it without moving anything.
+/// The skeleton both kinds of side control share, mirrored on the left:
+/// the rocker at the edge, the block (selector over mode row) beside it,
+/// both bottom-aligned and the same height; the value over the K / Tint row
+/// beside the block on its inner side, level with the mode row, or above
+/// the block. Every slot has a fixed size; what does not fit its slot (a
+/// wide value) overflows it without moving anything.
 struct SideLayout<Selector: View, Under: View, Bar: View, Value: View, Switch: View>: View {
     let side: Side
-    let metrics: SideMetrics
+    let rowsBeside: Bool
     @ViewBuilder let selector: () -> Selector
     @ViewBuilder let under: () -> Under
     @ViewBuilder let rocker: () -> Bar
@@ -174,8 +169,8 @@ struct SideLayout<Selector: View, Under: View, Bar: View, Value: View, Switch: V
     }
 
     var body: some View {
-        if metrics.beside {
-            HStack(spacing: Chrome.gap) {
+        if rowsBeside {
+            HStack(alignment: .bottom, spacing: Chrome.gap) {
                 if side == .left {
                     bar
                     block
@@ -188,7 +183,8 @@ struct SideLayout<Selector: View, Under: View, Bar: View, Value: View, Switch: V
             }
         } else {
             VStack(alignment: inward, spacing: Chrome.gap) {
-                HStack(alignment: .top, spacing: Chrome.gap) {
+                rows
+                HStack(alignment: .bottom, spacing: Chrome.gap) {
                     if side == .left {
                         bar
                         block
@@ -197,17 +193,15 @@ struct SideLayout<Selector: View, Under: View, Bar: View, Value: View, Switch: V
                         bar
                     }
                 }
-                rows
             }
         }
     }
 
     private var bar: some View {
         rocker()
-            .frame(width: SideMetrics.rockerWidth, height: metrics.rocker)
+            .frame(width: SideMetrics.rockerWidth, height: SideMetrics.rocker)
     }
 
-    /// The selector over the mode row, at the top of the rocker's height.
     private var block: some View {
         VStack(spacing: Chrome.gap) {
             selector()
@@ -215,11 +209,10 @@ struct SideLayout<Selector: View, Under: View, Bar: View, Value: View, Switch: V
             under()
                 .frame(height: SideMetrics.modeHeight)
         }
-        .frame(width: SideMetrics.blockWidth, height: metrics.rocker, alignment: .top)
+        .frame(width: SideMetrics.blockWidth, height: SideMetrics.blockHeight)
     }
 
-    /// The value over the K / Tint row: under the rocker towards the edge,
-    /// or beside the block towards it.
+    /// The value over the K / Tint row, towards the block.
     private var rows: some View {
         VStack(alignment: inward, spacing: Chrome.gap) {
             // Each row keeps its height when empty.
@@ -230,8 +223,7 @@ struct SideLayout<Selector: View, Under: View, Bar: View, Value: View, Switch: V
                 .frame(width: 0, height: SideMetrics.rowHeight)
                 .overlay(alignment: side == .left ? .leading : .trailing) { rowSwitch().fixedSize() }
         }
-        .fixedSize()
-        .frame(width: metrics.beside ? SideMetrics.besideWidth : metrics.width,
+        .frame(width: rowsBeside ? SideMetrics.besideWidth : SideMetrics.coreWidth,
                height: SideMetrics.rowsHeight, alignment: side == .left ? .leading : .trailing)
     }
 }
@@ -266,7 +258,7 @@ struct CellGrid: View {
             }
         }
         .padding(SideMetrics.cellGap)
-        .background(.black.opacity(0.45), in: RoundedRectangle(cornerRadius: 10))
+        .sideSurface(RoundedRectangle(cornerRadius: 10))
         .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(.white.opacity(0.25), lineWidth: 1))
     }
 
@@ -275,9 +267,10 @@ struct CellGrid: View {
             .font(.system(size: fontSize, weight: .bold, design: .rounded))
             .lineLimit(1)
             .minimumScaleFactor(0.7)
-            .foregroundStyle(cell.on ? cell.text : .white.opacity(0.8))
+            .foregroundStyle(cell.on ? cell.text : .white)
+            .shadow(color: .black.opacity(cell.on ? 0 : 0.5), radius: 2)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(cell.on ? cell.fill : .clear, in: RoundedRectangle(cornerRadius: 8))
+            .background(cell.on ? cell.fill.opacity(0.85) : .clear, in: RoundedRectangle(cornerRadius: 8))
             .contentShape(RoundedRectangle(cornerRadius: 8))
             .accessibilityElement()
             .accessibilityLabel(cell.title)
@@ -297,12 +290,13 @@ struct SideValueLabel: View {
     var body: some View {
         Text(text)
             .font(.system(size: 13, weight: .semibold, design: .rounded).monospacedDigit())
-            .foregroundStyle(tone.opacity(adjusting ? 1 : 0.8))
+            .foregroundStyle(tone.opacity(adjusting ? 1 : 0.9))
+            .shadow(color: .black.opacity(0.5), radius: 2)
             .lineLimit(1)
             .fixedSize()
             .padding(.horizontal, 8)
             .frame(height: SideMetrics.rowHeight)
-            .background(.black.opacity(adjusting ? 0.75 : 0.55), in: Capsule())
+            .sideSurface(Capsule(), dim: adjusting ? 0.55 : 0.25)
             .scaleEffect(adjusting ? 1.25 : 1, anchor: anchor)
             .animation(.easeOut(duration: 0.15), value: adjusting)
             .allowsHitTesting(false)

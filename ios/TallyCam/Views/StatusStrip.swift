@@ -2,15 +2,16 @@ import SwiftUI
 import UIKit
 
 /// One compact, low-contrast line of status along the top edge: live state
-/// and uptime, bitrate, the camera's name with its tally (where the screen
-/// is wide enough), remote link, clock, battery and (only when it matters)
+/// and uptime, bitrate, in the middle the camera's name with its tally
+/// (where the screen is wide enough; in landscape with the camera values,
+/// one top bar), remote link, clock, battery and (only when it matters)
 /// thermal state. The gear opens Settings.
-struct StatusStrip: View {
+struct StatusStrip<Centre: View>: View {
     @ObservedObject var controller: StreamController
     @ObservedObject var remote: RemoteControl
     @ObservedObject var capture: Capture
     /// In the middle of the line; nil when it has a row of its own.
-    var nameChip: TallyChip?
+    var centre: Centre?
     let onSettings: () -> Void
 
     var body: some View {
@@ -18,14 +19,16 @@ struct StatusStrip: View {
             TimelineView(.periodic(from: .now, by: 1)) { context in
                 HStack(spacing: 12) {
                     liveIndicator(now: context.date)
+                        // The stream state never truncates; the middle gives way.
+                        .fixedSize()
                     if controller.state == .live, let kbps = controller.stats?.bitrateKbps {
                         // Yellow while adaptive bitrate holds the encoder down.
                         Text(Self.bitrate(kbps))
                             .foregroundStyle(adapting ? .yellow : .white.opacity(0.85))
                     }
                     Spacer(minLength: 8)
-                    if let nameChip {
-                        nameChip
+                    if let centre {
+                        centre
                             .layoutPriority(1)
                         Spacer(minLength: 8)
                     }
@@ -53,7 +56,7 @@ struct StatusStrip: View {
         .padding(.leading, 12)
         .padding(.trailing, 2)
         .frame(height: Chrome.rowHeight)
-        .background(.black.opacity(0.35), in: Capsule())
+        .sideSurface(Capsule())
     }
 
     private var adapting: Bool {
@@ -123,13 +126,11 @@ struct StatusStrip: View {
     }
 
     static func uptime(_ seconds: TimeInterval) -> String {
-        let total = max(0, Int(seconds))
-        let h = total / 3600, m = total / 60 % 60, s = total % 60
-        return h > 0 ? String(format: "%d:%02d:%02d", h, m, s) : String(format: "%02d:%02d", m, s)
+        UiRules.uptime(seconds: seconds)
     }
 
     static func bitrate(_ kbps: Int) -> String {
-        kbps >= 1000 ? String(format: "%.1f Mb/s", Double(kbps) / 1000) : "\(kbps) kb/s"
+        UiRules.bitrate(kbps: kbps)
     }
 }
 

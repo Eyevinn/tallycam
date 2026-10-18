@@ -5,8 +5,6 @@ import SwiftUI
 enum Chrome {
     /// Width of the tally border plus a margin: chrome stays clear of it.
     static let tallyClearance: CGFloat = 22
-    /// Least padding inside a safe-area inset.
-    static let minEdge: CGFloat = 8
     /// Round buttons and the bottom row.
     static let control: CGFloat = 46
     /// The status and camera values rows.
@@ -18,10 +16,28 @@ enum Chrome {
     /// Between the zones (top, middle, bottom).
     static let zoneGap: CGFloat = 10
 
-    /// Padding inside the safe area so chrome clears the tally border on
-    /// edges without a safe-area inset (landscape top, for example).
+    /// Padding inside the safe area: chrome sits max(inset, tally
+    /// clearance) from each screen edge, never the inset plus the clearance
+    /// (under the Dynamic Island directly; at the clearance where an edge
+    /// has no inset, landscape top for example).
     static func edge(_ inset: CGFloat) -> CGFloat {
-        max(minEdge, tallyClearance - inset)
+        max(0, tallyClearance - inset)
+    }
+}
+
+extension View {
+    /// The chrome's light background: black at 25 % over an ultra-thin
+    /// material blur, so the picture shows through (docs/UI_DESIGN.md,
+    /// "Light backgrounds").
+    func sideSurface(_ shape: some Shape, dim: Double = 0.25, visible: Bool = true) -> some View {
+        background {
+            if visible {
+                shape
+                    .fill(.black.opacity(dim))
+                    .background(.ultraThinMaterial, in: shape)
+                    .environment(\.colorScheme, .dark)
+            }
+        }
     }
 }
 
@@ -36,7 +52,8 @@ struct ChromeButtonLabel: View {
             .font(.system(size: size * 0.43, weight: .medium))
             .foregroundStyle(active ? .yellow : .white.opacity(0.85))
             .frame(width: size, height: size)
-            .background(.black.opacity(0.35), in: Circle())
+            .shadow(color: .black.opacity(0.5), radius: 2)
+            .sideSurface(Circle())
             // Visible over the black bars around the picture too.
             .overlay(Circle().strokeBorder(.white.opacity(0.25), lineWidth: 1))
             .contentShape(Circle())

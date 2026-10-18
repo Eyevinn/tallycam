@@ -114,6 +114,11 @@ targets:
       - TallyCam/Control/CameraName.swift
       # LcpMessages reports the capture calibration.
       - TallyCam/CaptureCalibration.swift
+      # The shooting screen's rules and the shared UI vectors
+      # (docs/UI_DESIGN.md), read by UiVectorTests as Android reads them.
+      - TallyCam/Views/UiRules.swift
+      - path: ../core/tests/vectors/ui_values.json
+        buildPhase: resources
     preBuildScripts:
       - name: Build Rust core
         script: '"$PROJECT_DIR/../scripts/build-core-apple.sh" "$PLATFORM_NAME"'

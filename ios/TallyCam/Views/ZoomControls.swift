@@ -11,13 +11,9 @@ struct ZoomControl<Selector: View>: View {
     let controls: CameraControls
     @ObservedObject var shading: Shading
     let side: Side
-    let metrics: SideMetrics
+    /// The value and K / Tint rows beside the block; else above it.
+    let rowsBeside: Bool
     @ViewBuilder let selector: () -> Selector
-
-    /// Rate at full deflection, doublings per second.
-    private static var maxRate: Double { 2.0 }
-    /// A tap on an end, in doublings.
-    private static var tapStep: Double { 0.25 }
 
     @State private var ramping = false
     /// The last tap's zoom, so quick taps add up before the camera reports.
@@ -27,7 +23,7 @@ struct ZoomControl<Selector: View>: View {
     @State private var touchedTask: Task<Void, Never>?
 
     var body: some View {
-        SideLayout(side: side, metrics: metrics, selector: selector) {
+        SideLayout(side: side, rowsBeside: rowsBeside, selector: selector) {
             LensSwitch(shading: shading) { lens in
                 controls.apply(["lens": .string(lens)]) { _, _ in }
             }
@@ -42,7 +38,7 @@ struct ZoomControl<Selector: View>: View {
     }
 
     private var rocker: some View {
-        Rocker(high: "T", low: "W", label: "Zoom", length: metrics.rocker, tint: SideGroup.zoom.color,
+        Rocker(high: "T", low: "W", label: "Zoom", length: SideMetrics.rocker, tint: SideGroup.zoom.color,
                onStep: step, onReset: reset)
         { rate in
             if rate == 0 {
@@ -50,7 +46,7 @@ struct ZoomControl<Selector: View>: View {
                 controls.stopZoomRamp()
             } else {
                 ramping = true
-                controls.rampZoom(rate: rate * Self.maxRate)
+                controls.rampZoom(rate: rate * UiRules.maxZoomRate)
             }
         }
         .accessibilityValue(factorText)
@@ -80,24 +76,34 @@ struct ZoomControl<Selector: View>: View {
     private var factorText: String {
         let option = shading.descriptor("lens")?.options?.first { $0.value == shading.values["lens"] }
         let factor = (option.flatMap { LensSwitch.factor(label: $0.label) } ?? 1) * zoom
-        return String(format: factor < 10 ? "%.1f×" : "%.0f×", factor)
+        return UiRules.zoomFactorText(factor)
     }
 
+    /// A tap on an end (`UiRules.tapStep`), from the last tap's zoom when
+    /// quick taps add up.
     private func step(_ direction: Int) {
         guard let range else {
             return
         }
-        let base = tapped.flatMap { Date.now.timeIntervalSince($0.at) < 1 ? $0.zoom : nil } ?? zoom
-        let target = min(max(base * exp2(Double(direction) * Self.tapStep), range.lowerBound), range.upperBound)
+        let base = tapped.flatMap { Date.now.timeIntervalSince($0.at) < 1 ? $0.zoom : nil }
+        guard let target = UiRules.tapStep(.zoom, shading.values, shading.descriptorMap, tint: false,
+                                           direction: direction, base: base)?["zoom"]?.double
+        else {
+            return
+        }
         set(target, atEnd: target <= range.lowerBound || target >= range.upperBound)
     }
 
+    /// A double tap on the knob (`UiRules.neutral`): the lens's own 1×.
     private func reset() {
-        set(1, atEnd: false)
+        if case let .set(values)? = UiRules.neutral(.zoom, shading.values, tint: false),
+           let target = values["zoom"]?.double
+        {
+            set(target, atEnd: false)
+        }
     }
 
     private func set(_ target: Double, atEnd: Bool) {
-        let target = (target * 100).rounded() / 100
         tapped = (target, .now)
         controls.apply(["zoom": .number(target)]) { _, _ in }
         if atEnd {
@@ -168,14 +174,14 @@ struct Rocker: View {
     @State private var lastKnobTap = Date.distantPast
 
     private var travel: CGFloat {
-        // Clear of the end labels.
-        min((length - Self.knob - 48) / 2, Self.maxTravel)
+        // Up to the end labels.
+        min((length - Self.knob) / 2 - 12, Self.maxTravel)
     }
 
     var body: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: 10)
-                .fill(.black.opacity(0.35))
+            Color.clear
+                .sideSurface(RoundedRectangle(cornerRadius: 10))
                 .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(tint, lineWidth: 1.5))
             VStack {
                 Text(high)
@@ -185,10 +191,11 @@ struct Rocker: View {
             .font(.system(size: high.count > 2 || low.count > 2 ? 13 : 15, weight: .semibold, design: .rounded))
             .lineLimit(1)
             .minimumScaleFactor(0.7)
-            .foregroundStyle(.white.opacity(0.6))
+            .foregroundStyle(.white.opacity(0.85))
+            .shadow(color: .black.opacity(0.5), radius: 2)
             .padding(.vertical, 10)
             RoundedRectangle(cornerRadius: 8)
-                .fill(.white.opacity(sentStep == 0 ? 0.7 : 0.95))
+                .fill(Color(white: 0.88).opacity(sentStep == 0 ? 0.8 : 0.95))
                 .frame(width: Self.knob, height: Self.knob)
                 .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(tint, lineWidth: 2))
                 .offset(y: -deflection * travel)

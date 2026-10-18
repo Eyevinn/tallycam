@@ -19,7 +19,8 @@ struct AdjustControl<Selector: View>: View {
     /// The group the rocker adjusts.
     let group: ShadingGroup
     let side: Side
-    let metrics: SideMetrics
+    /// The value and K / Tint rows beside the block; else above it.
+    let rowsBeside: Bool
     @ViewBuilder let selector: () -> Selector
 
     /// Sets go out at most this often while the rocker is held.
@@ -44,7 +45,7 @@ struct AdjustControl<Selector: View>: View {
     @State private var touchedTask: Task<Void, Never>?
 
     var body: some View {
-        SideLayout(side: side, metrics: metrics, selector: selector) {
+        SideLayout(side: side, rowsBeside: rowsBeside, selector: selector) {
             modeButton
         } rocker: {
             rocker
@@ -58,7 +59,7 @@ struct AdjustControl<Selector: View>: View {
 
     private var rocker: some View {
         Rocker(high: highLabel, low: lowLabel, label: "\(group.title) \(ramped?.label ?? "")",
-               length: metrics.rocker, tint: SideGroup(group).color, onStep: nudge, onReset: reset)
+               length: SideMetrics.rocker, tint: SideGroup(group).color, onStep: nudge, onReset: reset)
         { newRate in
             rate = newRate
             if newRate == 0 {
@@ -79,7 +80,7 @@ struct AdjustControl<Selector: View>: View {
                 switchSegment("Tint", on: tint)
             }
             .padding(2)
-            .background(.black.opacity(0.45), in: RoundedRectangle(cornerRadius: 10))
+            .sideSurface(RoundedRectangle(cornerRadius: 10))
             .fixedSize()
         }
     }
@@ -93,10 +94,11 @@ struct AdjustControl<Selector: View>: View {
         } label: {
             Text(title)
                 .font(.system(size: 12, weight: .bold, design: .rounded))
-                .foregroundStyle(on ? .black : .white.opacity(0.8))
+                .foregroundStyle(on ? .black : .white)
+                .shadow(color: .black.opacity(on ? 0 : 0.5), radius: 2)
                 .padding(.horizontal, 8)
                 .frame(height: SideMetrics.rowHeight - 4)
-                .background(on ? .white : .clear, in: RoundedRectangle(cornerRadius: 8))
+                .background(on ? .white.opacity(0.85) : .clear, in: RoundedRectangle(cornerRadius: 8))
                 .contentShape(RoundedRectangle(cornerRadius: 8))
         }
         .buttonStyle(.plain)
@@ -165,33 +167,9 @@ struct AdjustControl<Selector: View>: View {
 
     // MARK: Ramp
 
-    /// What the rocker moves now (docs/UI_DESIGN.md, the adjust control's
-    /// table).
-    private struct Ramped {
-        let id: String
-        let label: String
-        /// Full speed, in the control's scale per second.
-        let speed: Double
-        /// A tap on an end, in the control's scale.
-        let tapStep: Double
-        let log: Bool
-        /// The group's mode has to change first (WB and focus need manual).
-        let mode: String?
-    }
-
+    /// What the rocker moves now (`UiRules.ramped`).
     private var ramped: Ramped? {
-        let manual = mode == "manual" ? nil : "manual"
-        return switch group {
-        case .exposure:
-            isAuto ? Ramped(id: "ev_bias", label: "compensation", speed: 2, tapStep: 0.3, log: false, mode: nil)
-                : Ramped(id: "iso", label: "ISO", speed: 2, tapStep: 1.0 / 3, log: true, mode: manual)
-        case .whiteBalance:
-            tint ? Ramped(id: "wb_tint", label: "tint", speed: 60, tapStep: 1, log: false, mode: manual)
-                : Ramped(id: "wb_temperature", label: "temperature", speed: 1500, tapStep: 100, log: false,
-                         mode: manual)
-        case .focus:
-            Ramped(id: "focus_position", label: "position", speed: 0.4, tapStep: 0.02, log: false, mode: manual)
-        }
+        UiRules.ramped(group, shading.values, shading.descriptorMap, tint: tint)
     }
 
     private var highLabel: String {
@@ -266,19 +244,28 @@ struct AdjustControl<Selector: View>: View {
         position = move(to: current + rate * ramped.speed * Self.tick, ramped, scale)
     }
 
-    /// A tap on an end: one step up (1) or down (-1).
+    /// A tap on an end: one step up (1) or down (-1) (`UiRules.tapStep`),
+    /// from the last tap's value when quick taps add up.
     private func nudge(_ direction: Int) {
-        guard let ramped, let scale = scale(ramped) else {
+        guard let ramped else {
             return
         }
         stopRamp()
         let recent = tapped.flatMap { $0.id == ramped.id && Date.now.timeIntervalSince($0.at) < 1 ? $0.value : nil }
-        let current = recent ?? shading.values[ramped.id]?.double ?? (scale.low + scale.high) / 2
-        move(to: scale.scaled(current) + Double(direction) * ramped.tapStep, ramped, scale)
-        if let sent {
-            tapped = (ramped.id, sent, .now)
+        guard let set = UiRules.tapStep(SideGroup(group), shading.values, shading.descriptorMap, tint: tint,
+                                        direction: direction, base: recent),
+            let value = set[ramped.id]?.double
+        else {
+            return
         }
-        sent = nil
+        tapped = (ramped.id, value, .now)
+        remote.localSet(set)
+        let descriptor = shading.descriptor(ramped.id)
+        if value <= descriptor?.min ?? -.infinity || value >= descriptor?.max ?? .infinity {
+            Haptics.limit()
+        } else {
+            Haptics.tick()
+        }
         touch()
     }
 
@@ -314,18 +301,18 @@ struct AdjustControl<Selector: View>: View {
     private func reset() {
         stopRamp()
         tapped = nil
-        switch group {
-        case .exposure:
-            remote.localSet(isAuto ? ["ev_bias": .number(0)] : [group.modeKey: .string("auto")])
-        case .whiteBalance:
-            if tint {
-                // The mode stays as it is.
-                remote.localSet(["wb_tint": .number(0)])
-            } else {
-                remote.runLocal(command: "wb_one_shot")
+        switch UiRules.neutral(SideGroup(group), shading.values, tint: tint) {
+        case let .set(values):
+            // The camera takes a tint only in manual white balance: silent
+            // otherwise (no error banner).
+            guard values["wb_tint"] == nil || mode == "manual" else {
+                return
             }
-        case .focus:
-            remote.localSet([group.modeKey: .string("auto")])
+            remote.localSet(values)
+        case let .command(name):
+            remote.runLocal(command: name)
+        case nil:
+            return
         }
         Haptics.tick()
         touch()
@@ -347,23 +334,6 @@ struct AdjustControl<Selector: View>: View {
 
     /// What the rocker moves, as it stands.
     private var valueText: String {
-        let values = shading.values
-        switch group {
-        case .exposure:
-            if isAuto {
-                return String(format: "%+.1f EV", values["ev_bias"]?.double ?? 0)
-            }
-            return values["iso"]?.double.map { String(format: "ISO %.0f", $0) } ?? "ISO"
-        case .whiteBalance:
-            if tint {
-                return values["wb_tint"]?.double.map { String(format: "Tint %+.0f", $0) } ?? "Tint"
-            }
-            return values["wb_temperature"]?.double.map { String(format: "%.0f K", $0) } ?? "K"
-        case .focus:
-            if isAuto {
-                return "AF"
-            }
-            return values["focus_position"]?.double.map { String(format: "F %.2f", $0) } ?? "F"
-        }
+        UiRules.adjustValueText(group, shading.values, tint: tint)
     }
 }

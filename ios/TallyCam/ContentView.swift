@@ -38,6 +38,8 @@ struct ContentView: View {
     /// control").
     @AppStorage("side.left") private var leftGroup = SideGroup.zoom
     @AppStorage("side.right") private var rightGroup = SideGroup.exposure
+    @AppStorage("side.leftHidden") private var leftHidden = false
+    @AppStorage("side.rightHidden") private var rightHidden = false
     #if DEBUG
         @State private var previewBackdrop = false
     #endif
@@ -51,8 +53,11 @@ struct ContentView: View {
                 #if DEBUG
                     if previewBackdrop {
                         // A stand-in picture, so the translucent chrome shows.
-                        LinearGradient(colors: [Color(white: 0.55), Color(white: 0.3)],
-                                       startPoint: .top, endPoint: .bottom)
+                        // `-uiPreviewBackdrop bright` or `dark` to check contrast.
+                        let backdrop = UserDefaults.standard.string(forKey: "uiPreviewBackdrop")
+                        let shades: [Double] = backdrop == "bright" ? [0.95, 0.75] : backdrop == "dark" ? [0.12, 0.02]
+                            : [0.55, 0.3]
+                        LinearGradient(colors: shades.map { Color(white: $0) }, startPoint: .top, endPoint: .bottom)
                             .ignoresSafeArea()
                             .allowsHitTesting(false)
                     }
@@ -63,7 +68,12 @@ struct ContentView: View {
                         .transition(.opacity)
                 }
                 let nameInline = geometry.size.width >= Self.nameInlineWidth
-                chrome(landscape: landscape, nameInline: nameInline)
+                // The value column beside each side control's block where
+                // both fit with room between them (not on a portrait phone).
+                let width = geometry.size.width - Chrome.edge(insets.leading) - Chrome.edge(insets.trailing)
+                chrome(landscape: landscape, nameInline: nameInline || landscape,
+                       rowsBeside: width >= 2 * SideMetrics.fullWidth + 4 * Chrome.gap,
+                       screenHeight: geometry.size.height + insets.top + insets.bottom)
                     .padding(.top, Chrome.edge(insets.top))
                     .padding(.bottom, Chrome.edge(insets.bottom))
                     .padding(.leading, Chrome.edge(insets.leading))
@@ -152,9 +162,9 @@ struct ContentView: View {
     /// with the centre between them. While the screen is locked everything
     /// stays in place but only the slide to unlock takes touches.
     @ViewBuilder
-    private func chrome(landscape: Bool, nameInline: Bool) -> some View {
+    private func chrome(landscape: Bool, nameInline: Bool, rowsBeside: Bool, screenHeight: CGFloat) -> some View {
         VStack(spacing: Chrome.zoneGap) {
-            topRows(nameInline: nameInline)
+            topRows(landscape: landscape, nameInline: nameInline)
                 .allowsHitTesting(!screenLocked)
             if landscape {
                 // Left: a side control over the tools. Centre: messages, the
@@ -163,7 +173,7 @@ struct ContentView: View {
                 // both edge columns centre on the same line.
                 HStack(spacing: Chrome.gap) {
                     VStack(alignment: .leading, spacing: Chrome.zoneGap) {
-                        sideColumn(.left)
+                        sideColumn(.left, rowsBeside: rowsBeside, screenHeight: screenHeight)
                         tools
                             .frame(height: LiveButton.size, alignment: .bottom)
                     }
@@ -179,7 +189,7 @@ struct ContentView: View {
                     }
                     .frame(maxWidth: .infinity)
                     VStack(alignment: .trailing, spacing: Chrome.zoneGap) {
-                        sideColumn(.right)
+                        sideColumn(.right, rowsBeside: rowsBeside, screenHeight: screenHeight)
                         liveButton(hintAbove: true)
                     }
                 }
@@ -190,9 +200,9 @@ struct ContentView: View {
                 messageSlot
                     .frame(height: Self.portraitMessageHeight, alignment: .top)
                 HStack(spacing: Chrome.gap) {
-                    sideColumn(.left)
+                    sideColumn(.left, rowsBeside: rowsBeside, screenHeight: screenHeight)
                     Spacer(minLength: 0)
-                    sideColumn(.right)
+                    sideColumn(.right, rowsBeside: rowsBeside, screenHeight: screenHeight)
                 }
                 unlockSlider
                 HStack(alignment: .bottom, spacing: Chrome.gap) {
@@ -205,6 +215,8 @@ struct ContentView: View {
         }
         .animation(.easeInOut(duration: 0.2), value: leftGroup)
         .animation(.easeInOut(duration: 0.2), value: rightGroup)
+        .animation(.easeInOut(duration: 0.2), value: leftHidden)
+        .animation(.easeInOut(duration: 0.2), value: rightHidden)
         .animation(.easeInOut(duration: 0.2), value: screenLocked)
         .animation(.easeInOut(duration: 0.2), value: remote.banner)
     }
@@ -214,36 +226,64 @@ struct ContentView: View {
     private static let portraitMessageHeight: CGFloat = 64
 
     /// Status line, then the camera values (the entry to exposure, colour,
-    /// focus and Settings).
-    private func topRows(nameInline: Bool) -> some View {
-        VStack(spacing: Chrome.rowGap) {
-            StatusStrip(controller: controller, remote: remote, capture: capture,
-                        nameChip: nameInline ? nameChip : nil)
-            {
+    /// focus and Settings). In landscape one top bar: the name chip and the
+    /// values in the status line's middle, dropping focus, then white
+    /// balance, then the chip's ON AIR / PREVIEW where they do not fit.
+    @ViewBuilder
+    private func topRows(landscape: Bool, nameInline: Bool) -> some View {
+        if landscape {
+            StatusStrip(controller: controller, remote: remote, capture: capture, centre: barCentre) {
                 showSettings = true
             }
-            if !nameInline {
-                nameChip
-            }
-            CameraValuesRow(shading: remote.shading, capture: capture,
-                            selected: [leftGroup.shading, rightGroup.shading].compactMap { $0 },
-                            onSelect: selectFromValues)
-            {
-                showSettings = true
+        } else {
+            VStack(spacing: Chrome.rowGap) {
+                StatusStrip(controller: controller, remote: remote, capture: capture,
+                            centre: nameInline ? nameChip() : nil)
+                {
+                    showSettings = true
+                }
+                if !nameInline {
+                    nameChip()
+                }
+                valuesRow()
             }
         }
     }
 
-    private var nameChip: TallyChip {
-        TallyChip(tally: remote.tally, cameraName: controller.displayName)
+    private var barCentre: some View {
+        ViewThatFits(in: .horizontal) {
+            ForEach(0 ..< 3) { drop in
+                HStack(spacing: Chrome.gap) {
+                    nameChip()
+                    valuesRow(drop: drop, embedded: true)
+                }
+            }
+            HStack(spacing: Chrome.gap) {
+                nameChip(nameOnly: true)
+                valuesRow(drop: 2, embedded: true)
+            }
+        }
     }
 
-    /// A side control: the left or right edge's, the full height of its
-    /// zone. Hidden (in place) while the screen is locked.
-    private func sideColumn(_ side: Side) -> some View {
-        SideControl(side: side, group: side == .left ? $leftGroup : $rightGroup,
-                    other: side == .left ? $rightGroup : $leftGroup,
-                    remote: remote, controls: capture.controls, shading: remote.shading)
+    private func valuesRow(drop: Int? = nil, embedded: Bool = false) -> some View {
+        CameraValuesRow(shading: remote.shading, capture: capture, selected: shownGroups, onSelect: selectFromValues,
+                        onFormat: { showSettings = true }, drop: drop, embedded: embedded)
+    }
+
+    /// The groups on the shown side controls: underlined in the values row.
+    private var shownGroups: [ShadingGroup] {
+        [leftHidden ? nil : leftGroup.shading, rightHidden ? nil : rightGroup.shading].compactMap { $0 }
+    }
+
+    private func nameChip(nameOnly: Bool = false) -> TallyChip {
+        TallyChip(tally: remote.tally, cameraName: controller.displayName, nameOnly: nameOnly)
+    }
+
+    /// A side control: the left or right edge's, low in its zone.
+    /// Hidden (in place) while the screen is locked.
+    private func sideColumn(_ side: Side, rowsBeside: Bool, screenHeight: CGFloat) -> some View {
+        SideControl(side: side, sides: sides, remote: remote, controls: capture.controls, shading: remote.shading,
+                    rowsBeside: rowsBeside, screenHeight: screenHeight)
             .opacity(screenLocked ? 0 : 1)
             .allowsHitTesting(!screenLocked)
     }
@@ -251,11 +291,19 @@ struct ContentView: View {
     /// A tap on a value in the values row: its group goes on the right side
     /// control, unless a side already shows it.
     private func selectFromValues(_ group: ShadingGroup) {
-        let chosen = SideGroup(group)
-        guard leftGroup != chosen, rightGroup != chosen else {
-            return
+        sides.wrappedValue = sides.wrappedValue.fromValues(SideGroup(group))
+    }
+
+    /// Both side controls' choices, kept in the app's storage.
+    private var sides: Binding<Sides> {
+        Binding {
+            Sides(left: leftGroup, right: rightGroup, leftHidden: leftHidden, rightHidden: rightHidden)
+        } set: { sides in
+            leftGroup = sides.left ?? leftGroup
+            rightGroup = sides.right ?? rightGroup
+            leftHidden = sides.leftHidden
+            rightHidden = sides.rightHidden
         }
-        rightGroup = chosen
     }
 
     /// Operator messages and toasts, centred under the values row, over the

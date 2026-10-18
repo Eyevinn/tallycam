@@ -37,6 +37,11 @@ final class Shading: ObservableObject {
         }
     }
 
+    /// The descriptors by id, for `UiRules`.
+    var descriptorMap: [String: ControlDescriptor] {
+        Dictionary(descriptors.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+    }
+
     func descriptor(_ id: String) -> ControlDescriptor? {
         descriptors.first { $0.id == id }
     }
@@ -80,41 +85,4 @@ final class Shading: ObservableObject {
             exposureWarning = warning
         }
     #endif
-}
-
-/// Exposure, colour and focus: the groups of the camera values row and the
-/// adjust strip (the `group` in their descriptors).
-enum ShadingGroup: String, CaseIterable, Identifiable {
-    case exposure
-    case whiteBalance = "white_balance"
-    case focus
-
-    var id: String {
-        rawValue
-    }
-
-    var modeKey: String {
-        switch self {
-        case .exposure: "exposure_mode"
-        case .whiteBalance: "wb_mode"
-        case .focus: "focus_mode"
-        }
-    }
-
-    /// In the adjust control's group selector.
-    var caption: String {
-        switch self {
-        case .exposure: "EXP"
-        case .whiteBalance: "WB"
-        case .focus: "FOC"
-        }
-    }
-
-    var title: String {
-        switch self {
-        case .exposure: "Exposure"
-        case .whiteBalance: "Colour"
-        case .focus: "Focus"
-        }
-    }
 }

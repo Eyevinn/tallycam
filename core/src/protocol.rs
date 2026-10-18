@@ -14,9 +14,14 @@ use serde_json::{Map, Value};
 /// server's `challenge` and the device's `auth` (docs/PROTOCOL.md, "Device
 /// keys"). A version 0 `hello` comes from an app without a key. 2 added
 /// the production settings (`production`) and the image statistics
-/// (`stats`, `image_stats`), docs/SHADING.md. An `ownership` message from a
-/// phone of an earlier version 2 build is an unknown type, ignored.
-pub const PROTOCOL_VERSION: u32 = 2;
+/// (`stats`, `image_stats`), docs/SHADING.md, and in its released builds
+/// (0.2.0) ownership of exposure, colour and focus. 3 is 2 without
+/// ownership: the server and the operator both change any control. An
+/// `ownership` message from a version 2 phone is an unknown type, ignored.
+pub const PROTOCOL_VERSION: u32 = 3;
+/// The version whose phones (0.2.0) refuse exposure, colour and focus from
+/// a server that does not own them: told to update the app.
+pub const OWNERSHIP_PROTOCOL: u32 = 2;
 
 pub const DEVICE_PATH: &str = "/lcp/v0/device";
 pub const CONTROL_PATH: &str = "/lcp/v0/control";

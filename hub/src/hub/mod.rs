@@ -21,7 +21,7 @@ use crate::device_key::{KeyError, PublicKey};
 use crate::protocol::{
     CommandDescriptor, CommandResult, ControlDescriptor, ControllerEvent, ControllerRequest,
     DeviceInfo, DeviceMessage, DeviceSnapshot, Hello, ImageStats, Preview, Production,
-    ServerToDevice, Status, TallyState, Values, PROTOCOL_VERSION,
+    ServerToDevice, Status, TallyState, Values, OWNERSHIP_PROTOCOL, PROTOCOL_VERSION,
 };
 use crate::store::{DeviceStore, NoStore, StoredDevice};
 
@@ -43,6 +43,10 @@ pub use shading::{default_production, DEFAULT_STATS_FPS, SHADING_PROTOCOL};
 /// messages: a phone that stops reading loses messages instead of growing
 /// the hub's memory (and its socket is closed, see `server.rs`).
 pub type DeviceTx = mpsc::Sender<ServerToDevice>;
+/// Shown on a protocol 2 phone (0.2.0) when it joins: it refuses the
+/// shader's exposure, colour and focus.
+pub const OUTDATED_APP: &str =
+    "Update TallyCam: this version refuses exposure, colour and focus from the shader";
 /// Messages queued for one phone, at most.
 pub const DEVICE_QUEUE: usize = 256;
 /// Devices the hub lists, at most; a new one beyond is refused
@@ -506,6 +510,12 @@ impl Hub {
             if entry.shading() {
                 entry.send(ServerToDevice::Production(production));
                 entry.send_stats(controllers);
+            }
+            if entry.protocol == OWNERSHIP_PROTOCOL {
+                info!("Device {id} runs an app with ownership (protocol 2)");
+                entry.send(ServerToDevice::Message {
+                    text: OUTDATED_APP.into(),
+                });
             }
             // Calls sent on the old connection will not be answered.
             inner.drop_pending_for(&id);

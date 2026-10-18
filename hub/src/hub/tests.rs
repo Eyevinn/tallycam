@@ -1085,3 +1085,32 @@ fn a_state_event_carries_only_the_kept_values() {
     };
     assert_eq!(values.len(), MAX_STATE_KEYS);
 }
+
+#[test]
+fn a_protocol_2_phone_is_asked_to_update() {
+    let hub = Hub::new();
+    let (tx, mut phone) = mpsc::channel(DEVICE_QUEUE);
+    let v2 = Hello {
+        protocol: OWNERSHIP_PROTOCOL,
+        ..hello("v2", "0.2.0 app")
+    };
+    join(&hub, hub.new_connection_id(), v2, tx);
+    let mut texts = Vec::new();
+    let mut production = false;
+    while let Ok(msg) = phone.try_recv() {
+        match msg {
+            ServerToDevice::Message { text } => texts.push(text),
+            ServerToDevice::Production(_) => production = true,
+            _ => {}
+        }
+    }
+    assert_eq!(texts, [OUTDATED_APP]);
+    assert!(production, "still gets the production");
+
+    // The current app is not.
+    let (tx, mut phone) = mpsc::channel(DEVICE_QUEUE);
+    join(&hub, hub.new_connection_id(), hello("v3", "new"), tx);
+    while let Ok(msg) = phone.try_recv() {
+        assert!(!matches!(msg, ServerToDevice::Message { .. }));
+    }
+}

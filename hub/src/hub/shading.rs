@@ -1,7 +1,8 @@
 //! Shading (docs/SHADING.md): the production settings and the image
 //! statistics preference. Exposure, colour and focus are plain controls:
 //! the shader and the camera operator both change them, and the last write
-//! wins. Protocol 1 phones know none of this and get requests as before.
+//! wins. Protocol 1 phones know none of this and get requests as before;
+//! protocol 2 phones (0.2.0) also have ownership and are asked to update.
 
 use super::*;
 use crate::protocol::{Production, ShutterPolicy};

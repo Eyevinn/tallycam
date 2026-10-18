@@ -55,15 +55,17 @@ Each group is in one of the descriptor's modes, set by whoever wrote last:
 
 ## LCP messages
 
-Protocol version 2: `hello.protocol: 2` says the phone understands
-`production` and `stats` (and sends `image_stats`). Version 1 phones keep
-working against a version 2 hub, without them.
+Protocol version 2 and up: `hello.protocol` 2 or more says the phone
+understands `production` and `stats` (and sends `image_stats`). Version 1
+phones keep working without them.
 
-Earlier version 2 builds had ownership (`own`, `release`, `ownership`, a
-`holder` on controller requests). It is gone, the version number stays: the
-hub ignores an `ownership` message from such a phone (an unknown type) and a
-`holder` field from such a controller. A phone ignores `own` and `release`
-from an old hub.
+Version 2 (the 0.2.0 apps) also had ownership (`own`, `release`,
+`ownership`, a `holder` on controller requests). Version 3 is the same
+without it (D13). A version 2 phone still refuses exposure, colour and focus
+it believes the server does not own, so the hub sends it a `message` asking
+to update the app when it joins, and the operator page marks it. The hub
+ignores an `ownership` message (an unknown type) and a `holder` field from
+an old controller. A phone ignores `own` and `release` from an old hub.
 
 ### Server → device
 

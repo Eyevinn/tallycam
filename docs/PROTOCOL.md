@@ -181,7 +181,7 @@ trusts a claimed device id alone. Code is the source of truth
 
 ```
 phone                                   server
-  │ hello {protocol: 2, device: {id, ...}, public_key, controls, commands}
+  │ hello {protocol: 3, device: {id, ...}, public_key, controls, commands}
   │ ◀─ challenge {server, nonce}
   │ auth {signature}
   │ ◀─ tally, preview          (admitted: the normal flow)
@@ -244,7 +244,7 @@ phone                                   server
 ```json
 {
   "type": "hello",
-  "protocol": 2,
+  "protocol": 3,
   "public_key": "BLxFB1xZ...base64 SEC1 P-256...",
   "device": {
     "id": "cbdd2da5173c382db5e77591b8f19052",
@@ -260,7 +260,7 @@ phone                                   server
 ```
 
 `public_key` comes from apps with device keys (`protocol` 1 and up; 2 adds
-production and image statistics, see docs/SHADING.md); the id is
+production and image statistics, see docs/SHADING.md; 3 drops ownership); the id is
 then derived from the key (see "Device keys"). `device.name` is the camera's
 display name; the id stays its identity. The iOS app sends the name set with
 `camera_name`, or by default the model and the start of the id
@@ -405,9 +405,10 @@ statistics"; computed by `core/src/image_stats.rs`.
 
 Exposure, colour and focus are plain controls: the server and the camera
 operator both change them at any time, and the last write wins (SHADING.md,
-D13). Earlier protocol 2 builds had ownership (`own`, `release`,
-`ownership`); a device ignores `own` and `release`, a server ignores
-`ownership`.
+D13). Protocol 2 had ownership (`own`, `release`, `ownership`); a device
+ignores `own` and `release`, a server ignores `ownership`, and a protocol 2
+phone is told to update its app (it refuses those controls from a server
+that does not own them).
 
 ## Control descriptor
 

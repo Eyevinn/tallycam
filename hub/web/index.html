@@ -19,6 +19,12 @@
   --pgm: #e5302f;
   --warn: #f0a020;
   --ok: #3ccf6e;
+  /* As on the phones: held (manual or locked) yellow, a change from the
+     other side cyan, CLIP red, DARK orange. */
+  --held: #ffd23f;
+  --other: #3fd8f0;
+  --clip: #ff4d4d;
+  --dark: #f0a020;
   --radius: 6px;
   color-scheme: dark;
 }
@@ -40,6 +46,13 @@ header {
 }
 header h1 { font-size: 14px; font-weight: 600; margin: 0; letter-spacing: .04em; text-transform: uppercase; }
 header .spacer { flex: 1; }
+header h1, header .conn, header .btn { white-space: nowrap; }
+header .seg { flex-wrap: nowrap; flex: none; }
+/* An iPad in portrait: the header stays one line. */
+@media (max-width: 820px) {
+  header { gap: 8px; padding: 8px 12px; }
+  #count, #conn-text { display: none; }
+}
 .conn { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); display: inline-block; flex: none; }
 .dot.on { background: var(--ok); }
@@ -49,6 +62,8 @@ main { flex: 1; display: flex; min-height: 0; }
   flex: 1; overflow: auto; padding: 16px;
   display: grid; gap: 12px; align-content: start;
   grid-template-columns: repeat(auto-fill, minmax(270px, 1fr));
+  /* Rows as tall as their cards: never squeezed to fit the window. */
+  grid-auto-rows: max-content;
 }
 #empty { padding: 24px 0; grid-column: 1 / -1; display: flex; justify-content: center; }
 
@@ -92,13 +107,27 @@ main { flex: 1; display: flex; min-height: 0; }
 .card.tally-preview { border-color: var(--pvw); }
 .card.tally-program { border-color: var(--pgm); }
 .card.offline .media, .card.offline .stats { opacity: .45; }
-.card-head { display: flex; align-items: center; gap: 8px; padding: 6px 8px; }
-.card-head .name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.card-head .model { color: var(--muted); font-size: 11px; margin-left: auto; white-space: nowrap; }
+.card-head { display: flex; align-items: center; gap: 6px; padding: 6px 8px; min-width: 0; }
+.card-head .name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 0 1 auto; }
+.card-head .model { color: var(--muted); font-size: 11px; margin-left: auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 0 1 auto; }
+/* The tally colour on the camera name, as on an RCP. */
+.name.t-program, .name.t-preview { padding: 0 6px; border-radius: 3px; }
+.name.t-program { background: var(--pgm); color: #fff; }
+.name.t-preview { background: var(--pvw); color: #04140a; }
+/* Short notes next to the name: an app to update, a camera's own mains. */
+.tags { display: inline-flex; gap: 4px; flex: none; }
+.tags:empty { display: none; }
+.tag {
+  font-size: 10px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
+  padding: 1px 5px; border-radius: 3px; white-space: nowrap; cursor: help; line-height: 1.4;
+}
+.tag.update { background: var(--warn); color: #000; }
+.tag.old { background: var(--raised); color: var(--muted); border: 1px solid var(--line); }
+.tag.mains { color: var(--warn); border: 1px solid var(--warn); }
 /* Always 16:9: a portrait camera is shown pillarboxed, so its card is not
    taller than the others. The image is positioned so it cannot stretch the
    box (aspect-ratio is only a preferred size). */
-.media { position: relative; background: #000; aspect-ratio: 16 / 9; overflow: hidden; }
+.media { position: relative; background: #000; aspect-ratio: 16 / 9; overflow: hidden; flex: none; }
 .media img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; display: block; }
 .media .overlay {
   position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
@@ -114,18 +143,25 @@ main { flex: 1; display: flex; min-height: 0; }
 /* An exposure warning: auto ISO at its limit, or clipping / too dark. */
 .media .xwarn {
   position: absolute; bottom: 6px; left: 6px; padding: 1px 6px; border-radius: 3px;
-  font-size: 11px; font-weight: 700; letter-spacing: .06em; background: var(--warn); color: #000;
+  font-size: 11px; font-weight: 700; letter-spacing: .06em; background: var(--dark); color: #000;
 }
+.media .xwarn.clip { background: var(--clip); color: #fff; }
 .media .xwarn:empty { display: none; }
 /* The current values on one line, as on the phones: manual or locked in yellow. */
+/* Every value stays visible: a narrow card wraps between values, never
+   inside one. */
 .readout {
-  padding: 4px 8px 0; font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  padding: 4px 8px 0; font-size: 12px; line-height: 1.5; font-weight: 500;
   font-variant-numeric: tabular-nums; color: var(--text);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  display: flex; flex-wrap: wrap; align-items: baseline; row-gap: 0;
 }
+.readout .part { white-space: nowrap; }
 .readout:empty { display: none; }
-.readout .m { color: #ffd23f; }
-.readout .sep { color: var(--faint); }
+.readout .m { color: var(--held); }
+.readout .chg { color: var(--other); }
+.readout .w-clip { color: var(--clip); font-weight: 700; }
+.readout .w-dark { color: var(--dark); font-weight: 700; }
+.readout .sep { color: var(--faint); padding: 0 5px; }
 .stats { display: flex; flex-wrap: wrap; gap: 4px 10px; padding: 6px 8px; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 .stats b { color: var(--text); font-weight: 500; }
 .chip { padding: 0 5px; border-radius: 3px; background: var(--raised); color: var(--muted); }
@@ -142,7 +178,10 @@ main { flex: 1; display: flex; min-height: 0; }
   white-space: pre; overflow-x: auto;
 }
 .clock-pre .muted { color: var(--muted); }
-.card-actions { display: flex; gap: 6px; padding: 6px 8px 8px; }
+.card-actions { display: flex; gap: 6px; padding: 6px 8px 8px; margin-top: auto; align-items: center; }
+.card-actions .seg { flex-wrap: nowrap; }
+.card-actions .seg button { padding: 5px 8px; }
+.card-actions .btn { white-space: nowrap; }
 
 .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 4px; overflow: hidden; flex-wrap: wrap; }
 .seg button {
@@ -152,6 +191,8 @@ main { flex: 1; display: flex; min-height: 0; }
 .seg button:last-child { border-right: 0; }
 .seg button:hover:not(:disabled) { background: #2d3440; }
 .seg button.active { background: var(--accent); color: #fff; }
+/* A held mode (manual or locked) stands out from auto, as on the phones. */
+.seg button.active.held { background: var(--held); color: #000; }
 .seg.tally button.active.t-off { background: #4a5160; }
 .seg.tally button.active.t-preview { background: var(--pvw); color: #04140a; }
 .seg.tally button.active.t-program { background: var(--pgm); color: #fff; }
@@ -171,6 +212,9 @@ a.btn { color: inherit; text-decoration: none; display: inline-flex; align-items
   overflow: auto; display: none;
 }
 #panel.open { display: block; }
+@media (max-width: 1200px) {
+  #panel { width: 380px; }
+}
 @media (max-width: 860px) {
   #panel { position: fixed; inset: 0; width: auto; z-index: 10; border-left: 0; }
 }
@@ -178,7 +222,8 @@ a.btn { color: inherit; text-decoration: none; display: inline-flex; align-items
   display: flex; align-items: center; gap: 8px; padding: 10px 16px;
   border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--panel); z-index: 2;
 }
-.p-head .name { font-weight: 600; font-size: 14px; }
+.p-head .name { font-weight: 600; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.p-name { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .p-head .sub { color: var(--muted); font-size: 11px; }
 .p-head .close { margin-left: auto; }
 .p-body { padding: 12px 16px 24px; display: flex; flex-direction: column; gap: 14px; }
@@ -199,9 +244,16 @@ a.btn { color: inherit; text-decoration: none; display: inline-flex; align-items
   padding: 7px 10px; border-bottom: 1px solid var(--line);
 }
 .row:last-child { border-bottom: 0; }
-.row > label { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.row.disabled > label { color: var(--faint); }
+.row > label { color: var(--muted); min-width: 0; }
+.row > label .lt { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row.disabled > label .lt { color: var(--faint); }
 .row.disabled .ctl { opacity: .5; }
+/* Why a control cannot be set now (or how it differs), under its label. */
+.why { display: block; font-size: 10px; line-height: 1.3; color: var(--warn); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.why:empty { display: none; }
+.why.info { color: var(--muted); }
+.group-note { color: #000; background: var(--warn); border-radius: var(--radius) var(--radius) 0 0; padding: 4px 10px; font-size: 12px; }
+.group-note:empty { display: none; }
 .ctl { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .ctl input[type=range] { flex: 1; min-width: 60px; accent-color: var(--accent); height: 24px; }
 .num {
@@ -250,7 +302,8 @@ a.btn { color: inherit; text-decoration: none; display: inline-flex; align-items
   display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px;
   background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 8px 12px;
 }
-.shade-bar label { color: var(--muted); display: inline-flex; align-items: center; gap: 6px; }
+.shade-bar label { color: var(--muted); display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.shade-bar .title { font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
 .shade-bar select, .shade-card select {
   background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 3px 6px;
 }
@@ -259,7 +312,8 @@ a.btn { color: inherit; text-decoration: none; display: inline-flex; align-items
 .shade-bar .spacer { flex: 1; }
 #shade-grid {
   display: grid; gap: 12px; align-content: start;
-  grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  grid-auto-rows: max-content;
 }
 #shade-grid .none { color: var(--muted); padding: 16px 0; }
 .shade-card {
@@ -273,16 +327,31 @@ a.btn { color: inherit; text-decoration: none; display: inline-flex; align-items
 .meter { display: flex; flex-wrap: wrap; gap: 4px 10px; padding: 4px 8px; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 .meter b { color: var(--text); font-weight: 500; }
 .meter .hot { color: var(--warn); }
-.shade-ctl { display: flex; flex-direction: column; gap: 6px; padding: 6px 8px 8px; border-top: 1px solid var(--line); }
-.srow { display: grid; grid-template-columns: 74px 1fr 64px; gap: 6px; align-items: center; }
-.srow > label { color: var(--muted); font-size: 12px; white-space: nowrap; }
-.srow input[type=range] { width: 100%; accent-color: var(--accent); height: 22px; }
-.srow .sval { text-align: right; font-variant-numeric: tabular-nums; }
+.shade-ctl { display: flex; flex-direction: column; gap: 4px; padding: 6px 8px 8px; border-top: 1px solid var(--line); }
+.shade-ctl .group-note { border-radius: 4px; margin-bottom: 2px; }
+.srow { display: grid; grid-template-columns: 66px minmax(0, 1fr) 62px; gap: 8px; align-items: center; min-height: 26px; }
+.srow.first { margin-top: 4px; padding-top: 6px; border-top: 1px solid var(--line); }
+.srow > label { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.srow .cell { position: relative; min-width: 0; display: flex; align-items: center; height: 24px; }
+.srow input[type=range] { width: 100%; margin: 0; accent-color: var(--accent); height: 22px; }
+.srow .cell select { width: 100%; min-width: 0; font-size: 12px; }
+.srow .fixed { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.srow .sval { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.srow .sval.held { color: var(--held); }
+.srow .sval.mode { color: var(--muted); font-size: 11px; }
 .srow.disabled > label, .srow.disabled .sval { color: var(--faint); }
-.srow .seg button { padding: 2px 7px; min-height: 22px; font-size: 12px; }
-.shade-actions { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 8px 8px; }
-.shade-actions .btn { padding: 2px 8px; min-height: 24px; font-size: 12px; }
-.shade-actions select { max-width: 150px; font-size: 12px; }
+.srow.disabled input[type=range], .srow.disabled select { opacity: .35; }
+/* The reason, over the dimmed control it disables. */
+.srow .cell .why {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  pointer-events: none; font-size: 11px; font-weight: 600; letter-spacing: .02em;
+}
+.srow .cell .why:empty { display: none; }
+.srow .seg { flex-wrap: nowrap; }
+.srow .seg button { padding: 0 10px; min-height: 22px; font-size: 12px; font-weight: 600; min-width: 30px; }
+.shade-actions { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 8px 8px; align-items: center; }
+.shade-actions .btn { padding: 2px 8px; min-height: 26px; font-size: 12px; }
+.shade-actions select { min-width: 0; flex: 1 1 120px; max-width: 170px; font-size: 12px; min-height: 26px; }
 .shade-err { color: #ff6b6b; font-size: 12px; padding: 0 8px 6px; }
 .shade-err:empty { display: none; }
 </style>
@@ -420,7 +489,22 @@ function send(obj) {
   if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
 }
 
+// What this page just set, so its state echo does not flash as a change
+// from the phone.
+function noteSent(device, keys) {
+  const d = devices.get(device);
+  if (!d) return;
+  const t = performance.now();
+  for (const k of keys) d.sentAt[k] = t;
+}
+
+const COMMAND_CONTROLS = {
+  focus_at: ["focus_mode", "focus_position"],
+  wb_one_shot: ["wb_mode", "wb_temperature", "wb_tint"],
+};
+
 function sendSet(device, values, withId) {
+  noteSent(device, Object.keys(values));
   const msg = { type: "set", device, values };
   if (withId) {
     msg.id = ++nextId;
@@ -430,6 +514,7 @@ function sendSet(device, values, withId) {
 }
 
 function sendCommand(device, name, args) {
+  noteSent(device, COMMAND_CONTROLS[name] || []);
   const id = ++nextId;
   pending.set(id, { device, what: "command " + name });
   const msg = { type: "command", device, id, name };
@@ -457,6 +542,8 @@ function addDevice(id) {
     id, info: { id, name: id }, controls: [], commands: [], state: {}, status: null,
     preview: null, tally: "off", online: false, log: [], card: null, keyFingerprint: null,
     protocol: 0, imageStats: null, shade: null, isoLimit: null,
+    // When this page last set each control, and readout parts to flash.
+    sentAt: {}, flash: {}, flashTimer: null,
   };
   devices.set(id, d);
   order.push(id);
@@ -467,56 +554,191 @@ function controlById(d, cid) {
   return d.controls.find(c => c.id === cid);
 }
 
-// Writable now? `assume`: values the same request sets too (the shading
-// view sends exposure_mode manual along with an ISO), so `enabled_when` is
-// checked against the state after it.
-function isEnabled(d, c, assume) {
-  if (!c || c.readonly) return false;
-  if (!d.online) return false;
-  if (c.locked_while_live && isLiveState(d)) return false;
+// The controls of exposure, colour and focus, which a protocol 2 phone (the
+// 0.2.0 apps) refuses from the hub, and the commands of those groups.
+const SHADING_IDS = new Set(["exposure_mode", "iso", "shutter", "ev_bias", "wb_mode", "wb_temperature",
+  "wb_tint", "focus_mode", "focus_position", "focus_at", "wb_one_shot"]);
+// hello.protocol: 2 adds production and image statistics, 3 drops ownership.
+const SHADE_PROTOCOL = 2;
+const OWNERSHIP_PROTOCOL = 2;
+const OUTDATED_APP = "This app version (TallyCam 0.2.0, protocol 2) refuses exposure, colour and focus " +
+  "from the hub. Update TallyCam on the phone.";
+const OLDER_APP = "An older TallyCam (protocol 1): exposure, colour and focus work, but it takes no " +
+  "production settings (mains, shutter) and sends no image statistics. Update TallyCam on the phone.";
+
+function refusesShading(d) {
+  return d.protocol === OWNERSHIP_PROTOCOL;
+}
+
+const MODE_GROUP = { exposure_mode: "exposure", wb_mode: "white balance", focus_mode: "focus" };
+
+// Why `c` cannot be set now, or null when it can: { short, long, wide }.
+// `short` is the inline note, `long` the tooltip; `wide` marks a reason
+// that covers the whole camera (offline, an app to update), which is shown
+// once rather than on every row. `assume`: values the same request sets too
+// (the shading view sends exposure_mode manual along with an ISO), so
+// `enabled_when` is checked against the state after it. Controls are
+// disabled only for `readonly`, `enabled_when` and `locked_while_live`, plus
+// a camera that is offline or refuses the shader.
+function disabledReason(d, c, assume) {
+  if (!c) return { short: "", long: "This camera has no such control", wide: true };
+  if (!d.online) return { short: "Offline", long: "The camera is offline", wide: true };
+  if (refusesShading(d) && SHADING_IDS.has(c.id)) return { short: "Update app", long: OUTDATED_APP, wide: true };
+  if (c.readonly) {
+    return c.id === "shutter"
+      ? { short: "Production", long: "The shutter is a production setting. It is set per camera only when it is free: " +
+          "Shutter Free, or Mains Off, in the Shading view's production bar." }
+      : { short: "Read-only", long: "Read-only: the camera reports it, nobody sets it" };
+  }
+  if (c.locked_while_live && isLiveState(d))
+    return { short: "Not while live", long: "Refused while the camera is live: stop its stream to change it" };
   const cond = c.enabled_when;
-  if (!cond) return true;
+  if (!cond) return null;
   const state = assume ? { ...d.state, ...assume } : d.state;
   // A list means any of its values.
-  return Object.entries(cond).every(([k, v]) =>
-    Array.isArray(v) ? v.some(x => same(state[k], x)) : same(state[k], v));
+  const unmet = Object.entries(cond).filter(([k, v]) =>
+    !(Array.isArray(v) ? v.some(x => same(state[k], x)) : same(state[k], v)));
+  if (!unmet.length) return null;
+  const [k, v] = unmet[0];
+  const vs = Array.isArray(v) ? v.map(String) : [String(v)];
+  const word = vs.join(" or ");
+  return {
+    short: (MODE_GROUP[k] ? word.charAt(0).toUpperCase() + word.slice(1) : k + " " + word) + " only",
+    long: "Writable when " + (MODE_GROUP[k] ? MODE_GROUP[k] + " is " + word : k + " is " + word) +
+      " (" + unmet.map(([a, b]) => a + " = " + (Array.isArray(b) ? b.join(" or ") : b)).join(", ") + ")",
+  };
+}
+
+function isEnabled(d, c, assume) {
+  return !disabledReason(d, c, assume);
+}
+
+function isAuto(mode) {
+  return mode === undefined || mode === "auto";
 }
 
 // ---------------------------------------------------------------------------
 // Readout: the current values on one line, as the phones show them
-// ("1080p30 · ISO 400 · 1/50 · +0.3 EV · 5200 K · AF"). A value of a group
-// in manual or locked is yellow, auto is plain.
+// ("1080p30 · ISO 26 · 1/100 · +0.3 EV · 5200 K +4 · AF", docs/UI_DESIGN.md).
+// A value of a group in a held mode (manual or locked) is yellow, auto is
+// plain; a value changed from the other side (the phone, or another page)
+// is cyan for a second.
 // ---------------------------------------------------------------------------
 
+// The controls behind each readout part: a part flashes when one of them
+// changed and this page did not just set it.
+const PART_CONTROLS = {
+  format: ["resolution", "frame_rate"],
+  iso: ["exposure_mode", "iso"],
+  shutter: ["exposure_mode", "shutter"],
+  ev: ["exposure_mode", "ev_bias"],
+  wb: ["wb_mode", "wb_temperature", "wb_tint"],
+  focus: ["focus_mode", "focus_position"],
+};
+const FLASH_MS = 1000;
+// A state echo within this long of a set from this page is its own.
+const ECHO_MS = 2500;
+
+function fmtFormat(s) {
+  const num = v => typeof v === "number" && isFinite(v);
+  const res = s.resolution === "2160p" ? "4K" : s.resolution ? String(s.resolution) : "";
+  if (res && num(s.frame_rate)) return res + s.frame_rate;
+  if (res) return res;
+  if (num(s.frame_rate)) return s.frame_rate + " fps";
+  return "";
+}
+
+function fmtEv(v) {
+  return (v > 0 ? "+" : v < 0 ? "-" : "") + Math.abs(v).toFixed(1) + " EV";
+}
+
+function fmtTint(v) {
+  const t = Math.round(v);
+  return (t > 0 ? "+" : t < 0 ? "-" : "") + Math.abs(t);
+}
+
+function fmtWb(s) {
+  if (typeof s.wb_temperature !== "number") return "";
+  const tint = typeof s.wb_tint === "number" ? Math.round(s.wb_tint) : 0;
+  return Math.round(s.wb_temperature) + " K" + (tint ? " " + fmtTint(tint) : "");
+}
+
+function fmtFocus(s) {
+  if (s.focus_mode === "auto") return "AF";
+  if (s.focus_mode === "locked") return "AF-L";
+  if (s.focus_mode === "manual")
+    return typeof s.focus_position === "number" ? "F " + s.focus_position.toFixed(2) : "F";
+  return "";
+}
+
+// The exposure word after ISO, the phones' rule from the image statistics:
+// CLIP over 2% clipped, DARK when the 99th percentile is below a third.
+function statsWarning(d) {
+  const l = d.online && d.imageStats && d.imageStats.luma;
+  if (l && l.clipped > 0.02) return "clip";
+  if (l && typeof l.p99 === "number" && l.p99 < 0.33) return "dark";
+  return "";
+}
+
+// [{ key, text, held, warn? }]
 function readoutParts(d) {
   const s = d.state || {};
-  const parts = [];  // [text, manual]
+  const parts = [];
   const num = v => typeof v === "number" && isFinite(v);
-  if (s.resolution && num(s.frame_rate)) parts.push([String(s.resolution) + s.frame_rate, false]);
-  else if (s.resolution) parts.push([String(s.resolution), false]);
-  else if (num(s.frame_rate)) parts.push([s.frame_rate + " fps", false]);
-  const expAuto = s.exposure_mode === undefined || s.exposure_mode === "auto" || s.exposure_mode === "auto_iso";
-  if (num(s.iso)) parts.push(["ISO " + Math.round(s.iso), !expAuto]);
-  if (num(s.shutter)) parts.push([fmtShutter(s.shutter), !expAuto]);
-  if (expAuto && num(s.ev_bias) && Math.abs(s.ev_bias) >= 0.05)
-    parts.push([(s.ev_bias > 0 ? "+" : "") + s.ev_bias.toFixed(1) + " EV", false]);
-  if (num(s.wb_temperature)) parts.push([Math.round(s.wb_temperature) + " K", s.wb_mode !== undefined && s.wb_mode !== "auto"]);
-  if (s.focus_mode === "auto") parts.push(["AF", false]);
-  else if (s.focus_mode === "locked") parts.push(["AF-L", true]);
-  else if (s.focus_mode === "manual") parts.push(["MF" + (num(s.focus_position) ? " " + s.focus_position.toFixed(2) : ""), true]);
+  const format = fmtFormat(s);
+  if (format) parts.push({ key: "format", text: format, held: false });
+  const expHeld = !isAuto(s.exposure_mode);
+  if (num(s.iso)) parts.push({ key: "iso", text: "ISO " + Math.round(s.iso), held: expHeld, warn: statsWarning(d) });
+  if (num(s.shutter)) parts.push({ key: "shutter", text: fmtShutter(s.shutter), held: expHeld });
+  if (!expHeld && num(s.ev_bias) && Math.abs(s.ev_bias) >= 0.05) parts.push({ key: "ev", text: fmtEv(s.ev_bias), held: false });
+  const wb = fmtWb(s);
+  if (wb) parts.push({ key: "wb", text: wb, held: !isAuto(s.wb_mode) });
+  const focus = fmtFocus(s);
+  if (focus) parts.push({ key: "focus", text: focus, held: s.focus_mode !== "auto" });
   return parts;
 }
 
+// Before a state delta is applied: which parts the other side changed. Auto
+// values drift all the time (what auto exposure measured), so only a mode
+// change, a held value or a deliberate one (EV, format) flashes.
+function noteChanges(d, values) {
+  const t = performance.now();
+  const before = new Map(readoutParts(d).map(p => [p.key, p]));
+  const next = { ...d, state: { ...d.state, ...values } };
+  for (const p of readoutParts(next)) {
+    const old = before.get(p.key);
+    if (old && old.text === p.text && old.held === p.held) continue;
+    const ctl = PART_CONTROLS[p.key].filter(k => k in values && !same(values[k], d.state[k]));
+    if (!ctl.length) continue;
+    if (ctl.some(k => t - (d.sentAt[k] || -1e9) < ECHO_MS)) continue;
+    const modeChanged = old && old.held !== p.held;
+    if (!(modeChanged || p.held || p.key === "ev" || p.key === "format")) continue;
+    d.flash[p.key] = t + FLASH_MS;
+  }
+  clearTimeout(d.flashTimer);
+  d.flashTimer = setTimeout(() => {
+    if (d.card) updateReadout(d, d.card.readout);
+    if (d.shade) updateReadout(d, d.shade.readout);
+  }, FLASH_MS + 30);
+}
+
 function updateReadout(d, line) {
-  const parts = readoutParts(d);
+  const t = performance.now();
+  const parts = readoutParts(d).map(p => ({ ...p, chg: (d.flash[p.key] || 0) > t }));
   const key = JSON.stringify(parts);
   if (line._key === key) return;
   line._key = key;
   const out = [];
-  parts.forEach(([text, manual], i) => {
-    if (i) out.push(el("span", { class: "sep" }, " · "));
-    out.push(manual ? el("span", { class: "m" }, text) : text);
+  parts.forEach((p, i) => {
+    // The separator ends a part, so a wrapped line starts with a value.
+    const part = el("span", { class: "part" },
+      p.chg || p.held ? el("span", { class: p.chg ? "chg" : "m" }, p.text) : p.text);
+    if (p.warn === "clip") part.append(" ", el("span", { class: "w-clip", title: "Over 2% of the picture is clipped" }, "CLIP"));
+    if (p.warn === "dark") part.append(" ", el("span", { class: "w-dark", title: "The brightest 1% of the picture is below a third" }, "DARK"));
+    if (i < parts.length - 1) part.append(el("span", { class: "sep" }, "\u2502"));
+    out.push(part);
   });
+  line.title = "Held values (manual or locked) are yellow; cyan: just changed on the phone";
   line.replaceChildren(...out);
 }
 
@@ -524,19 +746,22 @@ function updateReadout(d, line) {
 // logs when the loop reaches a limit, not when it leaves it.
 const ISO_LIMIT_MS = 20000;
 
-// Exposure warning for the badge: auto ISO at its limit (the phone's warn
-// log, while exposure is auto), else the image statistics (the phones' rule:
-// over 2% clipped, or the 99th percentile below a third).
+// Exposure warning for the badge on the picture: auto ISO at its limit (the
+// phone's warn log, while exposure is auto), else the image statistics.
 function exposureWarning(d) {
-  if (!d.online) return "";
-  const s = d.state || {};
-  const expAuto = s.exposure_mode === undefined || s.exposure_mode === "auto" || s.exposure_mode === "auto_iso";
+  if (!d.online) return { text: "", cls: "" };
   const lim = d.isoLimit;
-  if (lim && expAuto && performance.now() - lim.at < ISO_LIMIT_MS) return lim.text;
-  const l = d.imageStats && d.imageStats.luma;
-  if (l && l.clipped > 0.02) return "CLIPPING";
-  if (l && typeof l.p99 === "number" && l.p99 < 0.33) return "TOO DARK";
-  return "";
+  if (lim && isAuto(d.state.exposure_mode) && performance.now() - lim.at < ISO_LIMIT_MS) return { text: lim.text, cls: "" };
+  const w = statsWarning(d);
+  if (w === "clip") return { text: "CLIPPING", cls: "clip" };
+  if (w === "dark") return { text: "TOO DARK", cls: "" };
+  return { text: "", cls: "" };
+}
+
+function showWarning(elem, d) {
+  const w = exposureWarning(d);
+  elem.textContent = w.text;
+  elem.className = "xwarn" + (w.cls ? " " + w.cls : "");
 }
 
 // A device log line: remember an auto ISO limit.
@@ -545,6 +770,40 @@ function noteIsoLimit(d, message) {
   if (!m) return;
   d.isoLimit = { text: "ISO LIMIT · " + m[1].toUpperCase(), at: performance.now() };
   setTimeout(() => { updateCard(d); updateShadeCard(d); }, ISO_LIMIT_MS + 50);
+}
+
+// Notes next to the camera name: an app to update (protocol 2 refuses the
+// shader, protocol 1 and older lack production and statistics), and mains
+// that differ from the production (a phone may set its own: the last write
+// wins until the production changes).
+function cameraTags(d) {
+  const out = [];
+  if (refusesShading(d)) out.push(el("span", { class: "tag update", title: OUTDATED_APP }, "Update app"));
+  else if ((d.protocol || 0) < SHADE_PROTOCOL) out.push(el("span", { class: "tag old", title: OLDER_APP }, "Older app"));
+  const m = mainsNote(d);
+  if (m) out.push(el("span", { class: "tag mains", title: m.long }, m.short));
+  return out;
+}
+
+// This camera's mains when it differs from the production, or null.
+function mainsNote(d) {
+  const hz = d.state.mains_hz;
+  if (typeof hz !== "number" || !production || Number(production.mains_hz) === hz) return null;
+  const own = hz === 0 ? "Mains off" : "Mains " + hz + " Hz";
+  const prod = Number(production.mains_hz) === 0 ? "off" : production.mains_hz + " Hz";
+  const why = (d.protocol || 0) < SHADE_PROTOCOL
+    ? "This older app takes no production settings."
+    : "Set for this camera (on the phone or here); the production applies again when it changes" +
+      (isLiveState(d) ? ", or when this camera's stream stops" : "") + ".";
+  return { short: own, long: own + " on this camera, the production says " + prod + ". " + why };
+}
+
+function setTags(holder, d) {
+  const tags = cameraTags(d);
+  const key = tags.map(t => t.className + t.textContent + t.title).join("|");
+  if (holder._key === key) return;
+  holder._key = key;
+  holder.replaceChildren(...tags);
 }
 
 // ---------------------------------------------------------------------------
@@ -572,14 +831,15 @@ function buildCard(d) {
       sendSet(d.id, { live: d.state.live !== true }, true);
     },
   }, "Go Live");
+  const tags = el("span", { class: "tags" });
   const card = el("div", { class: "card", onclick: () => select(d.id) },
     el("div", { class: "card-head" },
-      el("span", { class: "dot" }), el("span", { class: "name" }), el("span", { class: "model" })),
+      el("span", { class: "dot" }), el("span", { class: "name" }), tags, el("span", { class: "model" })),
     el("div", { class: "media" }, img, overlay, badge, xwarn),
     readout,
     el("div", { class: "stats" }),
     el("div", { class: "card-actions" }, tally, golive));
-  d.card = { root: card, img, overlay, badge, xwarn, readout, tally, golive };
+  d.card = { root: card, img, overlay, badge, xwarn, readout, tally, golive, tags };
   return card;
 }
 
@@ -606,9 +866,8 @@ function updateCard(d) {
   r.classList.toggle("tally-preview", d.tally === "preview");
   r.classList.toggle("tally-program", d.tally === "program");
   r.querySelector(".card-head .dot").className = "dot" + (d.online ? " on" : "");
-  const name = r.querySelector(".card-head .name");
-  name.textContent = d.info.name || d.id;
-  name.title = d.id;
+  setName(r.querySelector(".card-head .name"), d);
+  setTags(c.tags, d);
   r.querySelector(".card-head .model").textContent = d.info.model || "";
 
   updateMedia(d, c.img, c.overlay);
@@ -624,7 +883,7 @@ function updateCard(d) {
   }
 
   updateReadout(d, c.readout);
-  c.xwarn.textContent = exposureWarning(d);
+  showWarning(c.xwarn, d);
   r.querySelector(".stats").replaceChildren(...statusBits(d));
 
   for (const b of c.tally.children) b.classList.toggle("active", b.dataset.t === d.tally);
@@ -634,6 +893,13 @@ function updateCard(d) {
   c.golive.textContent = isLive ? "Stop" : "Go Live";
   c.golive.classList.toggle("is-live", isLive);
   c.golive.disabled = !d.online || (live && !isEnabled(d, live));
+}
+
+// The camera name, in its tally colour.
+function setName(name, d) {
+  name.textContent = d.info.name || d.id;
+  name.className = "name" + (d.tally === "program" ? " t-program" : d.tally === "preview" ? " t-preview" : "");
+  name.title = (d.tally === "program" ? "On air (program). " : d.tally === "preview" ? "Preview. " : "") + d.id;
 }
 
 function updateMedia(d, img, overlay) {
@@ -862,9 +1128,14 @@ function buildPanel() {
     const ia = GROUP_ORDER.indexOf(a), ib = GROUP_ORDER.indexOf(b);
     return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
   });
+  panel.groupNotes = [];
   for (const g of names) {
+    // A protocol 2 phone refuses these groups: one note for the group.
+    const shading = groups.get(g).some(c => SHADING_IDS.has(c.id));
+    const note = shading ? el("div", { class: "group-note" }) : null;
+    if (note) panel.groupNotes.push(note);
     body.append(el("div", { class: "group" }, el("h3", {}, prettyGroup(g)),
-      el("div", { class: "rows" }, groups.get(g).map(c => controlRow(d, c)))));
+      el("div", { class: "rows" }, note, groups.get(g).map(c => controlRow(d, c)))));
   }
 
   // Send pipeline latency of the phone.
@@ -907,10 +1178,13 @@ function buildPanel() {
   const forget = CONFIG.devicesUrl
     ? el("button", { class: "btn", onclick: () => forgetDevice(d), title: "Disconnect this camera and revoke its key" }, "Forget")
     : null;
+  panel.nameEl = el("span", { class: "name" });
+  panel.tags = el("span", { class: "tags" });
   p.replaceChildren(
     el("div", { class: "p-head" },
       el("span", { class: "dot" + (d.online ? " on" : "") }),
-      el("div", {}, el("div", { class: "name" }, info.name || d.id), el("div", { class: "sub" }, sub), keyLine),
+      el("div", { style: "min-width:0" },
+        el("div", { class: "p-name" }, panel.nameEl, panel.tags), el("div", { class: "sub" }, sub), keyLine),
       forget,
       el("button", { class: "btn close", onclick: closePanel, title: "Close (Esc)" }, "Close")),
     body);
@@ -926,6 +1200,7 @@ function commandWidget(d, c) {
   }));
   const btn = el("button", {
     class: "btn",
+    "data-cmd": c.name,
     onclick: () => {
       const args = {};
       inputs.forEach((inp, i) => {
@@ -938,7 +1213,8 @@ function commandWidget(d, c) {
 }
 
 function controlRow(d, c) {
-  const label = el("label", { title: c.id }, c.label || c.id);
+  const why = el("span", { class: "why" });
+  const label = el("label", { title: c.id }, el("span", { class: "lt" }, c.label || c.id), why);
   const ctl = el("div", { class: "ctl" });
   const row = el("div", { class: "row" }, label, ctl);
   let update;
@@ -953,14 +1229,27 @@ function controlRow(d, c) {
       update = v => { span.textContent = v === undefined ? "" : JSON.stringify(v); };
     }
   }
-  panel.updaters.set(c.id, (value, enabled) => {
+  panel.updaters.set(c.id, (value, reason) => {
+    const enabled = !reason;
     row.classList.toggle("disabled", !enabled);
-    row.title = enabled || !c.enabled_when ? "" :
-      "Writable when " + Object.entries(c.enabled_when)
-        .map(([k, v]) => k + " = " + (Array.isArray(v) ? v.join(" or ") : v)).join(", ");
+    // A camera-wide reason (offline, an app to update) is said once, above.
+    const info = enabled ? rowInfo(d, c) : null;
+    why.textContent = reason ? (reason.wide ? "" : reason.short) : info ? info.short : "";
+    why.classList.toggle("info", !reason);
+    row.title = reason ? reason.long : info ? info.long : "";
     update(value, enabled);
   });
   return row;
+}
+
+// A note on a control that can be set: mains that differ from the
+// production.
+function rowInfo(d, c) {
+  if (c.id !== "mains_hz") return null;
+  const m = mainsNote(d);
+  if (!m) return null;
+  const prod = Number(production.mains_hz) === 0 ? "off" : production.mains_hz + " Hz";
+  return { short: "Production " + prod, long: m.long };
 }
 
 function rangeControl(d, c, ctl) {
@@ -1042,9 +1331,13 @@ function enumControl(d, c, ctl) {
     }, String(o.label ?? o.value)));
     seg.append(...buttons);
     ctl.append(seg);
+    // A mode: held (manual or locked) in yellow, auto in blue.
+    const isMode = c.id in MODE_GROUP;
     return (value, enabled) => {
       buttons.forEach((b, i) => {
-        b.classList.toggle("active", same(opts[i].value, value));
+        const active = same(opts[i].value, value);
+        b.classList.toggle("active", active);
+        b.classList.toggle("held", active && isMode && opts[i].value !== "auto");
         b.disabled = !enabled;
       });
     };
@@ -1105,12 +1398,22 @@ function updatePanel() {
   if (!d) return;
   for (const c of d.controls) {
     const u = panel.updaters.get(c.id);
-    if (u) u(d.state[c.id], isEnabled(d, c));
+    if (u) u(d.state[c.id], disabledReason(d, c));
   }
   updateMedia(d, panel.media.img, panel.media.overlay);
   const note = document.getElementById("offline-note");
   if (note) note.textContent = d.online ? "" : "Camera offline. Showing the last known values.";
-  document.querySelectorAll("#panel .cmd button").forEach(b => { b.disabled = !d.online; });
+  for (const n of panel.groupNotes || []) {
+    n.textContent = d.online && refusesShading(d) ? "Update app: this version refuses exposure, colour and focus from the hub." : "";
+    n.title = n.textContent ? OUTDATED_APP : "";
+  }
+  document.querySelectorAll("#panel .cmd button").forEach(b => {
+    const r = d.online && refusesShading(d) && SHADING_IDS.has(b.dataset.cmd);
+    b.disabled = !d.online || r;
+    b.title = r ? OUTDATED_APP : "";
+  });
+  if (panel.tags) setTags(panel.tags, d);
+  if (panel.nameEl) setName(panel.nameEl, d);
   if (panel.msgButton) panel.msgButton.disabled = !d.online;
   const dot = document.querySelector("#panel .p-head .dot");
   if (dot) dot.className = "dot" + (d.online ? " on" : "");
@@ -1216,10 +1519,12 @@ function onMessage(m) {
     }
     case "device_state":
       if (!d) return;
+      noteChanges(d, m.values || {});
       Object.assign(d.state, m.values || {});
       updateCard(d);
       if (selected === d.id) updatePanel();
       updateShadeCard(d);
+      if ("mains_hz" in (m.values || {})) updateProductionBar();
       return;
     case "device_status":
       if (!d) return;
@@ -1241,6 +1546,7 @@ function onMessage(m) {
       if (!d) return;
       d.tally = m.state;
       updateCard(d);
+      if (selected === d.id) updatePanel();
       updateShadeCard(d);
       return;
     case "device_offline":
@@ -1287,6 +1593,9 @@ function onMessage(m) {
     case "production":
       production = m;
       if (shadeBar) shadeBar.sent = null;
+      // The cameras' mains notes compare with it.
+      for (const dev of devices.values()) updateCard(dev);
+      if (selected) updatePanel();
       updateShadeAll();
       return;
     case "error":
@@ -1311,7 +1620,6 @@ function onMessage(m) {
 // any time: the last write wins.
 // ---------------------------------------------------------------------------
 
-const SHADE_PROTOCOL = 2;
 let view = "cameras";
 let scopeMode = "waveform";  // or "histogram"
 let production = null;       // { mains_hz, shutter } from the hub
@@ -1364,9 +1672,8 @@ function hasColour(d) {
 function copyColour(src, targets) {
   const values = colourOf(src);
   if (!("wb_temperature" in values)) { shadeError(src, "no white balance temperature to copy"); return; }
-  targets = targets.filter(t => t.id !== src.id && hasColour(t)
-    && isEnabled(t, controlById(t, "wb_temperature"), { wb_mode: "manual" }));
-  if (!targets.length) { shadeError(src, "no other camera online with white balance"); return; }
+  targets = targets.filter(t => t.id !== src.id && takesColour(t));
+  if (!targets.length) { shadeError(src, "No other camera can take a colour now (offline, or an app to update)"); return; }
   for (const t of targets) sendSet(t.id, values, true);
 }
 
@@ -1450,25 +1757,28 @@ function drawStats(d) {
 
 // A slider for a range control (log when the descriptor says so), throttled
 // like the panel's: about 10 sets a second while dragging, one with an id on
-// release so a refusal shows up.
-function shadeSlider(label, desc, fmt, sendValue) {
+// release so a refusal shows up. While the user drags (and for a moment
+// after, until the phone answers) the slider is not moved by state events;
+// then it follows them again. A double click goes to `neutral`, if given.
+function shadeSlider(label, desc, fmt, sendValue, neutral) {
   const min = Number(desc.min ?? 0), max = Number(desc.max ?? 100);
   const step = desc.step ? Number(desc.step) : 0;
   const isLog = desc.scale === "log" && min > 0 && max > min;
   const POS = 1000;
-  const toPos = v => isLog ? Math.round(Math.log(v / min) / Math.log(max / min) * POS) : v;
+  const toPos = v => isLog ? Math.round(Math.log(Math.max(v, min) / min) / Math.log(max / min) * POS) : v;
   const fromPos = p => {
     let v = isLog ? min * Math.pow(max / min, p / POS) : Number(p);
     if (step > 0) v = min + Math.round((v - min) / step) * step;
     v = Math.min(max, Math.max(min, v));
     return Number(v.toFixed(step > 0 ? decimalsFor(step) : 3));
   };
-  const slider = el("input", { type: "range" });
+  const slider = el("input", { type: "range", "aria-label": label });
   if (isLog) { slider.min = 0; slider.max = POS; slider.step = 1; }
   else { slider.min = min; slider.max = max; slider.step = step > 0 ? step : "any"; }
   const val = el("span", { class: "sval" });
-  const row = el("div", { class: "srow" }, el("label", {}, label), slider, val);
-  let dragging = false, lastSent = 0, timer = null, queued = null;
+  const why = el("span", { class: "why" });
+  const row = el("div", { class: "srow" }, el("label", {}, label), el("div", { class: "cell" }, slider, why), val);
+  let dragging = false, lastSent = 0, timer = null, queued = null, settle = null, last = null;
   const flush = withId => {
     clearTimeout(timer); timer = null;
     if (queued === null) return;
@@ -1478,6 +1788,7 @@ function shadeSlider(label, desc, fmt, sendValue) {
   };
   slider.addEventListener("input", () => {
     dragging = true;
+    clearTimeout(settle);
     queued = fromPos(slider.value);
     val.textContent = fmt(queued);
     const wait = 100 - (performance.now() - lastSent);
@@ -1487,47 +1798,85 @@ function shadeSlider(label, desc, fmt, sendValue) {
   slider.addEventListener("change", () => {
     queued = fromPos(slider.value);
     flush(true);
-    setTimeout(() => { dragging = false; }, 600);
+    clearTimeout(settle);
+    // Then show what the phone did (it may clamp or snap).
+    settle = setTimeout(() => { dragging = false; if (last) api.update(...last); }, 600);
   });
-  return {
+  if (neutral !== undefined) {
+    slider.addEventListener("dblclick", () => {
+      if (slider.disabled) return;
+      sendValue(neutral, true);
+    });
+  }
+  const api = {
     row,
     dragging: () => dragging,
-    update(value, enabled) {
-      slider.disabled = !enabled;
-      row.classList.toggle("disabled", !enabled);
-      if (!dragging && typeof value === "number") {
+    update(value, reason, held) {
+      last = [value, reason, held];
+      slider.disabled = !!reason;
+      row.classList.toggle("disabled", !!reason);
+      row.title = reason ? reason.long : neutral !== undefined ? "Double click: " + fmt(neutral) : "";
+      why.textContent = reason && !reason.wide ? reason.short : "";
+      val.classList.toggle("held", !!held);
+      if (dragging) return;
+      if (typeof value === "number") {
         slider.value = toPos(value);
         val.textContent = fmt(value);
-      } else if (!dragging) {
+      } else {
         val.textContent = "";
       }
     },
   };
+  return api;
 }
 
-// The mode buttons of a control (auto / locked / manual) from its descriptor.
-function shadeModes(d, c, label) {
-  const opts = c.options || [];
-  const buttons = opts.map(o => el("button", {
-    type: "button",
-    onclick: () => sendSet(d.id, { [c.id]: o.value }, true),
-  }, String(o.label ?? o.value)));
-  const row = el("div", { class: "srow" }, el("label", { title: c.label || c.id }, label), el("div", { class: "seg" }, buttons), el("span"));
+// The mode of a group as the phones show it: A (auto) or M (held: manual,
+// or locked, which the camera may use instead). M sends manual where the
+// camera has it.
+function shadeModes(d, c, label, first) {
+  const opts = (c.options || []).map(o => o.value);
+  const hold = opts.includes("manual") ? "manual" : opts.includes("locked") ? "locked" : null;
+  const group = MODE_GROUP[c.id] || "this group";
+  const a = el("button", {
+    type: "button", title: "Auto " + group,
+    onclick: () => { if (!isAuto(d.state[c.id])) sendSet(d.id, { [c.id]: "auto" }, true); },
+  }, "A");
+  const m = el("button", {
+    type: "button", title: "Hold " + group + " (M: manual or locked)",
+    onclick: () => { if (isAuto(d.state[c.id]) && hold) sendSet(d.id, { [c.id]: hold }, true); },
+  }, "M");
+  const why = el("span", { class: "why" });
+  const word = el("span", { class: "sval mode" });
+  const row = el("div", { class: "srow" + (first ? " first" : "") },
+    el("label", { title: c.label || c.id }, label), el("div", { class: "cell" }, el("div", { class: "seg" }, a, m), why), word);
   return {
     row,
     update() {
-      const enabled = isEnabled(d, c);
-      row.classList.toggle("disabled", !enabled);
-      buttons.forEach((b, i) => {
-        b.disabled = !enabled;
-        b.classList.toggle("active", same(opts[i].value, d.state[c.id]));
-      });
+      const reason = disabledReason(d, c);
+      const v = d.state[c.id];
+      const held = v !== undefined && !isAuto(v);
+      row.classList.toggle("disabled", !!reason);
+      row.title = reason ? reason.long : "";
+      why.textContent = reason && !reason.wide ? reason.short : "";
+      a.disabled = !!reason || !opts.includes("auto");
+      m.disabled = !!reason || !hold;
+      a.classList.toggle("active", v !== undefined && !held);
+      m.classList.toggle("active", held);
+      m.classList.toggle("held", held);
+      word.textContent = v === undefined ? "" : v === "auto" ? "Auto" : v === "locked" ? "Locked" : v === "manual" ? "Manual" : String(v);
     },
   };
 }
 
 function fmtShutter(v) {
   return typeof v === "number" ? "1/" + v : "";
+}
+
+function fmtProductionShutter(p) {
+  if (!p) return "";
+  if (typeof p.shutter === "number") return "1/" + p.shutter;
+  if (shutterFree(p)) return "free";
+  return "1/" + (Number(p.mains_hz) === 60 ? 60 : 50) + " (mains)";
 }
 
 function buildShadeCard(d) {
@@ -1550,111 +1899,135 @@ function buildShadeCard(d) {
   const xwarn = el("span", { class: "xwarn" });
   const readout = el("div", { class: "readout" });
   const err = el("div", { class: "shade-err" });
-  const ctl = el("div", { class: "shade-ctl" });
+  const note = el("div", { class: "group-note" });
+  const ctl = el("div", { class: "shade-ctl" }, note);
   const updaters = [];
   const sliders = [];
-
-  // Exposure: mode, ISO (the "iris"), and the shutter, a production setting
-  // that is set per camera, in manual exposure, only when it is free.
-  const expMode = controlById(d, "exposure_mode");
-  if (expMode) {
-    const m = shadeModes(d, expMode, "Exposure");
-    ctl.append(m.row);
-    updaters.push(m.update);
-  }
-  const isoDesc = controlById(d, "iso");
-  if (isoDesc) {
-    const iso = shadeSlider("ISO", isoDesc, v => String(Math.round(v)), (v, withId) => {
-      const values = { iso: v };
-      if (d.state.exposure_mode !== "manual") values.exposure_mode = "manual";
-      sendSet(d.id, values, withId);
-    });
-    ctl.append(iso.row);
-    sliders.push(iso);
-    updaters.push(() => iso.update(d.state.iso, isEnabled(d, isoDesc, { exposure_mode: "manual" })));
-  }
-  const shutterDesc = controlById(d, "shutter");
-  const shutterText = el("span", { class: "sval" });
-  const shutterSel = el("select", {});
-  if (shutterDesc && shutterDesc.options) {
-    for (const o of shutterDesc.options) shutterSel.append(el("option", { value: JSON.stringify(o.value) }, String(o.label ?? o.value)));
-  }
-  shutterSel.addEventListener("change", () => {
-    sendSet(d.id, { shutter: JSON.parse(shutterSel.value) }, true);
-  });
-  const shutterRow = el("div", { class: "srow" }, el("label", {}, "Shutter"), el("div", {}, shutterSel), shutterText);
-  if (shutterDesc || "shutter" in d.state) ctl.append(shutterRow);
-  updaters.push(() => {
-    const editable = shutterFree(production) && shutterDesc && shutterDesc.options && hasShading(d);
-    shutterSel.style.display = editable ? "" : "none";
-    shutterSel.disabled = !(d.state.exposure_mode === "manual" && isEnabled(d, shutterDesc));
-    if (editable && document.activeElement !== shutterSel) {
-      const i = shutterDesc.options.findIndex(o => same(o.value, d.state.shutter));
-      if (i >= 0) shutterSel.selectedIndex = i;
-    }
-    shutterText.textContent = editable ? "" : fmtShutter(d.state.shutter);
-    shutterText.title = production ? "Production shutter: " + (typeof production.shutter === "number"
-      ? "1/" + production.shutter : production.shutter) + ", mains " + production.mains_hz + " Hz" : "";
-  });
-
-  // Colour: mode, temperature and tint (a set switches to manual).
-  const wbMode = controlById(d, "wb_mode");
-  if (wbMode) {
-    const m = shadeModes(d, wbMode, "Colour");
-    ctl.append(m.row);
-    updaters.push(m.update);
-  }
-  for (const [cid, label, fmt] of [
-    ["wb_temperature", "Temp", v => Math.round(v) + " K"],
-    ["wb_tint", "Tint", v => (v > 0 ? "+" : "") + Math.round(v)],
-  ]) {
+  // Slider rows: a set from the hub switches the group to manual with it
+  // (`hold`), as the phone's rocker does for colour and focus.
+  const addSlider = (cid, label, fmt, hold, held, neutral) => {
     const desc = controlById(d, cid);
-    if (!desc) continue;
+    if (!desc) return;
     const s = shadeSlider(label, desc, fmt, (v, withId) => {
       const values = { [cid]: v };
-      if (d.state.wb_mode !== "manual") values.wb_mode = "manual";
+      if (hold) for (const [k, mv] of Object.entries(hold)) if (d.state[k] !== mv) values[k] = mv;
       sendSet(d.id, values, withId);
-    });
+    }, neutral);
     ctl.append(s.row);
     sliders.push(s);
-    updaters.push(() => s.update(d.state[cid], isEnabled(d, desc, { wb_mode: "manual" })));
+    updaters.push(() => s.update(d.state[cid], disabledReason(d, desc, hold), held()));
+  };
+  const modeRow = (cid, label, first) => {
+    const c = controlById(d, cid);
+    if (!c) return;
+    const m = shadeModes(d, c, label, first);
+    ctl.append(m.row);
+    updaters.push(m.update);
+  };
+
+  // Exposure: mode, ISO (the "iris"), compensation in auto, and the
+  // shutter: a production setting, set per camera (in manual) only when
+  // the camera says it is free.
+  const expHeld = () => !isAuto(d.state.exposure_mode);
+  modeRow("exposure_mode", "Exposure", false);
+  addSlider("iso", "ISO", v => String(Math.round(v)), { exposure_mode: "manual" }, expHeld);
+  addSlider("ev_bias", "EV", v => fmtEv(v).replace(" EV", ""), null, () => false, 0);
+  const shutterDesc = controlById(d, "shutter");
+  if (shutterDesc || "shutter" in d.state) {
+    const text = el("span", { class: "sval" });
+    const fixed = el("span", { class: "fixed" });
+    const why = el("span", { class: "why" });
+    const sel = el("select", { "aria-label": "Shutter" });
+    for (const o of (shutterDesc && shutterDesc.options) || [])
+      sel.append(el("option", { value: JSON.stringify(o.value) }, String(o.label ?? o.value)));
+    sel.addEventListener("change", () => {
+      const values = { shutter: JSON.parse(sel.value) };
+      if (d.state.exposure_mode !== "manual") values.exposure_mode = "manual";
+      sendSet(d.id, values, true);
+      sel.blur();
+    });
+    const row = el("div", { class: "srow" }, el("label", {}, "Shutter"), el("div", { class: "cell" }, sel, fixed, why), text);
+    ctl.append(row);
+    updaters.push(() => {
+      const reason = disabledReason(d, shutterDesc, { exposure_mode: "manual" });
+      const production_ = !shutterDesc || !shutterDesc.options || (reason && reason.short === "Production");
+      const prod = production ? "Production shutter " + fmtProductionShutter(production) +
+        ", mains " + (Number(production.mains_hz) === 0 ? "off" : production.mains_hz + " Hz") : "";
+      // A production shutter is shown, not offered: there is nothing to pick.
+      sel.style.display = production_ ? "none" : "";
+      fixed.style.display = production_ ? "" : "none";
+      fixed.textContent = production_ ? "Production" + (production ? " · " + fmtProductionShutter(production) : "") : "";
+      sel.disabled = !!reason;
+      why.textContent = reason && !reason.wide && !production_ ? reason.short : "";
+      row.classList.toggle("disabled", !!reason && !production_);
+      row.title = [reason ? reason.long : "", prod].filter(Boolean).join("\n");
+      if (!production_ && document.activeElement !== sel) {
+        const i = shutterDesc.options.findIndex(o => same(o.value, d.state.shutter));
+        sel.selectedIndex = i;
+      }
+      text.textContent = fmtShutter(d.state.shutter);
+      text.classList.toggle("held", expHeld());
+    });
   }
 
-  // Copy and match colour.
+  // Colour: mode, temperature and tint.
+  const wbHeld = () => !isAuto(d.state.wb_mode);
+  modeRow("wb_mode", "Colour", true);
+  addSlider("wb_temperature", "Temp", v => Math.round(v) + " K", { wb_mode: "manual" }, wbHeld);
+  addSlider("wb_tint", "Tint", fmtTint, { wb_mode: "manual" }, wbHeld, 0);
+
+  // Focus: mode and position (0 near, 1 far).
+  const focusHeld = () => d.state.focus_mode !== undefined && !isAuto(d.state.focus_mode);
+  modeRow("focus_mode", "Focus", true);
+  addSlider("focus_position", "Position", v => v.toFixed(2), { focus_mode: "manual" }, focusHeld);
+
+  // Copy and match colour, white balance once.
   const copyAll = el("button", {
     class: "btn", type: "button",
-    title: "Set this camera's white balance on every other camera",
+    title: "Set this camera's white balance (temperature and tint) on every other camera",
     onclick: () => copyColour(d, order.map(id => devices.get(id)).filter(Boolean)),
   }, "Copy colour to all");
   const match = el("select", {
-    title: "Give this camera another camera's white balance",
+    "aria-label": "Match colour",
+    title: "Give this camera another camera's white balance (temperature and tint)",
     onchange: () => {
       const t = devices.get(match.value);
       match.value = "";
+      match.blur();
       if (t) copyColour(t, [d]);
     },
   });
-  const actions = el("div", { class: "shade-actions" }, copyAll, match);
+  const hasOnce = d.commands.some(c => c.name === "wb_one_shot");
+  const once = hasOnce ? el("button", {
+    class: "btn", type: "button",
+    title: "Measure the white balance once, then hold it",
+    onclick: () => sendCommand(d.id, "wb_one_shot"),
+  }, "WB once") : null;
+  const actions = el("div", { class: "shade-actions" }, copyAll, match, once);
   if (!hasColour(d)) actions.style.display = "none";
 
   const name = el("span", { class: "name" });
+  const tags = el("span", { class: "tags" });
   const root = el("div", { class: "shade-card" },
-    el("div", { class: "card-head" }, el("span", { class: "dot" }), name, el("span", { class: "model" })),
+    el("div", { class: "card-head" }, el("span", { class: "dot" }), name, tags, el("span", { class: "model" })),
     el("div", { class: "media" }, img, overlay, badge, xwarn),
     readout, canvas, meter, ctl, actions, err);
   d.shade = {
-    root, img, overlay, badge, xwarn, readout, canvas, meter, err, updaters, match, copyAll, name,
+    root, img, overlay, badge, xwarn, readout, canvas, meter, err, updaters, match, copyAll, once, name, tags, note,
     errTimer: null, layout: shadeLayout(d), rebuild: false,
     dragging: () => sliders.some(s => s.dragging()),
   };
   return root;
 }
 
-// What a shading card is built from: the descriptors it shows and the
-// protocol. A hello that changes none of it updates the card in place.
-const SHADE_CONTROLS = ["exposure_mode", "iso", "shutter", "wb_mode", "wb_temperature", "wb_tint"];
+// What a shading card is built from: the descriptors it shows, the
+// commands and the protocol. A hello that changes none of it updates the
+// card in place.
+const SHADE_CONTROLS = ["exposure_mode", "iso", "ev_bias", "shutter", "wb_mode", "wb_temperature", "wb_tint",
+  "focus_mode", "focus_position"];
 function shadeLayout(d) {
-  return JSON.stringify([d.protocol || 0, SHADE_CONTROLS.map(id => controlById(d, id) || null)]);
+  return JSON.stringify([d.protocol || 0, SHADE_CONTROLS.map(id => controlById(d, id) || null),
+    d.commands.some(c => c.name === "wb_one_shot")]);
 }
 
 // Build a card again in its place, keeping a shown error.
@@ -1669,11 +2042,15 @@ function rebuildShadeCard(d) {
   return root;
 }
 
-// The exposure warning badges, from a new log line or statistics.
+// The exposure warnings, from a new log line or statistics.
 function updateWarnings(d) {
-  const text = exposureWarning(d);
-  if (d.card) d.card.xwarn.textContent = text;
-  if (d.shade) d.shade.xwarn.textContent = text;
+  if (d.card) { showWarning(d.card.xwarn, d); updateReadout(d, d.card.readout); }
+  if (d.shade) { showWarning(d.shade.xwarn, d); updateReadout(d, d.shade.readout); }
+}
+
+// Can `t` take a colour from this page now?
+function takesColour(t) {
+  return hasColour(t) && isEnabled(t, controlById(t, "wb_temperature"), { wb_mode: "manual" });
 }
 
 function updateShadeCard(d) {
@@ -1688,10 +2065,9 @@ function updateShadeCard(d) {
   r.classList.toggle("tally-preview", d.tally === "preview");
   r.classList.toggle("tally-program", d.tally === "program");
   r.querySelector(".card-head .dot").className = "dot" + (d.online ? " on" : "");
-  sh.name.textContent = d.info.name || d.id;
-  sh.name.title = d.id;
-  r.querySelector(".card-head .model").textContent =
-    (d.tally !== "off" ? d.tally.toUpperCase() + " · " : "") + (d.info.model || "");
+  setName(sh.name, d);
+  setTags(sh.tags, d);
+  r.querySelector(".card-head .model").textContent = d.info.model || "";
   updateMedia(d, sh.img, sh.overlay);
   const st = d.status && d.status.stream;
   if (d.online && st && st.state && st.state !== "idle") {
@@ -1704,18 +2080,33 @@ function updateShadeCard(d) {
     sh.badge.style.display = "none";
   }
   updateReadout(d, sh.readout);
-  sh.xwarn.textContent = exposureWarning(d);
+  showWarning(sh.xwarn, d);
+  // A camera-wide reason, once above the controls.
+  sh.note.textContent = d.online && refusesShading(d) ? "Update app: this version refuses exposure, colour and focus from the hub." : "";
+  sh.note.title = sh.note.textContent ? OUTDATED_APP : "";
   for (const u of sh.updaters) u();
-  // Match targets: the other cameras with white balance.
+  // Match sources: the other cameras with white balance (online ones only:
+  // an offline camera's values may be stale).
   const others = order.map(id => devices.get(id)).filter(t => t && t.id !== d.id && hasColour(t));
-  const key = others.map(t => t.id + ":" + (t.info.name || "")).join("|");
+  const key = others.map(t => t.id + ":" + (t.info.name || "") + ":" + t.online).join("|");
   if (sh.match._key !== key) {
     sh.match._key = key;
-    sh.match.replaceChildren(el("option", { value: "" }, "Match to camera..."),
-      ...others.map(t => el("option", { value: t.id }, t.info.name || t.id)));
+    sh.match.replaceChildren(el("option", { value: "" }, "Match to..."),
+      ...others.map(t => el("option", { value: t.id, disabled: !t.online }, (t.info.name || t.id) + (t.online ? "" : " (offline)"))));
   }
-  sh.match.disabled = !d.online || !others.length;
-  sh.copyAll.disabled = !d.online || !others.length;
+  const self = takesColour(d);
+  const targets = others.filter(takesColour);
+  sh.match.disabled = !self || !others.some(t => t.online);
+  sh.match.title = refusesShading(d) ? OUTDATED_APP : "Give this camera another camera's white balance (temperature and tint)";
+  sh.copyAll.disabled = !d.online || !targets.length;
+  sh.copyAll.title = !targets.length && others.length
+    ? "No other camera can take a colour now (offline, or an app to update)"
+    : "Set this camera's white balance (temperature and tint) on every other camera";
+  if (sh.once) {
+    const r1 = d.online && refusesShading(d);
+    sh.once.disabled = !d.online || r1;
+    sh.once.title = r1 ? OUTDATED_APP : "Measure the white balance once, then hold it";
+  }
   drawStats(d);
 }
 
@@ -1750,8 +2141,9 @@ function buildShadeBar() {
     type: "button", "data-m": m,
     onclick: () => { scopeMode = m; storageSet("tallycamScope", m); updateShadeAll(); },
   }, m === "waveform" ? "Waveform" : "Histogram")));
-  const mains = el("select", {}, [[50, "50 Hz"], [60, "60 Hz"], [0, "None"]].map(([v, l]) => el("option", { value: v }, l)));
-  const shutter = el("select", {});
+  const mains = el("select", { "aria-label": "Production mains" },
+    [[50, "50 Hz"], [60, "60 Hz"], [0, "Off"]].map(([v, l]) => el("option", { value: v }, l)));
+  const shutter = el("select", { "aria-label": "Production shutter" });
   // Sent, then the selects show it until the hub's `production` event (or
   // an error) answers; a second change meanwhile builds on the first.
   const sendProduction = ev => {
@@ -1766,10 +2158,13 @@ function buildShadeBar() {
   shutter.addEventListener("change", sendProduction);
   const note = el("span", { class: "note" });
   const bar = el("div", { class: "shade-bar" },
-    el("label", {}, "Scope", scope),
+    el("label", { title: "Waveform or histogram on every camera (or click a scope)" }, "Scope", scope),
     el("span", { class: "spacer" }),
-    el("label", { title: "Mains frequency of the lights: the shutter avoids their flicker. None: the shutter is free" }, "Mains", mains),
-    el("label", { title: "Production shutter for every camera. Free (or mains with no mains light): set per camera in manual exposure" }, "Shutter", shutter),
+    el("span", { class: "title", title: "The production's settings, sent to every camera (protocol 2 and up)" }, "Production"),
+    el("label", { title: "Mains frequency of the lights: the shutter avoids their flicker. Off: no mains-lit light, the shutter is free.\n" +
+      "A camera may set its own mains (on the phone or in its panel) until the production changes again." }, "Mains", mains),
+    el("label", { title: "Production shutter for every camera. Mains: one mains period (1/50 at 50 Hz). " +
+      "Free (or mains off): set per camera in manual exposure" }, "Shutter", shutter),
     note);
   shadeBar = { root: bar, mains, shutter, note, scope, timer: null, notice: "", noticeUntil: 0, sent: null };
   return bar;
@@ -1780,9 +2175,12 @@ function updateProductionBar() {
   const b = shadeBar;
   for (const btn of b.scope.children) btn.classList.toggle("active", btn.dataset.m === scopeMode);
   const p = b.sent || production || { mains_hz: 50, shutter: "mains" };
-  const choices = SHUTTER_CHOICES.slice();
+  // "Mains" says what it gives at the mains chosen.
+  const mainsHz = Number(p.mains_hz);
+  const choices = SHUTTER_CHOICES.map(([v, l]) =>
+    [v, v === "mains" ? "Mains · " + (mainsHz === 0 ? "free" : "1/" + (mainsHz === 60 ? 60 : 50)) : l]);
   if (typeof p.shutter === "number" && !choices.some(([v]) => v === p.shutter)) choices.push([p.shutter, "1/" + p.shutter]);
-  const key = choices.map(([v]) => v).join(",");
+  const key = choices.map(([v, l]) => v + "=" + l).join(",");
   if (b.shutter._key !== key) {
     b.shutter._key = key;
     b.shutter.replaceChildren(...choices.map(([v, l]) => el("option", { value: v }, l)));
@@ -1792,8 +2190,13 @@ function updateProductionBar() {
   const open = !!(ws && ws.readyState === WebSocket.OPEN);
   b.mains.disabled = !open;
   b.shutter.disabled = !open;
-  if (performance.now() < b.noticeUntil) b.note.textContent = b.notice;
-  else b.note.textContent = anyLive() ? "Live cameras apply this when their stream stops." : "";
+  if (performance.now() < b.noticeUntil) { b.note.textContent = b.notice; b.note.title = ""; return; }
+  const own = [...devices.values()].filter(d => d.online && mainsNote(d));
+  const notes = [];
+  if (anyLive()) notes.push("Live cameras apply a change when their stream stops.");
+  if (own.length) notes.push(own.length === 1 ? "1 camera has its own mains." : own.length + " cameras have their own mains.");
+  b.note.textContent = notes.join(" ");
+  b.note.title = own.map(d => (d.info.name || d.id) + ": " + mainsNote(d).short).join("\n");
 }
 
 function renderShade() {
@@ -1844,6 +2247,7 @@ let backoff = 500;
 function setConn(state, text) {
   document.getElementById("conn-dot").className = "dot" + (state === "on" ? " on" : state === "bad" ? " bad" : "");
   document.getElementById("conn-text").textContent = text;
+  document.getElementById("conn-dot").parentElement.title = text;
 }
 
 function connect() {

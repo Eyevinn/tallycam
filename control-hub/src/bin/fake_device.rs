@@ -1,7 +1,7 @@
 //! Fake LCP v0 phone for testing the control hub without an iPhone.
 //!
 //! Usage: fake_device [--url ws://127.0.0.1:8090/lcp/v0/device] [--key PATH | --legacy-id ID]
-//! [--name NAME] [--protocol 1|2]
+//! [--name NAME] [--protocol 1|2|3] [--operator SECS]
 //!
 //! Proves a device key like the app: the hello carries the public key, the
 //! hub's `challenge` is answered with a signed `auth`, and the device id is
@@ -13,11 +13,24 @@
 //! second and generated JPEG previews while the hub asks for them. Reconnects
 //! after a disconnect.
 //!
-//! With protocol 2 (the default for a keyed device) it also acts like a
-//! phone with shading (docs/SHADING.md): it applies the hub's `production`
-//! (when the stream stops, if live) and sends `image_stats` from its test
-//! picture while the hub asks for them. `--protocol 1` acts as an app before
-//! that.
+//! With protocol 2 and up (3 is the default for a keyed device) it also acts
+//! like a phone with shading (docs/SHADING.md): it applies the hub's
+//! `production` (when the stream stops, if live) and sends `image_stats` from
+//! its test picture while the hub asks for them. `--protocol 2` acts as the
+//! 0.2.0 apps, which refuse exposure, colour and focus from the hub (they
+//! wait for an `own` that a protocol 3 hub never sends); `--protocol 1` acts
+//! as an app before shading.
+//!
+//! Mains works as on the phones: the production's `mains_hz` applies, a
+//! `set` of `mains_hz` (from the hub or the operator) overrides it for this
+//! camera until the production changes again, and `state.mains_hz` is the
+//! one in use. With `--readonly-shutter` the shutter is `readonly` unless it
+//! is free, as on the phones (the e2e tests set it freely). Resolution,
+//! frame rate, audio codec and mains are `locked_while_live`.
+//!
+//! `--operator SECS` plays a camera operator: every SECS seconds it changes
+//! exposure, colour, focus or mains on the "phone" (a `state` delta, as when
+//! the operator turns a rocker), so the hub page can be checked to follow.
 
 use std::f64::consts::PI;
 use std::io::Cursor;
@@ -92,6 +105,10 @@ struct Args {
     name: String,
     /// `hello.protocol` of a keyed device (a legacy one always sends 0).
     protocol: u32,
+    /// Seconds between simulated operator changes, if any.
+    operator: Option<f64>,
+    /// The shutter is `readonly` unless free, as on the phones.
+    readonly_shutter: bool,
 }
 
 fn parse_args() -> Args {
@@ -101,6 +118,8 @@ fn parse_args() -> Args {
         legacy_id: None,
         name: "Fake iPhone".into(),
         protocol: PROTOCOL_VERSION,
+        operator: None,
+        readonly_shutter: false,
     };
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
@@ -119,15 +138,28 @@ fn parse_args() -> Args {
                     _ => die(&format!("--protocol must be 1 to {PROTOCOL_VERSION}")),
                 }
             }
+            "--operator" => {
+                a.operator = match val().parse::<f64>() {
+                    Ok(s) if s >= 0.5 => Some(s),
+                    _ => die("--operator needs seconds, 0.5 or more"),
+                }
+            }
+            "--readonly-shutter" => a.readonly_shutter = true,
             "--help" | "-h" => {
                 println!(
                     "fake_device [--url URL] [--key PATH | --legacy-id ID] [--name NAME] [--protocol N]\n\
+                     \x20           [--operator SECS] [--readonly-shutter]\n\
                      URL defaults to ws://127.0.0.1:8090{DEVICE_PATH} (controllers use {CONTROL_PATH}).\n\
                      --key PATH       device key file (hex P-256 secret), created when missing;\n\
                      \x20                default: a new key, and so a new device, on every run.\n\
                      --legacy-id ID   no device key, this id (an app before device keys).\n\
                      --protocol N     LCP version in hello, 1 to {PROTOCOL_VERSION} (default\n\
-                     \x20                {PROTOCOL_VERSION}); 1 has no production or image stats."
+                     \x20                {PROTOCOL_VERSION}); 1 has no production or image stats, 2 (the\n\
+                     \x20                0.2.0 apps) refuses exposure, colour and focus from the hub.\n\
+                     --operator SECS  every SECS seconds the \"operator\" changes exposure,\n\
+                     \x20                colour, focus or mains on the phone.\n\
+                     --readonly-shutter  the shutter is read-only unless it is free, as on\n\
+                     \x20                the phones (off by default: the e2e tests set it)."
                 );
                 std::process::exit(0);
             }
@@ -200,6 +232,30 @@ fn when(c: ControlDescriptor, key: &str, value: &str) -> ControlDescriptor {
     }
 }
 
+/// Refused while the stream is live (`locked_while_live`, PROTOCOL.md).
+fn live_locked(mut c: ControlDescriptor) -> ControlDescriptor {
+    c.extra.insert("locked_while_live".into(), json!(true));
+    c
+}
+
+fn is_live_locked(c: &ControlDescriptor) -> bool {
+    c.extra.get("locked_while_live") == Some(&json!(true))
+}
+
+/// The controls a protocol 2 phone (0.2.0) refuses from a hub that does not
+/// own their group, which a protocol 3 hub never does.
+const SHADING_CONTROLS: [&str; 9] = [
+    "exposure_mode",
+    "iso",
+    "shutter",
+    "ev_bias",
+    "wb_mode",
+    "wb_temperature",
+    "wb_tint",
+    "focus_mode",
+    "focus_position",
+];
+
 fn log_scale(c: ControlDescriptor) -> ControlDescriptor {
     ControlDescriptor {
         scale: Some(Scale::Log),
@@ -246,7 +302,9 @@ fn mode_options() -> Vec<(Value, &'static str)> {
     ]
 }
 
-fn controls_for(lens: &str) -> Vec<ControlDescriptor> {
+/// The descriptors for `lens`; the shutter is `readonly` unless it is free,
+/// as on the phones.
+fn controls_for(lens: &str, shutter_free: bool) -> Vec<ControlDescriptor> {
     use ControlKind::*;
     let caps = lens_caps(lens);
     let shutter_labels: Vec<(Value, String)> = SHUTTERS
@@ -263,19 +321,27 @@ fn controls_for(lens: &str) -> Vec<ControlDescriptor> {
             100.0,
             "kbps",
         ),
-        options(
-            control("frame_rate", "Frame rate", "stream", Enum),
-            &[
-                (json!(25), "25"),
-                (json!(30), "30"),
-                (json!(50), "50"),
-                (json!(60), "60"),
-            ],
-        ),
-        options(
+        live_locked(options(
             control("audio_codec", "Audio codec", "stream", Enum),
             &[(json!("opus"), "Opus"), (json!("aac"), "AAC")],
-        ),
+        )),
+        live_locked(options(
+            control("resolution", "Resolution", "image", Enum),
+            &[
+                (json!("720p"), "720p"),
+                (json!("1080p"), "1080p"),
+                (json!("2160p"), "4K"),
+            ],
+        )),
+        live_locked(options(
+            control("frame_rate", "Frame rate", "image", Enum),
+            &[
+                (json!(25), "25 fps"),
+                (json!(30), "30 fps"),
+                (json!(50), "50 fps"),
+                (json!(60), "60 fps"),
+            ],
+        )),
         options(
             control("lens", "Lens", "lens", Enum),
             &[
@@ -315,20 +381,23 @@ fn controls_for(lens: &str) -> Vec<ControlDescriptor> {
             "exposure_mode",
             "manual",
         )),
-        when(
-            options(
-                control("shutter", "Shutter", "exposure", Enum),
-                &shutter_labels
-                    .iter()
-                    .map(|(v, l)| (v.clone(), l.as_str()))
-                    .collect::<Vec<_>>(),
-            ),
-            "exposure_mode",
-            "manual",
-        ),
+        ControlDescriptor {
+            readonly: !shutter_free,
+            ..when(
+                options(
+                    control("shutter", "Shutter", "exposure", Enum),
+                    &shutter_labels
+                        .iter()
+                        .map(|(v, l)| (v.clone(), l.as_str()))
+                        .collect::<Vec<_>>(),
+                ),
+                "exposure_mode",
+                "manual",
+            )
+        },
         when(
             range(
-                control("ev_bias", "EV bias", "exposure", Range),
+                control("ev_bias", "Exposure compensation", "exposure", Range),
                 -3.0,
                 3.0,
                 0.1,
@@ -337,6 +406,14 @@ fn controls_for(lens: &str) -> Vec<ControlDescriptor> {
             "exposure_mode",
             "auto",
         ),
+        live_locked(options(
+            control("mains_hz", "Mains frequency", "exposure", Enum),
+            &[
+                (json!(50), "50 Hz"),
+                (json!(60), "60 Hz"),
+                (json!(0), "Off"),
+            ],
+        )),
         options(
             control("wb_mode", "White balance", "white_balance", Enum),
             &mode_options(),
@@ -372,7 +449,7 @@ fn controls_for(lens: &str) -> Vec<ControlDescriptor> {
                 control("focus_position", "Focus position", "focus", Range),
                 0.0,
                 1.0,
-                0.001,
+                0.01,
                 "",
             ),
             "focus_mode",
@@ -380,7 +457,7 @@ fn controls_for(lens: &str) -> Vec<ControlDescriptor> {
         ),
     ];
     if caps.torch {
-        v.insert(6, control("torch", "Torch", "lens", Bool));
+        v.insert(7, control("torch", "Torch", "lens", Bool));
     }
     v
 }
@@ -429,9 +506,20 @@ struct Camera {
     production: Option<Production>,
     /// `image_stats` per second while the hub asks for them.
     stats: Option<f64>,
-    /// The production shutter in use (1/x s), `None` without a production
-    /// or when the shutter is free. A new production waits until the stream stops.
+    /// The production shutter in use (1/x s), `None` when the shutter is
+    /// free. A new production waits until the stream stops.
     applied_shutter: Option<i64>,
+    /// The phone's own mains setting (its Settings), used without a production.
+    local_mains: u32,
+    /// A `set` of `mains_hz` (hub or operator): wins over the production
+    /// until the production changes again.
+    mains_override: Option<u32>,
+    /// The mains in use (`state.mains_hz`); held while live.
+    applied_mains: u32,
+    /// Simulated operator changes: the next step and when.
+    operator: Option<(f64, usize, Instant)>,
+    /// `--readonly-shutter`.
+    readonly_shutter: bool,
 }
 
 /// The test picture's parameters at one moment, shared by the preview and
@@ -484,8 +572,10 @@ impl Camera {
             "live": false,
             "stream_url": "srt://192.0.2.10:9000?streamid=cam1&latency=500",
             "bitrate_kbps": 6000,
+            "resolution": "1080p",
             "frame_rate": 30,
             "audio_codec": "opus",
+            "mains_hz": 50,
             "lens": "wide",
             "zoom": 1.0,
             "torch": false,
@@ -511,7 +601,7 @@ impl Camera {
                 app_version: "0.1.0-fake".into(),
                 extra: Map::new(),
             },
-            controls: controls_for("wide"),
+            controls: controls_for("wide", !args.readonly_shutter),
             state: state.as_object().cloned().unwrap_or_default(),
             tally: TallyState::Off,
             preview: None,
@@ -528,7 +618,14 @@ impl Camera {
             },
             production: None,
             stats: None,
-            applied_shutter: None,
+            applied_shutter: Some(50),
+            local_mains: 50,
+            mains_override: None,
+            applied_mains: 50,
+            readonly_shutter: args.readonly_shutter,
+            operator: args
+                .operator
+                .map(|secs| (secs, 0, Instant::now() + Duration::from_secs_f64(secs))),
         }
     }
 
@@ -591,6 +688,26 @@ impl Camera {
                 .unwrap_or_default();
             return Some(format!("{key} is only writable when {cond}"));
         }
+        if is_live_locked(&desc)
+            && self.is_live()
+            && !self.state.get(key).is_some_and(|v| json_eq(v, value))
+        {
+            return Some(format!(
+                "{key}: not while live, stop the stream to change it"
+            ));
+        }
+        if key == "mains_hz" {
+            // As on the phones: wins over the production until it changes.
+            return match value.as_u64().filter(|hz| [0, 50, 60].contains(hz)) {
+                Some(hz) => {
+                    self.mains_override = Some(hz as u32);
+                    self.local_mains = hz as u32;
+                    self.state.insert(key.into(), json!(hz));
+                    None
+                }
+                None => Some("mains_hz: expected 50, 60 or 0 (off)".into()),
+            };
+        }
         match desc.kind {
             ControlKind::Range => {
                 let Some(mut x) = value.as_f64() else {
@@ -649,9 +766,42 @@ impl Camera {
         }
     }
 
-    /// Apply a `set`. Returns the messages to send back.
-    fn apply_set(&mut self, id: Option<Value>, values: Values) -> Vec<DeviceMessage> {
+    /// The refusal of a protocol 2 phone (0.2.0) for a shading control or
+    /// command from the hub: it never owns the group under protocol 3.
+    fn refuses(&self, key: &str) -> Option<String> {
+        if self.protocol != 2 {
+            return None;
+        }
+        let group = match key {
+            "focus_at" => "focus",
+            "wb_one_shot" => "white balance",
+            k if !SHADING_CONTROLS.contains(&k) => return None,
+            k if k.starts_with("wb_") => "white balance",
+            k if k.starts_with("focus_") => "focus",
+            _ => "exposure",
+        };
+        Some(format!("{key}: {group} is not owned by this server"))
+    }
+
+    /// Apply a `set` from the hub (`from_hub`) or the operator. Returns the
+    /// messages to send back.
+    fn apply_set(
+        &mut self,
+        id: Option<Value>,
+        values: Values,
+        from_hub: bool,
+    ) -> Vec<DeviceMessage> {
         let mut errors = Vec::new();
+        let values: Values = values
+            .into_iter()
+            .filter(|(k, _)| match self.refuses(k).filter(|_| from_hub) {
+                Some(why) => {
+                    errors.push(why);
+                    false
+                }
+                None => true,
+            })
+            .collect();
         let old_lens = self.str_of("lens").to_string();
         // Controls without a condition first, so `{"exposure_mode":"manual",
         // "iso":400}` in one set works.
@@ -671,7 +821,7 @@ impl Camera {
         if self.str_of("lens") != old_lens {
             // New lens: new ranges, resend hello and the full state.
             let lens = self.str_of("lens").to_string();
-            self.controls = controls_for(&lens);
+            self.controls = controls_for(&lens, self.shutter_writable());
             let caps = lens_caps(&lens);
             let zoom = self.num_of("zoom").clamp(1.0, caps.zoom_max);
             self.state.insert("zoom".into(), json!(zoom));
@@ -696,7 +846,14 @@ impl Camera {
                     .unwrap_or(false)
                     .then(Instant::now);
             }
+            // A new mains (or a stopped stream) moves the shutter now.
+            let (changed, reshaped) = self.settle();
+            reported.extend(changed);
             out.push(DeviceMessage::State { values: reported });
+            if reshaped {
+                out.push(self.hello());
+                out.push(self.full_state());
+            }
         }
         let error = (!errors.is_empty()).then(|| errors.join("; "));
         match id {
@@ -725,7 +882,9 @@ impl Camera {
         args: Option<Map<String, Value>>,
     ) -> Vec<DeviceMessage> {
         let mut out = Vec::new();
+        let refused = self.refuses(name);
         let res: Result<(), String> = match name {
+            _ if refused.is_some() => Err(refused.unwrap_or_default()),
             "focus_at" => {
                 let args = args.unwrap_or_default();
                 let x = args.get("x").and_then(Value::as_f64);
@@ -782,14 +941,36 @@ impl Camera {
             .unwrap_or(false)
     }
 
-    /// The shutter the production asks for, made to fit the frame rate (a
-    /// shutter longer than a frame doubles to the next flicker-free value).
+    /// Is the shutter writable (in manual exposure)? When it is free, or
+    /// always without `--readonly-shutter`.
+    fn shutter_writable(&self) -> bool {
+        !self.readonly_shutter || self.applied_shutter.is_none()
+    }
+
+    /// The mains frequency that applies now: the camera's own override, else
+    /// the production's, else the phone's own setting.
+    fn effective_mains(&self) -> u32 {
+        self.mains_override
+            .or(self.production.as_ref().map(|p| p.mains_hz))
+            .unwrap_or(self.local_mains)
+    }
+
+    /// The shutter the production asks for at the mains in use, made to fit
+    /// the frame rate (a shutter longer than a frame doubles to the next
+    /// flicker-free value); `None` when the shutter is free.
     fn production_shutter(&self) -> Option<i64> {
-        let p = self.production.as_ref().filter(|p| !p.shutter_free())?;
-        let mut shutter = match p.shutter {
-            ShutterPolicy::Mains if p.mains_hz == 60 => 60,
+        let policy = self
+            .production
+            .as_ref()
+            .map(|p| p.shutter)
+            .unwrap_or_default();
+        let mains = self.effective_mains();
+        let mut shutter = match policy {
+            ShutterPolicy::Free => return None,
+            ShutterPolicy::Mains if mains == 0 => return None,
+            ShutterPolicy::Mains if mains == 60 => 60,
             ShutterPolicy::Fixed(x) => i64::from(x),
-            _ => 50,
+            ShutterPolicy::Mains => 50,
         };
         let fps = self.num_of("frame_rate").max(1.0) as i64;
         while shutter < fps {
@@ -806,30 +987,105 @@ impl Camera {
             production.mains_hz, production.shutter
         );
         self.production = Some(production);
-        if self.is_live() && self.production_shutter() != self.applied_shutter {
+        // A new production wins over this camera's own mains again.
+        self.mains_override = None;
+        if self.is_live()
+            && (self.production_shutter() != self.applied_shutter
+                || self.effective_mains() != self.applied_mains)
+        {
             return vec![DeviceMessage::Log(Log {
                 level: "warn".into(),
-                message: "New production shutter applies when the stream stops".into(),
+                message: "New production applies when the stream stops".into(),
             })];
         }
-        Vec::new()
+        let (values, reshaped) = self.settle();
+        let mut out = Vec::new();
+        if !values.is_empty() {
+            out.push(DeviceMessage::State { values });
+        }
+        if reshaped {
+            out.push(self.hello());
+            out.push(self.full_state());
+        }
+        out
     }
 
-    /// Once a second: auto modes drift, so the operator sees measured values.
-    fn tick(&mut self) -> (Status, Values) {
-        let t = self.started.elapsed().as_secs_f64();
+    /// Unless live, applies the mains and production shutter now. Returns
+    /// the changed values and whether the descriptors changed (the shutter
+    /// became free or fixed: a new `hello`).
+    fn settle(&mut self) -> (Values, bool) {
         let mut changed = Values::new();
-        // The production shutter, held while live.
-        if !self.is_live() {
-            self.applied_shutter = self.production_shutter();
+        if self.is_live() {
+            return (changed, false);
         }
-        if let Some(shutter) = self.applied_shutter {
+        self.applied_mains = self.effective_mains();
+        let shutter = self.production_shutter();
+        let moved = shutter != self.applied_shutter;
+        self.applied_shutter = shutter;
+        let mains = json!(self.applied_mains);
+        if self.state.get("mains_hz") != Some(&mains) {
+            self.state.insert("mains_hz".into(), mains.clone());
+            changed.insert("mains_hz".into(), mains);
+        }
+        // A manual shutter (without --readonly-shutter) stays until the
+        // production's moves.
+        let manual = self.str_of("exposure_mode") == "manual";
+        if let Some(shutter) = self.applied_shutter.filter(|_| moved || !manual) {
             let v = json!(shutter);
             if self.state.get("shutter") != Some(&v) {
                 self.state.insert("shutter".into(), v.clone());
                 changed.insert("shutter".into(), v);
             }
         }
+        let controls = controls_for(self.str_of("lens"), self.shutter_writable());
+        let reshaped = controls != self.controls;
+        self.controls = controls;
+        (changed, reshaped)
+    }
+
+    /// The next simulated operator change (`--operator`), as a `set` from the
+    /// phone itself.
+    fn operator_step(&mut self) -> Vec<DeviceMessage> {
+        let Some((secs, step, _)) = self.operator else {
+            return Vec::new();
+        };
+        const STEPS: usize = 9;
+        let values = match step % STEPS {
+            0 => json!({ "wb_mode": "manual", "wb_temperature": 4300, "wb_tint": 6 }),
+            1 => json!({ "exposure_mode": "manual", "iso": 400 }),
+            2 => json!({ "focus_mode": "manual", "focus_position": 0.42 }),
+            3 => json!({ "exposure_mode": "auto", "ev_bias": 0.7 }),
+            4 => json!({ "mains_hz": 60 }),
+            5 => json!({ "wb_mode": "auto" }),
+            6 => json!({ "focus_mode": "locked" }),
+            7 => json!({ "ev_bias": 0.0, "focus_mode": "auto" }),
+            _ => json!({ "mains_hz": 50 }),
+        };
+        self.operator = Some((
+            secs,
+            step + 1,
+            Instant::now() + Duration::from_secs_f64(secs),
+        ));
+        let values = values.as_object().cloned().unwrap_or_default();
+        println!(
+            "fake_device: operator sets {}",
+            Value::Object(values.clone())
+        );
+        self.apply_set(None, values, false)
+    }
+
+    fn next_operator(&self, far: tokio::time::Instant) -> tokio::time::Instant {
+        self.operator
+            .map(|(_, _, at)| tokio::time::Instant::from_std(at))
+            .unwrap_or(far)
+    }
+
+    /// Once a second: auto modes drift, so the operator sees measured values.
+    /// Also returns whether the descriptors changed (a new `hello`).
+    fn tick(&mut self) -> (Status, Values, bool) {
+        let t = self.started.elapsed().as_secs_f64();
+        // The mains and production shutter, held while live.
+        let (mut changed, reshaped) = self.settle();
         if self.str_of("exposure_mode") == "auto" {
             let caps = lens_caps(self.str_of("lens"));
             let ev = self.num_of("ev_bias");
@@ -928,7 +1184,7 @@ impl Camera {
             clock: Some(Box::new(self.clock.status(t))),
             extra: Map::new(),
         };
-        (status, changed)
+        (status, changed, reshaped)
     }
 
     fn scene(&self) -> Scene {
@@ -1092,7 +1348,7 @@ fn on_server_message(
                 "fake_device: set {}",
                 serde_json::Value::Object(values.clone())
             );
-            out = cam.apply_set(id, values)
+            out = cam.apply_set(id, values, true)
         }
         ServerToDevice::Command { id, name, args } => out = cam.apply_command(id, &name, args),
         ServerToDevice::Tally { state } => {
@@ -1225,11 +1481,18 @@ async fn run_once(args: &Args, cam: &mut Camera) -> Result<(), String> {
                 out = on_server_message(cam, msg, &mut next_preview, &mut next_stats, far);
             }
             _ = status_tick.tick() => {
-                let (status, changed) = cam.tick();
+                let (status, changed, reshaped) = cam.tick();
                 if !changed.is_empty() {
                     out.push(DeviceMessage::State { values: changed });
                 }
+                if reshaped {
+                    out.push(cam.hello());
+                    out.push(cam.full_state());
+                }
                 out.push(DeviceMessage::Status(status));
+            }
+            _ = sleep_until(cam.next_operator(far)) => {
+                out = cam.operator_step();
             }
             _ = sleep_until(next_preview) => {
                 if let Some((fps, width)) = cam.preview {

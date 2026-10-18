@@ -34,9 +34,13 @@ in to adjust it; manual or locked values are yellow, a value the hub just
 set flashes cyan. Battery, thermal state and tally are in the status row and
 the name chip. The design: docs/UI_DESIGN.md.
 
-**Hub.** The same values on one line on every camera card and shade card
-(without the tint; manual focus as `MF 0.42`), with a badge when auto ISO is
-at a limit (too bright, too dark) or the picture clips or is too dark.
+**Hub.** The same values, in the phone's formats, on one line on every
+camera card and shade card (`1080p30 │ ISO 26 │ 1/100 │ +0.3 EV │ 5200 K +4 │
+AF`), held values yellow, a change from the phone cyan for 1 s, and CLIP / DARK
+after the ISO. A badge on the picture when auto ISO is at a limit or the
+picture clips or is too dark; a tag on the name when a camera's mains differs
+from the production, or its app is older (protocol 2: "Update app", its
+shading controls disabled).
 
 ## Not yet
 

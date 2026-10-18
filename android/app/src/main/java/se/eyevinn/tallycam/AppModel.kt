@@ -169,12 +169,7 @@ class AppModel(private val context: Context) : LcpClient.Listener, LiveStream.Li
     /** The hub's host, for Settings. */
     val host: String? get() = runCatching { android.net.Uri.parse(settings.controlUrl).host }.getOrNull()
 
-    /** "H.264, 6000 kbit/s (auto)", as iOS shows it. */
-    val videoSummary: String get() {
-        val codec = if (settings.videoCodec == "hevc") "HEVC" else "H.264"
-        val kbps = settings.bitrateKbps.takeIf { it > 0 }
-        return "$codec, ${kbps ?: DEFAULT_KBPS} kbit/s" + if (kbps == null) " (auto)" else ""
-    }
+
 
     /** "Back Camera 1280x720 30 fps", as iOS shows the capture. */
     val pictureSummary: String get() {
@@ -444,10 +439,7 @@ class AppModel(private val context: Context) : LcpClient.Listener, LiveStream.Li
                            SrtUrl.LATENCY_RANGE.last.toDouble(), 10.0, "ms"),
             Controls.range("bitrate_kbps", "Video bitrate", "stream", 500.0, 20000.0, 100.0, "kbit/s"),
             Controls.bool("adaptive_bitrate", "Adaptive bitrate", "stream"),
-            enumOf("video_codec", "Video codec", buildList {
-                add("h264" to "H.264")
-                if (VideoEncoder.hasEncoder(android.media.MediaFormat.MIMETYPE_VIDEO_HEVC)) add("hevc" to "HEVC")
-            }).put("locked_while_live", true),
+            enumOf("video_codec", "Video codec", videoCodecs).put("locked_while_live", true),
             enumOf("audio_codec", "Audio codec", listOf("opus" to "Opus", "aac" to "AAC")).put("locked_while_live", true),
         )
         controls += cameraControls.descriptors()
@@ -524,76 +516,15 @@ class AppModel(private val context: Context) : LcpClient.Listener, LiveStream.Li
         }
     }
 
+    /**
+     * Applies a hub's `set`: each value through [applyValue], the same path
+     * as the phone's own changes, so validation and clamping exist once.
+     */
     private fun applySet(id: Any?, values: JSONObject) {
         val errors = mutableListOf<String>()
         val applied = mutableListOf<String>()
-        // Modes before the values that depend on them, as on iOS, so
-        // {"exposure_mode": "manual", "iso": 400} works in one message, and
-        // `live` last, so it starts with the URL and codecs of the same set.
-        fun order(key: String) = when (key) {
-            "live" -> Int.MAX_VALUE
-            else -> MODE_FIRST.indexOf(key).let { i -> if (i < 0) MODE_FIRST.size else i }
-        }
-        for (key in values.keys().asSequence().sortedBy(::order)) {
-            val value = values.get(key)
-            val error: String? = when (key) {
-                "camera_name" -> if (value is String) { setCameraName(value); null } else "expected text"
-                "live" -> when (value) {
-                    true -> goLive()
-                    false -> { stopLive(); null }
-                    else -> "expected a bool"
-                }
-                "stream_url" -> when {
-                    value !is String || !value.startsWith("srt://") -> "expected an srt:// URL"
-                    else -> {
-                        settings.srtUrl = value
-                        if (streamState == LiveStream.State.IDLE) null else "applies the next time the stream starts"
-                    }
-                }
-                "srt_latency_ms" -> {
-                    val wanted = (value as? Number)?.toDouble()
-                    if (wanted == null || !wanted.isFinite()) "expected a number" else {
-                        val ms = wanted.coerceIn(SrtUrl.LATENCY_RANGE.first.toDouble(), SrtUrl.LATENCY_RANGE.last.toDouble()).toInt()
-                        val url = SrtUrl.settingLatency(ms, settings.srtUrl)
-                        when {
-                            url == null -> "no SRT URL to set it in"
-                            else -> {
-                                settings.srtUrl = url
-                                when {
-                                    streamState != LiveStream.State.IDLE -> "applies the next time the stream starts"
-                                    ms.toDouble() != wanted -> "clamped to $ms"
-                                    else -> null
-                                }
-                            }
-                        }
-                    }
-                }
-                "adaptive_bitrate" -> if (value is Boolean) { setAdaptiveBitrate(value); null } else "expected a bool"
-                "video_codec" -> when {
-                    value != "h264" && !(value == "hevc" && VideoEncoder.hasEncoder(android.media.MediaFormat.MIMETYPE_VIDEO_HEVC)) ->
-                        "expected h264 or hevc"
-                    value == settings.videoCodec -> null
-                    streamState != LiveStream.State.IDLE -> CameraControls.NOT_WHILE_LIVE
-                    else -> { settings.videoCodec = value as String; null }
-                }
-                "audio_codec" -> when {
-                    value != "opus" && value != "aac" -> "expected opus or aac"
-                    value == settings.audioCodec -> null
-                    streamState != LiveStream.State.IDLE -> CameraControls.NOT_WHILE_LIVE
-                    else -> { settings.audioCodec = value as String; null }
-                }
-                "bitrate_kbps" -> {
-                    val wanted = (value as? Number)?.toDouble()
-                    if (wanted == null || !wanted.isFinite()) "expected a number" else {
-                        val kbps = wanted.coerceIn(500.0, 20000.0).toInt()
-                        settings.bitrateKbps = kbps
-                        stream.setBitrate(kbps)
-                        bitrateKbps = kbps
-                        if (kbps.toDouble() == wanted) null else "clamped to $kbps"
-                    }
-                }
-                else -> if (cameraControls.handles(key)) cameraControls.apply(key, value) else "Unknown control $key"
-            }
+        for (key in ordered(values)) {
+            val error = applyValue(key, values.get(key))
             if (error == null) applied += key else errors += "$key: $error"
         }
         // The operator's screen flashes what the hub changed.
@@ -601,6 +532,83 @@ class AppModel(private val context: Context) : LcpClient.Listener, LiveStream.Li
         id?.let { result(it, errors) }
         publishState()
     }
+
+    /**
+     * Modes before the values that depend on them, as on iOS, so
+     * {"exposure_mode": "manual", "iso": 400} works in one message, and
+     * `live` last, so it starts with the URL and codecs of the same set.
+     */
+    private fun ordered(values: JSONObject): List<String> = values.keys().asSequence().sortedBy { key ->
+        when (key) {
+            "live" -> Int.MAX_VALUE
+            else -> MODE_FIRST.indexOf(key).let { i -> if (i < 0) MODE_FIRST.size else i }
+        }
+    }.toList()
+
+    /**
+     * One control, from the hub or the phone (docs/UI_DESIGN.md: the phone
+     * changes every setting itself; the last write wins). Null when it
+     * applied, else why not (refused, clamped, or applied later).
+     */
+    private fun applyValue(key: String, value: Any): String? = when (key) {
+        "camera_name" -> if (value is String) { setCameraName(value); null } else "expected text"
+        "live" -> when (value) {
+            true -> goLive()
+            false -> { stopLive(); null }
+            else -> "expected a bool"
+        }
+        "stream_url" -> when {
+            value !is String || !value.startsWith("srt://") -> "expected an srt:// URL"
+            else -> {
+                settings.srtUrl = value
+                if (streamState == LiveStream.State.IDLE) null else "applies the next time the stream starts"
+            }
+        }
+        "srt_latency_ms" -> {
+            val wanted = (value as? Number)?.toDouble()
+            if (wanted == null || !wanted.isFinite()) "expected a number" else {
+                val ms = wanted.coerceIn(SrtUrl.LATENCY_RANGE.first.toDouble(), SrtUrl.LATENCY_RANGE.last.toDouble()).toInt()
+                val url = SrtUrl.settingLatency(ms, settings.srtUrl)
+                when {
+                    url == null -> "no SRT URL to set it in"
+                    else -> {
+                        settings.srtUrl = url
+                        when {
+                            streamState != LiveStream.State.IDLE -> "applies the next time the stream starts"
+                            ms.toDouble() != wanted -> "clamped to $ms"
+                            else -> null
+                        }
+                    }
+                }
+            }
+        }
+        "adaptive_bitrate" -> if (value is Boolean) { setAdaptiveBitrate(value); null } else "expected a bool"
+        "video_codec" -> when {
+            value != "h264" && !(value == "hevc" && VideoEncoder.hasEncoder(android.media.MediaFormat.MIMETYPE_VIDEO_HEVC)) ->
+                "expected h264 or hevc"
+            value == settings.videoCodec -> null
+            streamState != LiveStream.State.IDLE -> CameraControls.NOT_WHILE_LIVE
+            else -> { settings.videoCodec = value as String; null }
+        }
+        "audio_codec" -> when {
+            value != "opus" && value != "aac" -> "expected opus or aac"
+            value == settings.audioCodec -> null
+            streamState != LiveStream.State.IDLE -> CameraControls.NOT_WHILE_LIVE
+            else -> { settings.audioCodec = value as String; null }
+        }
+        "bitrate_kbps" -> {
+            val wanted = (value as? Number)?.toDouble()
+            if (wanted == null || !wanted.isFinite()) "expected a number" else {
+                val kbps = wanted.coerceIn(500.0, 20000.0).toInt()
+                settings.bitrateKbps = kbps
+                stream.setBitrate(kbps)
+                bitrateKbps = kbps
+                if (kbps.toDouble() == wanted) null else "clamped to $kbps"
+            }
+        }
+        else -> if (cameraControls.handles(key)) cameraControls.apply(key, value) else "Unknown control $key"
+    }
+
 
     private fun result(id: Any, errors: List<String>) {
         val r = JSONObject().put("type", "result").put("id", id).put("ok", errors.isEmpty())
@@ -675,8 +683,8 @@ class AppModel(private val context: Context) : LcpClient.Listener, LiveStream.Li
      */
     fun localSet(values: JSONObject, quiet: Boolean = false) {
         val errors = mutableListOf<String>()
-        for (key in values.keys().asSequence().sortedBy { MODE_FIRST.indexOf(it).let { i -> if (i < 0) MODE_FIRST.size else i } }) {
-            cameraControls.apply(key, values.get(key))?.let { errors += "$key: $it" }
+        for (key in ordered(values)) {
+            applyValue(key, values.get(key))?.let { errors += "$key: $it" }
         }
         if (!quiet) errors.firstOrNull()?.let { showBanner(it.capitalizedFirst()) }
         publishState()
@@ -754,17 +762,32 @@ class AppModel(private val context: Context) : LcpClient.Listener, LiveStream.Li
         level?.let { status.put("battery", JSONObject().put("level", Math.round(it * 100) / 100.0).put("charging", charging)) }
         clock?.let { c -> runCatching { JSONObject(c.statusJson()) }.getOrNull()?.let { status.put("clock", it) } }
         camera.genlockStatus?.let { g ->
-            val state = when (g[0].toInt()) {
-                se.eyevinn.tallycam.core.Hot.GENLOCK_LOCKED -> "locked"
-                se.eyevinn.tallycam.core.Hot.GENLOCK_ACQUIRING -> "acquiring"
-                else -> "free_run"
-            }
-            status.put("genlock", JSONObject().put("state", state)
+            status.put("genlock", JSONObject().put("state", genlockStateName(g))
                 .put("phase_error_ms", Math.round(g[1] / 1e3) / 1e3).put("phase_error_max_ms", Math.round(g[2] / 1e3) / 1e3)
                 .put("frame_duration_us", Math.round(g[3] / 10) / 100.0).put("correction_ppm", Math.round(g[4] * 10) / 10.0)
                 .put("calibration_us", 0))
         }
         client.send(status)
+    }
+
+    private fun genlockStateName(g: DoubleArray) = when (g[0].toInt()) {
+        se.eyevinn.tallycam.core.Hot.GENLOCK_LOCKED -> "locked"
+        se.eyevinn.tallycam.core.Hot.GENLOCK_ACQUIRING -> "acquiring"
+        else -> "free_run"
+    }
+
+    /**
+     * Genlock now, for Settings' Sync: "locked", "acquiring" or "free_run"
+     * and the phase error in ms; null while genlock is not running.
+     */
+    fun genlockState(): Pair<String, Double>? = camera.genlockStatus?.let { genlockStateName(it) to it[1] / 1e6 }
+
+    /** The video codecs this phone encodes (H.264, and HEVC where it has an encoder). */
+    val videoCodecs: List<Pair<String, String>> by lazy {
+        buildList {
+            add("h264" to "H.264")
+            if (VideoEncoder.hasEncoder(android.media.MediaFormat.MIMETYPE_VIDEO_HEVC)) add("hevc" to "HEVC")
+        }
     }
 
     private fun thermal(): String {

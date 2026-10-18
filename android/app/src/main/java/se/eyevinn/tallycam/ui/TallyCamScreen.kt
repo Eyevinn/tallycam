@@ -125,6 +125,8 @@ private fun BoxScope.ShootingScreen(model: AppModel, onScan: () -> Unit) {
     val context = LocalContext.current
     val aids = remember { Aids(context) }
     var showSettings by remember { mutableStateOf(false) }
+    // Opened from the format in the values row: at Picture.
+    var settingsAtPicture by remember { mutableStateOf(false) }
     var connectCardDismissed by remember { mutableStateOf(false) }
     // Touches blocked except the slide to unlock; not persisted.
     var screenLocked by remember { mutableStateOf(false) }
@@ -228,7 +230,7 @@ private fun BoxScope.ShootingScreen(model: AppModel, onScan: () -> Unit) {
                    verticalArrangement = Arrangement.spacedBy(Chrome.rowGap)) {
                 StatusStrip(model, if (nameInline) nameChip else null) { showSettings = true }
                 if (!nameInline) nameChip()
-                CameraValuesRow(model, listOfNotNull(left, right), { place(shown.fromValues(it)) }, onFormat = { showSettings = true })
+                CameraValuesRow(model, listOfNotNull(left, right), { place(shown.fromValues(it)) }, onFormat = { settingsAtPicture = true; showSettings = true })
             }
             if (landscape) {
                 // Left: zoom over the tools. Centre: messages, the slide to
@@ -278,7 +280,12 @@ private fun BoxScope.ShootingScreen(model: AppModel, onScan: () -> Unit) {
         ConnectCard(onScan, onSettings = { showSettings = true }, onDismiss = { connectCardDismissed = true },
                     Modifier.align(Alignment.Center).padding(24.dp))
     }
-    if (showSettings) SettingsScreen(model, onScan = { showSettings = false; onScan() }) { showSettings = false }
+    if (showSettings) {
+        SettingsScreen(model, atPicture = settingsAtPicture, onScan = { showSettings = false; onScan() }) {
+            showSettings = false
+            settingsAtPicture = false
+        }
+    }
 }
 
 /** Operator messages and toasts, centred under the values row, over the picture only. */

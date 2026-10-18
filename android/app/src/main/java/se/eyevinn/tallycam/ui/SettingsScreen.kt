@@ -32,6 +32,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -40,6 +42,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
+import org.json.JSONObject
 import se.eyevinn.tallycam.AppModel
 import se.eyevinn.tallycam.BuildConfig
 import se.eyevinn.tallycam.control.ClockSummary
@@ -60,7 +63,11 @@ private val Red = Color(0xFFFF453A)
  * docs/APPS.md lists what differs.
  */
 @Composable
-fun SettingsScreen(model: AppModel, onScan: () -> Unit, onDone: () -> Unit) {
+fun SettingsScreen(model: AppModel, atPicture: Boolean = false, onScan: () -> Unit, onDone: () -> Unit) {
+    val scroll = rememberScrollState()
+    // Opened from the format in the values row: scrolled to Picture.
+    var pictureTop by remember { mutableStateOf<Int?>(null) }
+    LaunchedEffect(pictureTop) { if (atPicture) pictureTop?.let { scroll.scrollTo(it) } }
     var name by remember { mutableStateOf(model.cameraNameSetting) }
     var control by remember { mutableStateOf(model.settings.controlUrl) }
     var srt by remember { mutableStateOf(model.settings.srtUrl) }
@@ -88,7 +95,7 @@ fun SettingsScreen(model: AppModel, onScan: () -> Unit, onDone: () -> Unit) {
                 TextButton(onClick = ::done) { Text("Done", color = Color(0xFF0A84FF), fontWeight = FontWeight.SemiBold) }
             }
             Column(
-                Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp),
+                Modifier.fillMaxSize().verticalScroll(scroll).padding(horizontal = 16.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 val width = Modifier.widthIn(max = 640.dp).fillMaxWidth()
@@ -126,8 +133,6 @@ fun SettingsScreen(model: AppModel, onScan: () -> Unit, onDone: () -> Unit) {
                         " Adaptive bitrate lowers the video bitrate when the network cannot carry it, and raises it again up to the bitrate set.", width) {
                     Field(srt, { srt = it }, "srt://host:port?streamid=...", url = true, enabled = !live)
                     Divider()
-                    Labeled("Video", model.videoSummary)
-                    Divider()
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text("Adaptive bitrate", color = Color.White)
                         Spacer(Modifier.weight(1f))
@@ -144,6 +149,12 @@ fun SettingsScreen(model: AppModel, onScan: () -> Unit, onDone: () -> Unit) {
                         Labeled("Retransmitted / dropped", "${s.retransmits} / ${s.dropped}")
                     }
                 }
+                // Picture: what the active camera offers, through the same
+                // controls as the hub's sets; not while live.
+                Box(Modifier.onGloballyPositioned { pictureTop = it.positionInParent().y.toInt() }) {
+                    PictureSection(model, live, width)
+                }
+                SyncSection(model, width)
                 // Mains (docs/SHADING.md, "Shutter"): the phone and the hub
                 // both set it, the last write wins; not while live.
                 val mainsOptions = model.mainsOptions
@@ -160,7 +171,7 @@ fun SettingsScreen(model: AppModel, onScan: () -> Unit, onDone: () -> Unit) {
                 }
                 // Orientation: Android streams landscape only for now (docs/APPS.md).
                 Section("Orientation", "Android streams in landscape for now.", width) {
-                    Labeled("Picture", model.pictureSummary)
+                    Labeled("Orientation", "Landscape")
                 }
                 // Clock.
                 Section("Clock", "The phone's own NTP-disciplined clock, used to timestamp frames.", width) {
@@ -286,4 +297,100 @@ private fun Field(value: String, onChange: (String) -> Unit, placeholder: String
                                           unfocusedIndicatorColor = Color.Transparent, disabledIndicatorColor = Color.Transparent),
         modifier = Modifier.fillMaxWidth(),
     )
+}
+
+/** A control's options from its descriptor: value and label. */
+private fun options(descriptor: JSONObject?): List<Pair<Any, String>> {
+    val a = descriptor?.optJSONArray("options") ?: return emptyList()
+    return (0 until a.length()).mapNotNull { a.optJSONObject(it) }.map { it.get("value") to it.optString("label") }
+}
+
+/**
+ * Picture (docs/UI_DESIGN.md, "Settings"): lens, resolution and frame rate
+ * (what the active camera offers: the `resolution` and `frame_rate`
+ * controls' lists), video codec and bitrate. All through the hub's control
+ * table (AppModel.localSet), disabled while live.
+ */
+@Composable
+private fun PictureSection(model: AppModel, live: Boolean, width: Modifier) {
+    val v = model.shading.values
+    val d = model.shading.descriptors
+    Section("Picture", if (live) "Stop the stream to change." else null, width) {
+        val lenses = model.camera.lenses.sortedBy { it.focalLength }
+        if (lenses.size > 1) {
+            Labeled("Lens", "")
+            Segmented(lenses.map { it.key to lensLabel(model, it) }, v.optString("lens"), !live) { model.selectLens(it) }
+            Divider()
+        }
+        options(d["resolution"]).takeIf { it.size > 1 }?.let { opts ->
+            Labeled("Resolution", "")
+            Segmented(opts, v.opt("resolution") ?: "", !live) { model.localSet(JSONObject().put("resolution", it)) }
+            Divider()
+        }
+        options(d["frame_rate"]).takeIf { it.size > 1 }?.let { opts ->
+            Labeled("Frame rate", "")
+            // Numbers compare as numbers (30 and 30.0).
+            val current = opts.firstOrNull { (it.first as? Number)?.toDouble() == v.optDouble("frame_rate") }?.first ?: ""
+            Segmented(opts, current, !live) { model.localSet(JSONObject().put("frame_rate", it)) }
+            Divider()
+        }
+        if (model.videoCodecs.size > 1) {
+            Labeled("Video codec", "")
+            Segmented(model.videoCodecs, model.settings.videoCodec, !live) { model.localSet(JSONObject().put("video_codec", it)) }
+            Divider()
+        }
+        // Bitrate in 500 kbit/s steps, within the control's range (500 to 20000).
+        val kbps = v.optInt("bitrate_kbps", 0)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Bitrate", color = Color.White)
+            Spacer(Modifier.weight(1f))
+            TextButton(onClick = { model.localSet(JSONObject().put("bitrate_kbps", (kbps - 500).coerceAtLeast(500))) },
+                       enabled = !live && kbps > 500) { Text("−", fontSize = 20.sp) }
+            Text("$kbps kbit/s" + if (model.settings.bitrateKbps <= 0) " (auto)" else "", color = Secondary, style = Chrome.tabular)
+            TextButton(onClick = { model.localSet(JSONObject().put("bitrate_kbps", (kbps + 500).coerceAtMost(20000))) },
+                       enabled = !live && kbps < 20000) { Text("+", fontSize = 20.sp) }
+        }
+        Divider()
+        Labeled("Picture", model.pictureSummary)
+    }
+}
+
+/**
+ * Sync (docs/UI_DESIGN.md, "Settings"): genlock with its state (Locked,
+ * Locking, Off; the phase error when locked) and stabilization, both
+ * through the hub's control table. Left out where the camera has neither.
+ */
+@Composable
+private fun SyncSection(model: AppModel, width: Modifier) {
+    val v = model.shading.values
+    val d = model.shading.descriptors
+    if ("genlock" !in d && "stabilization" !in d) return
+    // Refreshed with the screen's tick (the parent recomposes each second).
+    val state = model.genlockState()
+    Section("Sync", "Genlock aligns frames with other cameras on the same clock. Stabilization off for multi-camera sync tests.", width) {
+        if ("genlock" in d) {
+            val on = v.optBoolean("genlock")
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Genlock", color = Color.White)
+                    val text = when {
+                        !on -> "Off"
+                        state?.first == "locked" -> "Locked, " + fmt("%.2f ms", state.second)
+                        else -> "Locking"
+                    }
+                    Text(text, color = if (on && state?.first == "locked") Chrome.green else Secondary, fontSize = 13.sp)
+                }
+                androidx.compose.material3.Switch(checked = on, onCheckedChange = { model.localSet(JSONObject().put("genlock", it)) })
+            }
+        }
+        if ("stabilization" in d) {
+            if ("genlock" in d) Divider()
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Stabilization", color = Color.White)
+                Spacer(Modifier.weight(1f))
+                androidx.compose.material3.Switch(checked = v.optString("stabilization") == "standard",
+                    onCheckedChange = { model.localSet(JSONObject().put("stabilization", if (it) "standard" else "off")) })
+            }
+        }
+    }
 }

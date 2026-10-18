@@ -149,11 +149,11 @@ final class CameraControls: @unchecked Sendable {
             ?? Int(mainsHzForRegion(region: Locale.current.region?.identifier ?? ""))
         localMainsHz = mains
         autoIsoLoop = AutoIsoLoop(mainsHz: mains)
-        genlock.apply = { [weak self] durationNs in
+        genlock.apply = { [weak self] durationNs, serial in
             guard let self else {
                 return
             }
-            queue.async { self.applyGenlockDuration(durationNs) }
+            queue.async { self.applyGenlockDuration(durationNs, serial: serial) }
         }
         genlock.onStateChange = { [weak self] state, status in
             let level = state == .locked || state == .acquiring ? "info" : "warn"
@@ -166,9 +166,10 @@ final class CameraControls: @unchecked Sendable {
 
     /// Applies the genlock loop's frame duration, keeping the format. Skipped
     /// while the device or format is being changed; the loop then starts
-    /// over from `notifyFormatIfChanged`.
-    private func applyGenlockDuration(_ durationNs: Double) {
-        guard genlock.isEnabled, let device else {
+    /// over from `notifyFormatIfChanged`. A duration from a loop older than
+    /// the last format or frame rate change (queued before it) is dropped.
+    private func applyGenlockDuration(_ durationNs: Double, serial: Int) {
+        guard genlock.isCurrent(serial: serial), let device else {
             return
         }
         var duration = CMTime(value: CMTimeValue(durationNs.rounded()), timescale: 1_000_000_000)
@@ -796,9 +797,12 @@ final class CameraControls: @unchecked Sendable {
 
     /// Applies values in table order (modes before the values that depend on
     /// them) and completes with one error message per failed or clamped value.
-    func apply(_ values: [String: JSONValue], completion: @escaping @Sendable ([String]) -> Void) {
+    /// Sets controls; `completion` gets the errors and warnings, and the ids
+    /// that took effect (clamped included, refused not).
+    func apply(_ values: [String: JSONValue], completion: @escaping @Sendable ([String], Set<String>) -> Void) {
         queue.async { [self] in
             var errors: [String] = []
+            var applied: Set<String> = []
             var reshaped = false
             for key in values.keys where !Self.table.contains(where: { $0.id == key }) {
                 errors.append("Unknown control \(key)")
@@ -814,6 +818,7 @@ final class CameraControls: @unchecked Sendable {
                     if let warning = try control.set(self, value) {
                         errors.append("\(control.id): \(warning)")
                     }
+                    applied.insert(control.id)
                     reshaped = reshaped || control.reshapes
                 } catch {
                     errors.append("\(control.id): \(error.localizedDescription)")
@@ -827,7 +832,7 @@ final class CameraControls: @unchecked Sendable {
                 notifyFormatIfChanged()
             }
             onUpdate?(.values(self.values()))
-            completion(errors)
+            completion(errors, applied)
         }
     }
 

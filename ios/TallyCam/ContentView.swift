@@ -28,6 +28,11 @@ struct ContentView: View {
     /// The in-app QR scanner is on (only while not live).
     @State private var scanning = false
     @State private var scanHint: String?
+    /// A connect link for another hub, waiting for Join or Cancel. Not
+    /// persisted: a restored screen never asks again.
+    @State private var pendingJoin: ProvisioningLink?
+    /// The join alert is up (after the Settings sheet has gone, if it was open).
+    @State private var askingJoin = false
     /// The group the adjust control at the right edge changes; remembered.
     @AppStorage("adjust.group") private var adjustGroup = ShadingGroup.exposure
     #if DEBUG
@@ -80,7 +85,10 @@ struct ContentView: View {
         .persistentSystemOverlays(.hidden)
         // While live, edge swipes need a second swipe (no accidental app switch).
         .defersSystemGestures(on: controller.state == .idle ? [] : .all)
-        .sheet(isPresented: $showSettings) {
+        .sheet(isPresented: $showSettings, onDismiss: {
+            // A join asked for while Settings was open.
+            askingJoin = pendingJoin != nil
+        }) {
             SettingsView(remote: remote, controller: controller, capture: capture) {
                 showSettings = false
                 startScan()
@@ -121,7 +129,19 @@ struct ContentView: View {
         }
         // Deep link from the control hub's QR code (Provisioning v0).
         .onOpenURL { url in
-            remote.provision(from: url, controller: controller)
+            provision(from: url)
+        }
+        .alert(pendingJoin?.joinTitle ?? "", isPresented: $askingJoin, presenting: pendingJoin) { link in
+            Button("Join") {
+                pendingJoin = nil
+                remote.join(link, controller: controller)
+            }
+            .keyboardShortcut(.defaultAction)
+            Button("Cancel", role: .cancel) {
+                pendingJoin = nil
+            }
+        } message: { link in
+            Text(link.joinMessage(live: controller.state != .idle))
         }
     }
 
@@ -257,7 +277,7 @@ struct ContentView: View {
 
     private var lensButtons: some View {
         LensButtons(shading: remote.shading) { lens in
-            capture.controls.apply(["lens": .string(lens)]) { _ in }
+            capture.controls.apply(["lens": .string(lens)]) { _, _ in }
         }
     }
 
@@ -372,7 +392,27 @@ struct ContentView: View {
                 return
             }
             stopScan()
-            remote.provision(from: link, controller: controller)
+            provision(from: link)
+        }
+    }
+
+    /// A connect link (scanned or from the Camera app): joins at once when it
+    /// is for the hub in use, else asks first (docs/UI_DESIGN.md, "Joining
+    /// a hub").
+    private func provision(from url: URL) {
+        guard let link = remote.joinRequest(from: url) else {
+            return
+        }
+        if remote.needsConfirmation(link) {
+            pendingJoin = link
+            if showSettings {
+                // An alert does not show over the sheet: ask once it is gone.
+                showSettings = false
+            } else {
+                askingJoin = true
+            }
+        } else {
+            remote.join(link, controller: controller)
         }
     }
 

@@ -17,9 +17,13 @@ final class GenlockController: @unchecked Sendable {
 
     private static let enabledKey = "genlockEnabled"
     private static let offsetKey = "genlockOffsetUs"
+    /// The advertised range of `genlock_offset_us`. Also keeps the ns
+    /// conversion in `onFrame` far from overflowing.
+    static let offsetRangeUs: ClosedRange<Double> = -50000 ... 50000
 
-    /// Called on the video queue with a frame duration (ns) to apply.
-    var apply: (@Sendable (Double) -> Void)?
+    /// Called on the video queue with a frame duration (ns) to apply and the
+    /// loop's serial: apply it only while `isCurrent(serial:)`.
+    var apply: (@Sendable (Double, Int) -> Void)?
     /// Called on the video queue when the loop's state changes.
     var onStateChange: (@Sendable (GenlockLoop.State, GenlockLoop.Status) -> Void)?
 
@@ -39,7 +43,12 @@ final class GenlockController: @unchecked Sendable {
 
     init() {
         enabled = UserDefaults.standard.bool(forKey: Self.enabledKey)
-        offsetUs = UserDefaults.standard.double(forKey: Self.offsetKey)
+        offsetUs = Self.clampedOffset(UserDefaults.standard.double(forKey: Self.offsetKey))
+    }
+
+    /// Within `offsetRangeUs`; not finite is 0.
+    static func clampedOffset(_ us: Double) -> Double {
+        us.isFinite ? min(max(us, offsetRangeUs.lowerBound), offsetRangeUs.upperBound) : 0
     }
 
     /// Where frames land after each grid point, us: the calibration of this
@@ -49,6 +58,7 @@ final class GenlockController: @unchecked Sendable {
     }
 
     func setTargetOffset(us: Double) {
+        let us = Self.clampedOffset(us)
         lock.withLock { offsetUs = us }
         UserDefaults.standard.set(us, forKey: Self.offsetKey)
     }
@@ -79,6 +89,12 @@ final class GenlockController: @unchecked Sendable {
             configSerial += 1
             latest = nil
         }
+    }
+
+    /// True while genlock is on and the loop with `serial` is still the
+    /// current one (no format or frame rate change since).
+    func isCurrent(serial: Int) -> Bool {
+        lock.withLock { enabled && serial == configSerial }
     }
 
     /// Latest status while enabled.
@@ -121,7 +137,7 @@ final class GenlockController: @unchecked Sendable {
                 latest = status
             }
         }
-        apply?(duration)
+        apply?(duration, serial)
         if status.state != lastState {
             lastState = status.state
             onStateChange?(status.state, status)

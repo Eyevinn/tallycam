@@ -52,4 +52,34 @@ final class ProvisioningTests: XCTestCase {
         XCTAssertEqual(ProvisioningLink.streamId(deviceId: deviceId), "cam-3f2a9c1d")
         XCTAssertEqual(ProvisioningLink.streamId(deviceId: "ab"), "cam-ab")
     }
+
+    func testSameServerJoinsWithoutAsking() {
+        let current = "ws://192.0.2.10:8090/lcp/v0/device"
+        XCTAssertTrue(ProvisioningLink.sameServer("ws://192.0.2.10:8090/lcp/v0/device", current))
+        // Another path or token on the same server is the same hub.
+        XCTAssertTrue(ProvisioningLink.sameServer("ws://192.0.2.10:8090/other?token=abc", current))
+        XCTAssertTrue(ProvisioningLink.sameServer("WS://HUB.example.com/x", "ws://hub.example.com:80/y"))
+        XCTAssertTrue(ProvisioningLink.sameServer("wss://hub.example.com/x", " wss://hub.example.com:443/y "))
+    }
+
+    func testOtherServerOrNoneAsks() {
+        let current = "ws://192.0.2.10:8090/lcp/v0/device"
+        XCTAssertFalse(ProvisioningLink.sameServer("ws://192.0.2.11:8090/lcp/v0/device", current))
+        XCTAssertFalse(ProvisioningLink.sameServer("ws://192.0.2.10:8091/lcp/v0/device", current))
+        XCTAssertFalse(ProvisioningLink.sameServer("ws://hub.example.com/x", "wss://hub.example.com/x"))
+        XCTAssertFalse(ProvisioningLink.sameServer(current, ""))
+        XCTAssertFalse(ProvisioningLink.sameServer(current, "   "))
+        XCTAssertFalse(ProvisioningLink.sameServer(current, "not a url"))
+    }
+
+    func testJoinMessage() throws {
+        let link = try XCTUnwrap(ProvisioningLink(url: XCTUnwrap(URL(string: hubLink)), deviceId: deviceId))
+        XCTAssertEqual(link.joinTitle, "Join 192.0.2.10?")
+        XCTAssertEqual(link.joinMessage(live: false), "Control hub: 192.0.2.10:8090\nStream to: 192.0.2.10:9000")
+        XCTAssertEqual(link.joinMessage(live: true),
+                       "Control hub: 192.0.2.10:8090\nStream to: 192.0.2.10:9000\nThe stream URL applies on the next Go Live")
+        let noSrt = try XCTUnwrap(ProvisioningLink(url: XCTUnwrap(URL(string: "tallycam://connect?control=wss%3A%2F%2Fhub.example.com%2Fx")),
+                                                   deviceId: deviceId))
+        XCTAssertEqual(noSrt.joinMessage(live: true), "Control hub: hub.example.com\nStream: unchanged")
+    }
 }

@@ -192,7 +192,7 @@ struct CameraStage: View {
         }
         pinchApplied = .now
         let zoom = min(max(base * Double(magnification), low), high)
-        capture.controls.apply(["zoom": .number((zoom * 100).rounded() / 100)]) { _ in }
+        capture.controls.apply(["zoom": .number((zoom * 100).rounded() / 100)]) { _, _ in }
     }
 
     private func streamPoint(_ location: CGPoint, in size: CGSize) -> CGPoint? {

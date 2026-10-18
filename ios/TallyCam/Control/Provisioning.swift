@@ -20,6 +20,61 @@ struct ProvisioningLink: Equatable {
         URL(string: controlUrl)?.host ?? controlUrl
     }
 
+    /// The control server as `host[:port]`, for the join confirmation.
+    var controlServer: String {
+        Self.hostPort(controlUrl) ?? controlUrl
+    }
+
+    /// "Join <hub host>?" and its message (docs/UI_DESIGN.md, "Joining a
+    /// hub"). `live`: the stream URL applies on the next Go Live.
+    var joinTitle: String {
+        "Join \(controlHost)?"
+    }
+
+    func joinMessage(live: Bool) -> String {
+        var lines = ["Control hub: \(controlServer)"]
+        if let srtUrl {
+            lines.append("Stream to: \(Self.hostPort(srtUrl) ?? srtUrl)")
+            if live {
+                lines.append("The stream URL applies on the next Go Live")
+            }
+        } else {
+            lines.append("Stream: unchanged")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    /// True when `controlUrl` names the same control server (host and port)
+    /// as `current`: such a link applies without asking. False when there
+    /// is no current control URL.
+    static func sameServer(_ controlUrl: String, _ current: String) -> Bool {
+        guard let a = server(of: controlUrl), let b = server(of: current) else {
+            return false
+        }
+        return a == b
+    }
+
+    /// `host:port` of a ws/wss URL, the port filled in from the scheme, or
+    /// nil when there is no host.
+    static func server(of url: String) -> String? {
+        guard let parsed = URL(string: url.trimmingCharacters(in: .whitespaces)),
+              let host = parsed.host?.lowercased(), !host.isEmpty
+        else {
+            return nil
+        }
+        let scheme = parsed.scheme?.lowercased()
+        let port = parsed.port ?? (scheme == "wss" ? 443 : scheme == "ws" ? 80 : 0)
+        return "\(host):\(port)"
+    }
+
+    /// `host` or `host:port` (only an explicit port), for display.
+    private static func hostPort(_ url: String) -> String? {
+        guard let parsed = URL(string: url), let host = parsed.host, !host.isEmpty else {
+            return nil
+        }
+        return parsed.port.map { "\(host):\($0)" } ?? host
+    }
+
     /// Parses a deep link. Returns nil if it is not a provisioning link or
     /// the URLs in it are not usable (control must be ws/wss, srt must be
     /// srt). `{device}` in the SRT URL becomes this phone's stream id.

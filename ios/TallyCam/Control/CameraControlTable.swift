@@ -2,9 +2,6 @@
 
 private let whenManualExposure: [String: JSONValue] = ["exposure_mode": .string("manual")]
 private let whenAutoExposure: [String: JSONValue] = ["exposure_mode": .string("auto")]
-/// The shutter is a production setting; under a free shutter the operator or
-/// the hub sets it in manual (`readonly` otherwise, see `currentDescriptors`).
-private let whenFixedShutter: [String: JSONValue] = ["exposure_mode": .string("manual")]
 private let whenManualWhiteBalance: [String: JSONValue] = ["wb_mode": .string("manual")]
 private let whenManualFocus: [String: JSONValue] = ["focus_mode": .string("manual")]
 
@@ -124,7 +121,11 @@ extension CameraControls {
             },
             get: { c in c.currentFrameRate.map { .int($0) } },
             set: { c, value in
-                let frameRate = try Int(number(value))
+                // Int(exactly:): Int(Double) traps outside Int's range. Bounded
+                // too: the bitrate defaults take the rate as a UInt32.
+                guard let frameRate = try Int(exactly: number(value)), (1 ... 1000).contains(frameRate) else {
+                    throw ControlError("expected a whole number of frames per second")
+                }
                 guard !c.formatLocked || frameRate == c.currentFrameRate else {
                     throw ControlError("not while live: stop the stream to change it")
                 }
@@ -302,7 +303,10 @@ extension CameraControls {
             }
         ),
         CameraControl(
-            id: "shutter", label: "Shutter", group: "exposure", enabledWhen: whenFixedShutter,
+            // The shutter is a production setting; under a free shutter the
+            // operator or the hub sets it in manual (`readonly` otherwise, see
+            // `currentDescriptors`).
+            id: "shutter", label: "Shutter", group: "exposure", enabledWhen: whenManualExposure,
             kind: { c in
                 guard let device = c.device else {
                     return nil
@@ -332,7 +336,9 @@ extension CameraControls {
                     var warning: String?
                     let seconds = clamp(1 / denominator, shutterRange(device), &warning)
                     if warning != nil {
-                        warning = "1/\(Int(denominator)) out of range, clamped to 1/\(Int((1 / seconds).rounded()))"
+                        // Not Int(denominator): it traps outside Int's range.
+                        let asked = Int(exactly: denominator.rounded()).map(String.init) ?? String(denominator)
+                        warning = "1/\(asked) out of range, clamped to 1/\(Int((1 / seconds).rounded()))"
                     }
                     // Committed together with ISO, see ManualExposureRequest.
                     c.exposureRequest.duration = CMTime(seconds: seconds, preferredTimescale: 1_000_000)

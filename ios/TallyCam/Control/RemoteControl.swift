@@ -260,30 +260,44 @@ final class RemoteControl: ObservableObject {
         }
     }
 
-    /// Forgets the control server: disconnects and clears the saved URL, so
-    /// the app asks for a QR scan again. The stream URL stays.
+    /// Forgets the control server: disconnects and clears the saved control
+    /// and stream URLs (both came from the hub), so the app asks for a QR
+    /// scan again. While live the stream URL applies on the next Go Live.
     func forget() {
         url = ""
+        controller?.url = ""
         newProduction()
         reconnect()
     }
 
-    /// Handles a deep link from the control hub's QR code: saves the control
-    /// and SRT URLs and connects. While live, the SRT URL applies on the next
-    /// Go Live. Returns false if the link is not a provisioning link.
-    @discardableResult
-    func provision(from link: URL, controller: StreamController) -> Bool {
+    /// Parses and checks a deep link from the control hub's QR code. Returns
+    /// the link to `join`, or nil (with a banner) when it is not usable.
+    /// Ask first when `needsConfirmation`.
+    func joinRequest(from link: URL) -> ProvisioningLink? {
         guard let deviceId = StatusReporter.deviceId() else {
             showBanner("Unlock the phone, then scan again")
-            return false
+            return nil
         }
         guard let parsed = ProvisioningLink(url: link, deviceId: deviceId) else {
-            log.error("Ignoring unusable link \(link.absoluteString, privacy: .public)")
+            // The link may hold an invite token: only where it points is public.
+            log.error("Ignoring unusable link \(Self.publicPart(of: link.absoluteString), privacy: .public)")
             showBanner("Not a valid connect code")
-            return false
+            return nil
         }
-        log.info("Provisioned control \(parsed.controlUrl, privacy: .public)")
-        if Self.server(of: parsed.controlUrl) != Self.server(of: url) {
+        return parsed
+    }
+
+    /// A link for another control server than the current one, or when none
+    /// is set, asks before joining (docs/UI_DESIGN.md, "Joining a hub").
+    func needsConfirmation(_ link: ProvisioningLink) -> Bool {
+        !ProvisioningLink.sameServer(link.controlUrl, url)
+    }
+
+    /// Saves the link's control and SRT URLs and connects. While live, the
+    /// SRT URL applies on the next Go Live.
+    func join(_ parsed: ProvisioningLink, controller: StreamController) {
+        log.info("Provisioned control \(Self.publicPart(of: parsed.controlUrl), privacy: .public)")
+        if !ProvisioningLink.sameServer(parsed.controlUrl, url) {
             // Another server is another production.
             newProduction()
         }
@@ -298,7 +312,16 @@ final class RemoteControl: ObservableObject {
         if capture != nil {
             reconnect()
         }
-        return true
+    }
+
+    /// Scheme, host and port of a URL: safe to log publicly (the path and
+    /// query may hold a token).
+    private static func publicPart(of url: String) -> String {
+        guard let components = URLComponents(string: url) else {
+            return "<unparsable>"
+        }
+        let port = components.port.map { ":\($0)" } ?? ""
+        return "\(components.scheme ?? "")://\(components.host ?? "")\(port)"
     }
 
     // MARK: Events
@@ -441,7 +464,6 @@ final class RemoteControl: ObservableObject {
                 cameraSet[key] = value
             }
         }
-        shading.hubSet(cameraSet.keys)
         guard !cameraSet.isEmpty, let capture else {
             if !cameraSet.isEmpty {
                 errors.append("Camera not ready")
@@ -450,8 +472,10 @@ final class RemoteControl: ObservableObject {
             publishState()
             return
         }
-        capture.controls.apply(cameraSet) { [weak self] cameraErrors in
+        capture.controls.apply(cameraSet) { [weak self] cameraErrors, applied in
             Task { @MainActor in
+                // Only what took effect flashes in the values row.
+                self?.shading.hubSet(applied)
                 self?.sendResult(id: id, errors: errors + cameraErrors)
             }
         }
@@ -635,10 +659,6 @@ final class RemoteControl: ObservableObject {
 
     // MARK: Production
 
-    private static func server(of url: String) -> String? {
-        URL(string: url.trimmingCharacters(in: .whitespaces)).map { "\($0.host ?? ""):\($0.port ?? 0)" }
-    }
-
     /// A new control server, or none: the phone's own production applies
     /// until a hub sends one.
     private func newProduction() {
@@ -681,7 +701,7 @@ final class RemoteControl: ObservableObject {
     /// The operator sets values (modes, ISO, temperature, ...). The hub may
     /// change them too; the last change wins.
     func localSet(_ values: [String: JSONValue]) {
-        capture?.controls.apply(values) { [weak self] errors in
+        capture?.controls.apply(values) { [weak self] errors, _ in
             // Clamping is expected from the operator's controls; failures not.
             guard let error = errors.first(where: { !$0.contains("clamped") }) else {
                 return

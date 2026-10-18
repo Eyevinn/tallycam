@@ -5,14 +5,13 @@ import Foundation
 #endif
 
 /// The camera's exposure, colour and focus as the operator's screen shows
-/// them (docs/SHADING.md): the control values and descriptors, and the latest
-/// image statistics. The operator and the hub may both change them at any
+/// them (docs/SHADING.md): the control values and descriptors, and the
+/// exposure warning from the image statistics. The operator and the hub may both change them at any
 /// time; the last change wins. `RemoteControl` feeds it; the views read it.
 @MainActor
 final class Shading: ObservableObject {
     /// `too_dark` or `clipping`, from the image statistics.
     @Published private(set) var exposureWarning: String?
-    @Published private(set) var stats: ImageStatsResult?
     /// The camera's control values and descriptors, for the operator's
     /// group controls (refreshed with every `state`).
     @Published private(set) var values: [String: JSONValue] = [:]
@@ -50,6 +49,12 @@ final class Shading: ObservableObject {
         }
     }
 
+    /// When the running flashes end, in order: the values row redraws then
+    /// (and not at all while nothing flashes).
+    func flashEnds(now: Date = .now) -> [Date] {
+        hubSetAt.values.map { $0.addingTimeInterval(Self.flashTime) }.filter { $0 > now }.sorted()
+    }
+
     /// The hub set one of these controls within `flashTime`.
     func hubFlash(_ ids: [String], now: Date = .now) -> Bool {
         ids.contains { hubSetAt[$0].map { now.timeIntervalSince($0) < Self.flashTime } ?? false }
@@ -64,7 +69,6 @@ final class Shading: ObservableObject {
     // MARK: Statistics
 
     func update(stats: ImageStatsResult) {
-        self.stats = stats
         if stats.warning != exposureWarning {
             exposureWarning = stats.warning
         }

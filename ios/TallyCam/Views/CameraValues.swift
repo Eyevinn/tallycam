@@ -30,8 +30,8 @@ struct CameraValuesRow: View {
     }
 
     var body: some View {
-        // Redrawn while a flash runs, to end it.
-        TimelineView(.periodic(from: .now, by: 0.25)) { context in
+        // Redrawn when a flash ends; a new flash redraws through `shading`.
+        TimelineView(.explicit(shading.flashEnds())) { context in
             let items = items(now: context.date)
             ViewThatFits(in: .horizontal) {
                 line(items.all)

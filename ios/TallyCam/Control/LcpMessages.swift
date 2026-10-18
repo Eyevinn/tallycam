@@ -62,7 +62,8 @@ enum JSONValue: Codable, Equatable, Sendable {
     var string: String? {
         switch self {
         case let .string(value): value
-        case let .number(value): value.rounded() == value ? String(Int(value)) : String(value)
+        // Int(exactly:): Int(Double) traps outside Int's range ({"type": 1e19}).
+        case let .number(value): Int(exactly: value).map(String.init) ?? String(value)
         default: nil
         }
     }

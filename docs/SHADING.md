@@ -16,7 +16,8 @@ The phone has per-control modes (`exposure_mode`, `wb_mode`, `focus_mode`:
 auto, locked, manual). **The shader (hub page) and the camera operator
 (phone) can both change exposure, colour and focus at any time. Nothing is
 locked either way: the last write wins** (D13). Both see the values the
-other set: the phone in its readout and controls, the hub from `state`.
+other set: the phone in its values row (a value the hub just set flashes
+cyan) and its adjust control, the hub from `state`.
 
 ## Control groups
 
@@ -41,7 +42,7 @@ Not in any group:
 
 Each group is in one of the descriptor's modes, set by whoever wrote last:
 
-| Mode | Values from | Phone readout |
+| Mode | Values from | Phone values row |
 |---|---|---|
 | **auto** (default) | the phone's auto exposure (the core's auto ISO loop at the production shutter, see "Shutter"), auto white balance, autofocus | plain |
 | **locked** | held where auto left them | yellow |
@@ -164,18 +165,20 @@ Resolution, frame rate, codec and shutter cannot be changed while live:
 
 ## Phone UI (camera operator)
 
-The current minimal view stays. Additions, each one toggleable where it sits
-on the picture:
+The shooting screen is specified in docs/UI_DESIGN.md (one design for iOS and
+Android; differences in docs/APPS.md). What it does for shading:
 
-| Addition | Notes |
+| Part | Notes |
 |---|---|
-| **Readout** | One line of the current values: `1080p30 · ISO 26 · 1/100 · +0.3 EV · 5200 K · AF`. A manual or locked group's value in yellow, auto plain. Always visible, also with the screen locked |
-| **Grid, horizon, frame guides** | Rule of thirds; a horizon line from Core Motion (gravity vector), green when level; 16:9 action and title safe areas, and 4:3 and 9:16 centre-cut guides. Drawn over the preview only, never in the stream |
-| **Zoom and lens** | A vertical rocker at the edge for smooth zoom (speed by deflection, for a usable zoom move on air), lens buttons (0.5×, 1×, 2×/3×/5×, those that exist), pinch as well |
-| **Focus** | Tap to focus (exists), long press to lock focus (and `LOCKED` on the chip), focus peaking |
+| **Values row** | Under the status line, always shown, also with the screen locked: `1080p30 │ ISO 26 │ 1/100 │ +0.3 EV │ 5200 K +4 │ AF`. A manual or locked group's value is yellow, auto white. Each value is a button that picks the group the adjust control changes (the format opens Settings) |
+| **Adjust control** | At the right edge, always there, mirroring zoom on the left: an A / M switch (A / L where the group is locked), a rocker like the zoom rocker, the value. Exposure ramps `ev_bias` in auto and ISO in manual; colour `wb_temperature` (or `wb_tint`); focus `focus_position`. Moving colour or focus in auto switches it to manual. A long press on colour's switch is `wb_one_shot` |
+| **Hub changes** | A value the hub just set flashes cyan for a second, so the operator sees the shader act; nothing else changes on the phone (D13) |
+| **Exposure warning** | `CLIP` (red) or `DARK` (orange) after ISO, from the image statistics (below). The auto ISO limits (`TooDark`, `TooBright`) are a badge on the hub |
+| **Grid, horizon, frame guides** | Rule of thirds; a horizon line from the gravity sensor, green when level; 16:9 action and title safe areas, and 4:3 and 9:16 centre-cut guides. Drawn over the preview only, never in the stream |
+| **Zoom and lens** | A vertical rocker at the left edge for smooth zoom (speed by deflection, for a usable zoom move on air), lens buttons above it (those that exist) |
+| **Focus** | Tap to focus, long press to lock focus there (`AF-L` in the values row), focus peaking |
 | **Audio meter** | A small peak/RMS meter of the microphone, with a clip marker |
-| **Exposure warning** | "Too dark" or "Clipping" from the image statistics (below) and the auto ISO limits (`TooDark`, `TooBright`) |
-| **Screen lock** | One button locks all touch input except the unlock gesture (a slide). Suggested at Go Live. It blocks touches only: remote control, tally and the stream keep running. Guided Access is still the recommendation against leaving the app |
+| **Screen lock** | One button locks all touch input except a slide to unlock; the rockers hide. Suggested at Go Live. It blocks touches only: remote control, tally and the stream keep running. Guided Access is still the recommendation against leaving the app |
 
 Focus peaking needs the frames, and the preview today is a capture preview
 layer that the app cannot draw into. The light approach: an overlay drawn

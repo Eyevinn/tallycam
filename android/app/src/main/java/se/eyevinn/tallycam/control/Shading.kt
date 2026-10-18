@@ -31,7 +31,21 @@ class Shading {
     var format by mutableStateOf("")
         private set
 
+    /**
+     * When the hub last changed each control (by id, `SystemClock.uptimeMillis`):
+     * the values row flashes those for [HUB_FLASH_MS]. The hub's `set`
+     * only, never the operator's or the camera's own (auto) changes.
+     */
+    var hubChanged by mutableStateOf<Map<String, Long>>(emptyMap())
+        private set
+
     private var valuesText = ""
+
+    fun markHubChange(ids: Collection<String>) {
+        if (ids.isEmpty()) return
+        val now = android.os.SystemClock.uptimeMillis()
+        hubChanged = hubChanged.filterValues { now - it < HUB_FLASH_MS } + ids.associateWith { now }
+    }
 
     fun updateFormat(height: Int, frameRate: Int) {
         val text = (if (height >= 2160) "4K" else "${height}p") + frameRate
@@ -54,16 +68,11 @@ class Shading {
     }
 
     companion object {
-        /** The mode control of each group the operator's chips show. */
+        /** The mode control of each shading group. */
         val MODE_CONTROLS = listOf("exposure" to "exposure_mode", "white_balance" to "wb_mode", "focus" to "focus_mode")
 
-        /** Short name on the phone's chips. */
-        fun shortName(group: String): String = when (group) {
-            "exposure" -> "EXP"
-            "white_balance" -> "WB"
-            "focus" -> "FOC"
-            else -> group.uppercase()
-        }
+        /** How long a value the hub changed flashes. */
+        const val HUB_FLASH_MS = 1000L
     }
 }
 

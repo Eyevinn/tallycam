@@ -10,9 +10,6 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -56,7 +53,6 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -81,8 +77,6 @@ class Aids(context: Context) {
     var safeAreas by mutableStateOf(prefs.getBoolean("safeAreas", false)); private set
     var centreCuts by mutableStateOf(prefs.getBoolean("centreCuts", false)); private set
     var peaking by mutableStateOf(prefs.getBoolean("peaking", false)); private set
-    /** The camera values line at the bottom (on by default). */
-    var readout by mutableStateOf(prefs.getBoolean("readout", true)); private set
 
     val anyOn get() = grid || horizon || safeAreas || centreCuts || peaking
 
@@ -94,27 +88,12 @@ class Aids(context: Context) {
             "safeAreas" -> safeAreas = on
             "centreCuts" -> centreCuts = on
             "peaking" -> peaking = on
-            "readout" -> readout = on
         }
     }
 
     companion object {
         /** Focus peaking edges: one colour, red, as most camera monitors. */
         val PEAKING_TINT = Color(1f, 0.15f, 0.1f)
-    }
-}
-
-/** A small round translucent button face, shared by the operator's chrome. */
-@Composable
-fun ChromeButton(label: String, active: Boolean = false, onClick: () -> Unit) {
-    Box(
-        Modifier.size(46.dp).background(Color.Black.copy(alpha = 0.35f), CircleShape)
-            .border(1.dp, Color.White.copy(alpha = 0.25f), CircleShape)
-            .clickable(onClick = onClick),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(label, color = if (active) Color(0xFFFFD60A) else Color.White.copy(alpha = 0.85f),
-             fontSize = 18.sp, fontWeight = FontWeight.Medium)
     }
 }
 
@@ -139,8 +118,6 @@ fun AidsMenu(aids: Aids) {
             item("centreCuts", "Centre cuts (4:3, 9:16)", aids.centreCuts)
             HorizontalDivider()
             item("peaking", "Focus peaking (sharp edges in red)", aids.peaking)
-            HorizontalDivider()
-            item("readout", "Camera values", aids.readout)
         }
     }
 }
@@ -274,95 +251,6 @@ fun PeakingOverlay(model: AppModel, modifier: Modifier = Modifier) {
 }
 
 /**
- * A vertical zoom rocker: push up to zoom in, down to zoom out; how far
- * sets the speed, for a usable zoom move on air. Letting go stops the zoom
- * where it is.
- */
-@Composable
-fun ZoomRocker(onRate: (Double) -> Unit) {
-    var sentStep by remember { mutableIntStateOf(0) }
-    Rocker("T", "W") { d ->
-        val step = (d * STEPS).roundToInt()
-        if (step == sentStep) return@Rocker
-        sentStep = step
-        val share = abs(step).toDouble() / STEPS
-        onRate(if (step == 0) 0.0 else (if (step > 0) 1 else -1) * MAX_RATE * share * share)
-    }
-}
-
-/**
- * A vertical rocker: drag the knob up or down; [onDeflection] gets -1..1
- * (up positive) while held and 0 on release, when the knob springs back.
- * The zoom rocker and the operator's exposure, colour and focus controls.
- */
-@Composable
-fun Rocker(top: String, bottom: String, height: androidx.compose.ui.unit.Dp = 180.dp, onDeflection: (Float) -> Unit) {
-    val travel = (height - 56.dp) / 2
-    var deflection by remember { mutableFloatStateOf(0f) }
-    val shown by animateFloatAsState(deflection, label = "rocker")
-    val report = androidx.compose.runtime.rememberUpdatedState(onDeflection)
-    Box(
-        Modifier.width(46.dp).height(height).background(Color.Black.copy(alpha = 0.35f), CircleShape)
-            .pointerInput(Unit) {
-                val travelPx = travel.toPx()
-                var dy = 0f
-                fun send(d: Float) {
-                    deflection = d
-                    report.value(d)
-                }
-                detectDragGestures(
-                    onDragStart = { dy = 0f },
-                    onDragEnd = { send(0f) },
-                    onDragCancel = { send(0f) },
-                ) { change, amount ->
-                    change.consume()
-                    dy += amount.y
-                    send((-dy / travelPx).coerceIn(-1f, 1f))
-                }
-            },
-        contentAlignment = Alignment.Center,
-    ) {
-        Column(Modifier.fillMaxSize().padding(vertical = 8.dp), horizontalAlignment = Alignment.CenterHorizontally,
-               verticalArrangement = Arrangement.SpaceBetween) {
-            Text(top, color = Color.White.copy(alpha = 0.6f), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-            Text(bottom, color = Color.White.copy(alpha = 0.6f), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-        }
-        Box(Modifier.offset { IntOffset(0, (-shown * travel.toPx()).roundToInt()) }.size(30.dp)
-                .background(Color.White.copy(alpha = if (deflection == 0f) 0.7f else 0.95f), CircleShape))
-    }
-}
-
-private const val STEPS = 10
-/** Doublings per second at full deflection; speed rises with the square of the deflection. */
-private const val MAX_RATE = 2.0
-
-/** One button per lens the camera has, longest on top; the active one highlighted. */
-@Composable
-fun LensButtons(model: AppModel) {
-    val lenses = model.camera.lenses
-    if (lenses.size < 2) return
-    var current by remember { mutableStateOf(model.camera.cameraId) }
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        for (lens in lenses.reversed()) {
-            val label = when (lens.key) {
-                "ultra_wide" -> "0.5×"
-                "wide" -> "1×"
-                else -> "TELE"
-            }
-            Box(
-                Modifier.size(46.dp).background(Color.Black.copy(alpha = 0.35f), CircleShape)
-                    .border(1.dp, Color.White.copy(alpha = 0.25f), CircleShape)
-                    .clickable { model.selectLens(lens.key); current = lens.id },
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(label, color = if (lens.id == current) Color(0xFFFFD60A) else Color.White.copy(alpha = 0.85f),
-                     fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
-            }
-        }
-    }
-}
-
-/**
  * A small vertical microphone meter, as on iOS: RMS as the bar, the peak as
  * a line falling back slowly, and a clip marker that holds red for a second
  * after a peak above -1 dBFS. Shown while the microphone is open (live).
@@ -417,25 +305,21 @@ private fun position(db: Float) = ((db - FLOOR_DB) / -FLOOR_DB).coerceIn(0f, 1f)
 private fun color(db: Float) = if (db > -6) Color.Red else if (db > -18) Color(0xFFFFD60A) else Color(0xFF34C759)
 
 /**
- * Over the whole screen while it is locked: swallows every touch except the
- * slide to unlock. Remote control, tally and the stream keep running; only
- * touches are blocked (docs/SHADING.md).
+ * Under the chrome while the screen is locked: swallows every touch on the
+ * picture (no tap to focus). Remote control, tally and the stream keep
+ * running; only touches are blocked (docs/SHADING.md). The chrome itself
+ * takes no touches either ([touchable]) but the slide to unlock.
  */
 @Composable
-fun ScreenLockLayer(onUnlock: () -> Unit) {
-    Box(
-        // Hit, so nothing below gets the touches; the slider inside still does.
-        Modifier.fillMaxSize().pointerInput(Unit) {
-            awaitPointerEventScope { while (true) awaitPointerEvent() }
-        },
-        contentAlignment = Alignment.BottomCenter,
-    ) {
-        SlideToUnlock(onUnlock, Modifier.padding(bottom = 18.dp))
-    }
+fun ScreenLockShield() {
+    Box(Modifier.fillMaxSize().pointerInput(Unit) {
+        awaitPointerEventScope { while (true) awaitPointerEvent().changes.forEach { it.consume() } }
+    })
 }
 
+/** Drag the knob to the end to unlock the screen. */
 @Composable
-private fun SlideToUnlock(onUnlock: () -> Unit, modifier: Modifier) {
+fun SlideToUnlock(onUnlock: () -> Unit, modifier: Modifier = Modifier) {
     val width = 240.dp
     val knob = 46.dp
     var offset by remember { mutableFloatStateOf(0f) }

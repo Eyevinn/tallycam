@@ -51,7 +51,10 @@ class AppModel(private val context: Context) : LcpClient.Listener, LiveStream.Li
 
     val settings = Settings(context)
     val camera = CameraCapture(context)
-    private val cameraControls = CameraControls(camera, { streamState != LiveStream.State.IDLE },
+    // The stream's own state, set at once in start and stop: Compose's
+    // `streamState` follows a post later, and a production in between would
+    // be held for a stream that already stopped.
+    private val cameraControls = CameraControls(camera, { stream.state != LiveStream.State.IDLE },
                                                 { settings.mainsHz = it; ownMainsHz = it })
     private val stream = LiveStream(this)
     val shading = Shading()
@@ -502,6 +505,7 @@ class AppModel(private val context: Context) : LcpClient.Listener, LiveStream.Li
 
     private fun applySet(id: Any?, values: JSONObject) {
         val errors = mutableListOf<String>()
+        val applied = mutableListOf<String>()
         // Modes before the values that depend on them, as on iOS, so
         // {"exposure_mode": "manual", "iso": 400} works in one message, and
         // `live` last, so it starts with the URL and codecs of the same set.
@@ -569,8 +573,10 @@ class AppModel(private val context: Context) : LcpClient.Listener, LiveStream.Li
                 }
                 else -> if (cameraControls.handles(key)) cameraControls.apply(key, value) else "Unknown control $key"
             }
-            error?.let { errors += "$key: $it" }
+            if (error == null) applied += key else errors += "$key: $error"
         }
+        // The operator's screen flashes what the hub changed.
+        shading.markHubChange(applied)
         id?.let { result(it, errors) }
         publishState()
     }

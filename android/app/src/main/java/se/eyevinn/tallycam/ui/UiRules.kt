@@ -118,8 +118,27 @@ fun timecode(utcNs: Long, utcOffsetSeconds: Long, fps: Int, synced: Boolean): St
     return hms + fmt(":%02d", frame)
 }
 
-/** On a narrow screen the values row leaves these groups out, in this order; it never wraps. */
-val VALUE_DROP_ORDER = listOf("focus", "white_balance")
+/**
+ * On a narrow screen the values row leaves these out, in this order: the
+ * focus value, white balance, the compensation, the shutter; it never wraps.
+ */
+val VALUE_DROP_ORDER = listOf("focus", "white_balance", "ev_bias", "shutter")
+
+/**
+ * The landscape top bar's order (docs/UI_DESIGN.md): focus, white balance,
+ * the chip's ON AIR / PREVIEW, the compensation, the shutter; only then is
+ * the name cut with an ellipsis.
+ */
+val TOP_BAR_DROP_ORDER = listOf("focus", "white_balance", "tally_label", "ev_bias", "shutter")
+
+/** Which of [VALUE_DROP_ORDER] a value is, if any. */
+fun ValueItem.dropKey(): String? = when {
+    group == "focus" -> "focus"
+    group == "white_balance" -> "white_balance"
+    "ev_bias" in ids -> "ev_bias"
+    "shutter" in ids -> "shutter"
+    else -> null
+}
 
 /** The mode control of a shading group. */
 fun modeKey(group: String): String = Shading.MODE_CONTROLS.first { it.first == group }.second

@@ -54,8 +54,9 @@ Landscape on a phone, the main case:
 **Landscape: one top bar.** Rows 1 and 2 merge into a single bar so the
 picture gets the room: stream state left, the name chip (in its tally
 colour) and the values centre, the dots and the gear right. When it does
-not fit, the values drop focus, then white balance, then the name chip
-shortens to the name alone (the tally border still shows tally).
+not fit, they go in this order: focus, white balance, the chip's ON AIR /
+PREVIEW (the tally border still shows tally), the compensation, the
+shutter; only then is the name cut with an ellipsis.
 
 Portrait: the same zones. Rows 1 and 2 stack at the top (the tally chip may
 take its own line) and the side controls sit in the bottom corners, mirror
@@ -68,11 +69,15 @@ images of each other. Tools and the live button: see 6.
    matters, an orientation-pending icon, the Settings gear. Next to the clock
    dot a `GL` badge while genlock is on: green when locked, orange while
    locking, red in free run (no trusted time); hidden when genlock is off.
-   Next to the dots a time-of-day timecode, `14:51:46:12` (hours, minutes, seconds, frames at
-   the stream rate), from the phone's disciplined clock in local time, in
+   A time-of-day timecode, `14:51:46:12` (hours, minutes, seconds, frames
+   at the stream rate), from the phone's disciplined clock in local time, in
    tabular digits: white while the clock is healthy, orange when degraded,
-   dim with `--` frames when it is not synchronised. The same timecode on
-   every camera, so two phones in shot can be compared at a glance.
+   dim with `--` frames when it is not synchronised. It is not in the top
+   bar (too crowded there) but in its own small badge at the bottom centre,
+   as on a camera monitor: between the side controls on a landscape phone,
+   just above them in portrait, beside the slide to unlock on a tablet. The
+   same timecode on every camera, so two phones in shot can be compared at a
+   glance.
 2. **Values row.** `format │ ISO │ shutter │ EV │ WB │ focus`, each a button
    (see "Values").
 3. **Message slot.** Centred under the values row: the yellow banner (8 s)

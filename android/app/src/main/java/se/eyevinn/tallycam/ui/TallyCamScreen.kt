@@ -285,10 +285,14 @@ private fun BoxScope.ShootingScreen(model: AppModel, onScan: () -> Unit) {
                     Box(Modifier.align(Alignment.TopCenter).padding(horizontal = Chrome.liveButton + Chrome.gap)) { messages() }
                     Box(Modifier.align(Alignment.BottomStart)) { side(true) }
                     Box(Modifier.align(Alignment.BottomEnd)) { side(false) }
-                    // The slide to unlock (only while locked) at the bottom edge between
-                    // the side controls; a portrait phone has no room there, so above them.
-                    Box(Modifier.align(Alignment.BottomCenter).padding(bottom = if (landscape) 0.dp else SIDE_HEIGHT + Chrome.zoneGap)) {
+                    // The timecode at the bottom centre between the side controls, the
+                    // slide to unlock (only while locked) over it; a portrait phone has
+                    // no room between them, so above them.
+                    Column(Modifier.align(Alignment.BottomCenter)
+                               .padding(bottom = if (landscape) 0.dp else SIDE_HEIGHT + Chrome.valueHeight + Chrome.gap * 2),
+                           horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(Chrome.gap)) {
                         unlock()
+                        Timecode(model)
                     }
                 }
             } else if (landscape) {
@@ -307,7 +311,10 @@ private fun BoxScope.ShootingScreen(model: AppModel, onScan: () -> Unit) {
                            verticalArrangement = Arrangement.spacedBy(Chrome.zoneGap)) {
                         Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.TopCenter) { messages() }
                         Box(Modifier.height(Chrome.liveButton).fillMaxWidth(), contentAlignment = Alignment.BottomCenter) {
-                            unlock()
+                            Row(horizontalArrangement = Arrangement.spacedBy(Chrome.gap), verticalAlignment = Alignment.CenterVertically) {
+                                unlock()
+                                Timecode(model)
+                            }
                             AudioMeter(Modifier.align(Alignment.BottomEnd))
                         }
                     }
@@ -325,7 +332,11 @@ private fun BoxScope.ShootingScreen(model: AppModel, onScan: () -> Unit) {
                     SideSlot(leading = false, Modifier.fillMaxSize()) { side(false) }
                     Box(Modifier.align(Alignment.TopCenter).padding(horizontal = Chrome.control + Chrome.gap)) { messages() }
                 }
-                Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) { unlock() }
+                Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally,
+                       verticalArrangement = Arrangement.spacedBy(Chrome.gap)) {
+                    unlock()
+                    Timecode(model)
+                }
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom) {
                     Box(Modifier.touchable(screenLocked)) { tools(false) }
                     Spacer(Modifier.weight(1f))
@@ -574,7 +585,8 @@ private fun StatusStrip(model: AppModel, centre: (@Composable () -> Unit)?, onSe
         }
         Spacer(Modifier.weight(1f))
         centre?.let {
-            Box(Modifier.weight(6f, fill = false)) { it() }
+            // Nearly all the room between the state and the dots.
+            Box(Modifier.weight(30f, fill = false)) { it() }
             Spacer(Modifier.weight(1f))
         }
         val link = when (model.link) {
@@ -582,7 +594,6 @@ private fun StatusStrip(model: AppModel, centre: (@Composable () -> Unit)?, onSe
             AppModel.Link.CONNECTING -> Chrome.orange
             AppModel.Link.NOT_SET_UP -> Color.White.copy(alpha = 0.4f)
         }
-        Timecode(model, clockHealth)
         Box(Modifier.size(9.dp).background(link, CircleShape).semantics { contentDescription = "Control hub link" })
         val clock = when (clockHealth) {
             "healthy" -> Chrome.green
@@ -590,6 +601,20 @@ private fun StatusStrip(model: AppModel, centre: (@Composable () -> Unit)?, onSe
             else -> Color(0xFFFF453A)
         }
         Box(Modifier.size(9.dp).background(clock, CircleShape).semantics { contentDescription = "Clock ${clockHealth ?: "not running"}" })
+        // Genlock while it is on (docs/UI_DESIGN.md, zone 1): green locked,
+        // orange locking, red in free run; never dropped.
+        if (model.shading.values.optBoolean("genlock")) {
+            val state = remember(now) { model.genlockState()?.first }
+            val tone = when (state) {
+                "locked" -> Chrome.green
+                "acquiring" -> Chrome.orange
+                else -> Color(0xFFFF453A)
+            }
+            Text("GL", color = tone, fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1, softWrap = false,
+                 style = Chrome.shadowed,
+                 modifier = Modifier.border(1.dp, tone, RoundedCornerShape(4.dp)).padding(horizontal = 4.dp)
+                     .semantics { contentDescription = "Genlock ${state ?: "free run"}" })
+        }
         battery?.let { label("$it%", if (it < 20) Color(0xFFFF453A) else dim) }
         Box(Modifier.size(width = 36.dp, height = 30.dp).clickable(onClick = onSettings)
                 .semantics { contentDescription = "Settings" }, contentAlignment = Alignment.Center) {
@@ -819,19 +844,24 @@ private fun EdgeTab(group: String, leading: Boolean, hidden: Boolean, modifier: 
  */
 @Composable
 private fun TopBarCentre(chip: @Composable () -> Unit, shortChip: @Composable () -> Unit, values: @Composable (Int) -> Unit) {
-    Layout({ chip(); shortChip(); values(0); values(1); values(2) }) { measurables, constraints ->
+    // TOP_BAR_DROP_ORDER: the values without focus, then without white
+    // balance; the chip without its label; then without EV, without the
+    // shutter; at last the name cut with an ellipsis (a second copy of the
+    // short chip, measured to the room left).
+    Layout({ chip(); shortChip(); shortChip(); (0..4).forEach { values(it) } }) { measurables, constraints ->
         val gap = Chrome.gap.roundToPx()
         val free = constraints.copy(minWidth = 0, minHeight = 0, maxWidth = androidx.compose.ui.unit.Constraints.Infinity)
         val chipFull = measurables[0].measure(free)
-        val values = (2..4).map { measurables[it].measure(free) }
-        // The full chip with all values, without focus, without white balance;
-        // then the name alone, cut to the room that is left.
-        val v = values.firstOrNull { chipFull.width + gap + it.width <= constraints.maxWidth }
-        val chip = if (v != null) chipFull else {
-            val room = (constraints.maxWidth - gap - values.last().width).coerceAtLeast(0)
-            measurables[1].measure(free.copy(maxWidth = room))
+        val chipShort = measurables[1].measure(free)
+        val values = (3..7).map { measurables[it].measure(free) }
+        fun fits(chipWidth: Int, v: Int) = chipWidth + gap + values[v].width <= constraints.maxWidth
+        val full = (0..2).firstOrNull { fits(chipFull.width, it) }
+        val short = (2..4).firstOrNull { fits(chipShort.width, it) }
+        val (chip, shown) = when {
+            full != null -> chipFull to values[full]
+            short != null -> chipShort to values[short]
+            else -> measurables[2].measure(free.copy(maxWidth = (constraints.maxWidth - gap - values[4].width).coerceAtLeast(0))) to values[4]
         }
-        val shown = v ?: values.last()
         val height = maxOf(chip.height, shown.height)
         val width = minOf(constraints.maxWidth, chip.width + gap + shown.width)
         layout(width, height) {
@@ -872,18 +902,21 @@ private fun SideSlot(leading: Boolean, modifier: Modifier, content: @Composable 
 private const val SIDE_CENTRE = 0.65f
 
 /**
- * The time-of-day timecode next to the dots (docs/UI_DESIGN.md, zone 1):
- * "14:51:46:12" from the disciplined clock in local time, frames at the
- * stream rate, redrawn every frame; white while the clock is healthy,
- * orange when degraded, dim with "--" frames while not synchronised. The
- * same on every camera, so two phones in shot can be compared at a glance.
+ * The time-of-day timecode (docs/UI_DESIGN.md): "14:51:46:12" from the
+ * disciplined clock in local time, frames at the stream rate, redrawn every
+ * frame, in its own small badge at the bottom centre, as on a camera
+ * monitor; white while the clock is healthy, orange when degraded, dim with
+ * "--" frames while not synchronised. The same on every camera, so two
+ * phones in shot can be compared at a glance.
  */
 @Composable
-private fun Timecode(model: AppModel, health: String?) {
+private fun Timecode(model: AppModel, modifier: Modifier = Modifier) {
     val fps = model.camera.settings.frameRate.coerceAtLeast(1)
     var text by remember { mutableStateOf("") }
     var synced by remember { mutableStateOf(false) }
+    var health by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(fps) {
+        var frames = 0
         while (true) {
             val now = runCatching { se.eyevinn.tallycam.core.ClockMapping.at(se.eyevinn.tallycam.core.Hot.hostNowNs()) }.getOrNull()
             // Without a running clock, the phone's own time, shown as not synchronised.
@@ -891,14 +924,21 @@ private fun Timecode(model: AppModel, health: String?) {
             synced = now?.synced == true
             val offset = java.util.TimeZone.getDefault().getOffset(utcNs / 1_000_000L) / 1000L
             text = timecode(utcNs, offset, fps, synced)
+            // The clock's health about once a second.
+            if (frames++ % fps == 0) health = model.clockSummary()?.health
             delay(1000L / fps)
         }
     }
     val color = when {
-        !synced -> Color.White.copy(alpha = 0.45f)
+        !synced -> Color.White.copy(alpha = 0.5f)
         health == "degraded" -> Chrome.orange
         else -> Color.White
     }
-    Text(text, color = color, fontSize = 12.sp, style = Chrome.tabular, fontWeight = FontWeight.Medium, maxLines = 1,
-         softWrap = false, modifier = Modifier.semantics { contentDescription = "Timecode $text" })
+    Box(modifier.height(Chrome.rowHeight - 6.dp).background(Chrome.surface, RoundedCornerShape(Chrome.cellRadius))
+            .border(1.dp, Chrome.border, RoundedCornerShape(Chrome.cellRadius)).padding(horizontal = 10.dp)
+            .semantics { contentDescription = "Timecode $text" },
+        contentAlignment = Alignment.Center) {
+        Text(text, color = color, fontSize = 15.sp, style = Chrome.tabular, fontWeight = FontWeight.SemiBold, maxLines = 1,
+             softWrap = false)
+    }
 }

@@ -77,7 +77,10 @@ class UiVectorsTest {
     @Test
     fun dropOrder() {
         val order = vectors.getJSONArray("drop_order")
-        assertEquals((0 until order.length()).map { order.getString(it) }, VALUE_DROP_ORDER)
+        // The top bar's order; the values row's is the same without the chip's label.
+        val list = (0 until order.length()).map { order.getString(it) }
+        assertEquals(list, se.eyevinn.tallycam.ui.TOP_BAR_DROP_ORDER)
+        assertEquals(list - "tally_label", VALUE_DROP_ORDER)
     }
 
     @Test

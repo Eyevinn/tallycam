@@ -60,9 +60,9 @@ private val HUB_CYAN = Color(0xFF64D2FF)
 @Composable
 fun CameraValuesRow(model: AppModel, onSides: Collection<String>, onSelect: (String) -> Unit, onFormat: () -> Unit,
                     modifier: Modifier = Modifier, bare: Boolean = false, dropped: Int = 0) {
-    // [dropped]: groups left out up front, in the drop order (the landscape top bar picks how many fit).
+    // [dropped]: values left out up front, in the drop order (the landscape top bar picks how many fit).
     val gone = VALUE_DROP_ORDER.take(dropped)
-    val items = valueItems(model.shading.values, model.shading.format, model.shading.exposureWarning).filter { it.group !in gone }
+    val items = valueItems(model.shading.values, model.shading.format, model.shading.exposureWarning).filter { it.dropKey() !in gone }
     val descriptors = model.shading.descriptors
     // What the hub changed in the last second, until the flash is over.
     val hubChanged = model.shading.hubChanged
@@ -77,8 +77,8 @@ fun CameraValuesRow(model: AppModel, onSides: Collection<String>, onSelect: (Str
     // In the landscape top bar, on the bar's own background.
     Box(modifier.height(Chrome.rowHeight).then(if (bare) Modifier else Modifier.background(Chrome.surface, CircleShape).border(1.dp, Chrome.border, CircleShape))
             .padding(horizontal = 4.dp), contentAlignment = Alignment.Center) {
-        // Focus is last; colour is dropped after it.
-        val drop = VALUE_DROP_ORDER.mapNotNull { group -> items.indexOfFirst { it.group == group }.takeIf { it >= 0 } }
+        // Left out in VALUE_DROP_ORDER where the line is too short.
+        val drop = VALUE_DROP_ORDER.mapNotNull { key -> items.indexOfFirst { it.dropKey() == key }.takeIf { it >= 0 } }
         DroppingRow(drop) {
             items.forEachIndexed { index, item ->
                 val enabled = item.group == null || modeKey(item.group) in descriptors

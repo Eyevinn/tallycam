@@ -103,7 +103,7 @@
       ]
     }
   ],
-  "drop_order": ["focus", "white_balance"],
+  "drop_order": ["focus", "white_balance", "tally_label", "ev_bias", "shutter"],
   "adjust_value": [
     { "group": "exposure", "tint": false, "values": { "exposure_mode": "auto", "ev_bias": 0.3 }, "expect": "+0.3 EV" },
     { "group": "exposure", "tint": false, "values": { "exposure_mode": "auto" }, "expect": "+0.0 EV" },

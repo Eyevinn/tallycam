@@ -948,3 +948,71 @@ async fn junk_before_hello_closes_the_device_socket() {
     ws.send(Message::Text("not json".into())).await.unwrap();
     expect_closed(&mut ws).await;
 }
+
+/// A raw device without a key: says hello, returns its socket.
+async fn raw_device(addr: SocketAddr, id: &str) -> Ws {
+    let mut ws = connect(addr, "/lcp/v0/device").await;
+    send(
+        &mut ws,
+        json!({"type":"hello","protocol":3,"device":{"id":id,"name":id},"controls":[],"commands":[]}),
+    )
+    .await;
+    ws
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn watch_tags_and_order_end_to_end() {
+    let addr = start_hub().await;
+    let mut d1 = raw_device(addr, "d1").await;
+    let mut d2 = raw_device(addr, "d2").await;
+    for d in [&mut d1, &mut d2] {
+        let p = wait_for(d, 3, "preview off", |v| v["type"] == "preview").await;
+        assert_eq!(p["enabled"], false);
+    }
+
+    let mut a = connect(addr, "/lcp/v0/control").await;
+    wait_for(&mut a, 3, "snapshot", |v| v["type"] == "snapshot").await;
+    for d in [&mut d1, &mut d2] {
+        let p = wait_for(d, 3, "preview on", |v| v["type"] == "preview").await;
+        assert_eq!(p["enabled"], true);
+    }
+
+    // Watching d1 switches d2's preview off.
+    send(&mut a, json!({"type":"watch","devices":["d1"]})).await;
+    let p = wait_for(&mut d2, 3, "d2 preview off", |v| v["type"] == "preview").await;
+    assert_eq!(p["enabled"], false);
+
+    // Tags: normalized, broadcast; an unknown device is an error.
+    send(
+        &mut a,
+        json!({"type":"tags","device":"d2","tags":[" Studio A ","studio a","Crowd"]}),
+    )
+    .await;
+    let t = wait_for(&mut a, 3, "device_tags", |v| is(v, "device_tags", "d2")).await;
+    assert_eq!(t["tags"], json!(["Studio A", "Crowd"]));
+    send(&mut a, json!({"type":"tags","device":"nope","tags":["x"]})).await;
+    let e = wait_for(&mut a, 3, "error", |v| v["type"] == "error").await;
+    assert_eq!(e["device"], "nope");
+
+    // Arrange.
+    send(&mut a, json!({"type":"arrange","order":["d2"]})).await;
+    let o = wait_for(&mut a, 3, "order", |v| v["type"] == "order").await;
+    assert_eq!(o["devices"], json!(["d2", "d1"]));
+
+    // A second controller sees both in its snapshot, and wants every
+    // preview: d2's comes back on.
+    let mut b = connect(addr, "/lcp/v0/control").await;
+    let snap = wait_for(&mut b, 3, "snapshot b", |v| v["type"] == "snapshot").await;
+    let devices = snap["devices"].as_array().unwrap();
+    assert_eq!(devices[0]["id"], "d2");
+    assert_eq!(devices[0]["tags"], json!(["Studio A", "Crowd"]));
+    assert!(devices[0]["last_seen_s"].as_u64().is_some());
+    assert!(devices[1].get("tags").is_none());
+    let p = wait_for(&mut d2, 3, "d2 preview on", |v| v["type"] == "preview").await;
+    assert_eq!(p["enabled"], true);
+
+    // Going offline carries when.
+    drop(d1);
+    let off = wait_for(&mut a, 15, "offline", |v| is(v, "device_offline", "d1")).await;
+    assert!(off["last_seen_s"].as_u64().is_some(), "{off}");
+}

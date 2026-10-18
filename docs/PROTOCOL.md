@@ -127,6 +127,30 @@ again every second (`status.stream.state` `connecting` with the reason in
   this instead of the plain deep link.
 - `DELETE /api/devices/{id}`: forget (revoke) a device, 204, or 404 for an
   unknown id. The page's "Forget" button.
+- Controller messages for many cameras (on the operator socket, besides
+  `set`, `command`, `tally`, `preview`, `stats` and `production`):
+  - `{"type":"watch","devices":["id",...]}`: the devices whose previews this
+    controller shows. A device's preview is on while some controller watches
+    it and its `preview` preference is enabled; a controller that never
+    sends `watch` (or sends `"devices": null`) watches every device, as
+    before. Only devices whose preview goes on or off are sent `preview`, on
+    `watch` and when a controller connects or leaves. Image statistics
+    ignore it: on while any controller is connected.
+  - `{"type":"tags","device":"id","tags":["Studio A","Crowd"]}`: replaces the
+    device's tags. The hub trims them, drops control characters and empty
+    ones, cuts each to 40 characters, keeps the first spelling of tags that
+    differ only in case, and keeps at most 16. Every controller gets
+    `{"type":"device_tags","device":"id","tags":[...]}` with the tags as kept;
+    an unknown device is an `error` to the sender.
+  - `{"type":"arrange","order":["id",...]}`: the display order. The listed
+    devices come first in that order (unknown ids are ignored), the others
+    after them in their old order; a new device goes last. Every controller
+    gets `{"type":"order","devices":[...]}` with every id, in order.
+  - Tags, the order and `last_seen_s` are kept in the store
+    (`--state-file`). Snapshot entries carry `tags` (absent when none) and
+    `last_seen_s` (unix seconds of the last `hello` or going offline; absent
+    for a device not seen since it was kept), and `device_offline` carries
+    `last_seen_s`. Snapshots list the devices in display order.
 - Operator token: with `--operator-token` (or `--invites`, which makes one and
   logs the operator page link `http://<host>:<port>/#token=...`), creating
   invites and forgetting devices need the `X-Operator-Token` header, and the
@@ -701,7 +725,9 @@ bitstream parser. Byte vectors for both codecs are in
 - The controller-side messages (`snapshot`, `device_<type>`, `production`,
   `error`) belong to the control hub, not to this device protocol. Snapshot
   entries and `device_hello` carry `key_fingerprint` for a device with a
-  key; `device_removed` says a device was forgotten. A controller's
+  key; `device_removed` says a device was forgotten; `device_tags`, `order`
+  and the `tags` and `last_seen_s` of snapshot entries come with `tags`,
+  `arrange` and `watch` (see "Server side (control hub)"). A controller's
   `production` is accepted any time and kept across restarts; a `holder`
   field from an older controller is ignored (SHADING.md, "Controller ↔
   hub").

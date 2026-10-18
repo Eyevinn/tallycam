@@ -3,11 +3,12 @@
 //! uses [`JsonFileStore`], Strom plugs in its own storage.
 //!
 //! Stored: each device's identity (the hello's device info and its public
-//! key, once it proved one) and the production settings. Tally, state and
+//! key, once it proved one), its tags and when it was last seen, the display
+//! order and the production settings. Tally, state and
 //! status are live data and start empty: a tally kept across a restart would
 //! light a camera that is not on air.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Mutex;
 
@@ -26,10 +27,16 @@ pub struct StoredDevice {
     /// later connect.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub public_key: Option<String>,
+    /// The operator's tags ([`crate::Hub::set_tags`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
+    /// When the device last said hello or went offline (unix seconds).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_seen_s: Option<u64>,
 }
 
 /// Persistence for known devices and the production. The hub calls `save`,
-/// `remove` and `save_production` while it holds its own lock (so a forget
+/// `remove`, `save_order` and `save_production` while it holds its own lock (so a forget
 /// and a reconnect cannot interleave), from the task that handled the
 /// message. They must be quick (a small write, or
 /// a send to a writer task), since every other hub operation waits, and must
@@ -37,7 +44,7 @@ pub struct StoredDevice {
 pub trait DeviceStore: Send + Sync {
     /// Devices to list at startup, in display order.
     fn load(&self) -> Vec<StoredDevice>;
-    /// A device said hello (new, or with changed info or key).
+    /// A device connected, changed (info, key or tags) or went offline.
     fn save(&self, device: &StoredDevice);
     /// The device was forgotten ([`crate::Hub::forget`]). The default keeps
     /// it, so stores written before `forget` existed still compile; a store
@@ -53,6 +60,11 @@ pub trait DeviceStore: Send + Sync {
     }
     /// The production changed ([`crate::Hub::set_production`]).
     fn save_production(&self, _production: &Production) {}
+    /// The display order changed ([`crate::Hub::arrange`]): every device
+    /// id, in order. `load` returns the devices in this order from then on;
+    /// a device saved later goes last. The default keeps none, so the order
+    /// is back to the order of `load` after a restart.
+    fn save_order(&self, _ids: &[String]) {}
 }
 
 /// Keeps nothing: every restart starts with an empty list.
@@ -75,7 +87,7 @@ pub struct JsonFileStore {
 
 #[derive(Default)]
 struct State {
-    /// Keyed by device id; insertion order is kept in `order`.
+    /// Keyed by device id; the display order is kept in `order`.
     devices: BTreeMap<String, StoredDevice>,
     order: Vec<String>,
     production: Option<Production>,
@@ -182,6 +194,28 @@ impl DeviceStore for JsonFileStore {
         self.lock().production.clone()
     }
 
+    fn save_order(&self, ids: &[String]) {
+        let mut state = self.lock();
+        let mut listed = HashSet::new();
+        let mut next: Vec<String> = ids
+            .iter()
+            .filter(|id| state.devices.contains_key(*id) && listed.insert(id.as_str()))
+            .cloned()
+            .collect();
+        next.extend(
+            state
+                .order
+                .iter()
+                .filter(|id| !listed.contains(id.as_str()))
+                .cloned(),
+        );
+        if next == state.order {
+            return;
+        }
+        state.order = next;
+        self.write(&state);
+    }
+
     fn save_production(&self, production: &Production) {
         let mut state = self.lock();
         if state.production.as_ref() == Some(production) {
@@ -221,6 +255,8 @@ mod tests {
         StoredDevice {
             info,
             public_key: None,
+            tags: Vec::new(),
+            last_seen_s: None,
         }
     }
 
@@ -262,6 +298,40 @@ mod tests {
         let last = JsonFileStore::open(&path);
         assert_eq!(last.load_production(), Some(production));
         assert_eq!(last.load().len(), 2, "devices kept");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn json_file_store_keeps_the_order_tags_and_last_seen() {
+        let dir =
+            std::env::temp_dir().join(format!("tallycam-hub-store-order-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("devices.json");
+        let _ = std::fs::remove_file(&path);
+
+        let store = JsonFileStore::open(&path);
+        for id in ["a", "b", "c"] {
+            store.save(&device(id, id));
+        }
+        // Unknown ids ignored; the unlisted keep their order after.
+        store.save_order(&["c".into(), "x".into(), "a".into()]);
+        let mut tagged = device("b", "b");
+        tagged.tags = vec!["Studio A".into()];
+        tagged.last_seen_s = Some(1_700_000_000);
+        store.save(&tagged);
+        store.save(&device("d", "d"));
+
+        let reopened = JsonFileStore::open(&path);
+        let loaded = reopened.load();
+        let ids: Vec<_> = loaded.iter().map(|d| d.info.id.as_str()).collect();
+        assert_eq!(ids, ["c", "a", "b", "d"]);
+        assert_eq!(loaded[2], tagged);
+        let json = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            json.matches("\"tags\"").count(),
+            1,
+            "empty tags are not written"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

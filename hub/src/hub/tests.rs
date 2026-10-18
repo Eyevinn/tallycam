@@ -9,6 +9,7 @@ struct RecordingStore {
     saved: Mutex<Vec<StoredDevice>>,
     removed: Mutex<Vec<String>>,
     production: Mutex<Option<Production>>,
+    order: Mutex<Option<Vec<String>>>,
 }
 
 impl DeviceStore for RecordingStore {
@@ -26,6 +27,9 @@ impl DeviceStore for RecordingStore {
     }
     fn save_production(&self, production: &Production) {
         *self.production.lock().unwrap() = Some(production.clone());
+    }
+    fn save_order(&self, ids: &[String]) {
+        *self.order.lock().unwrap() = Some(ids.to_vec());
     }
 }
 
@@ -93,6 +97,8 @@ fn stored(id: &str, name: &str) -> StoredDevice {
     StoredDevice {
         info: info(id, name),
         public_key: None,
+        tags: Vec::new(),
+        last_seen_s: None,
     }
 }
 
@@ -110,16 +116,19 @@ fn stored_devices_are_listed_offline_and_hello_saves_changes() {
     assert_eq!(devices[0].tally, TallyState::Off);
 
     let (tx, _rx) = mpsc::channel(DEVICE_QUEUE);
-    join(
-        &hub,
-        hub.new_connection_id(),
-        hello("cam1", "Cam 1"),
-        tx.clone(),
-    );
-    assert!(
-        store.saved.lock().unwrap().is_empty(),
-        "unchanged info is not saved"
-    );
+    let conn1 = hub.new_connection_id();
+    join(&hub, conn1, hello("cam1", "Cam 1"), tx.clone());
+    // Saved for when it was seen, with unchanged info.
+    {
+        let saved = store.saved.lock().unwrap();
+        assert_eq!(saved.len(), 1);
+        assert_eq!(saved[0].info.name, "Cam 1");
+        assert!(saved[0].last_seen_s.is_some());
+    }
+    // A resent hello with the same info is not saved.
+    hub.device_hello(conn1, hello("cam1", "Cam 1"));
+    assert_eq!(store.saved.lock().unwrap().len(), 1);
+    store.saved.lock().unwrap().clear();
 
     let (tx2, _rx2) = mpsc::channel(DEVICE_QUEUE);
     join(&hub, hub.new_connection_id(), hello("cam2", "Cam 2"), tx2);
@@ -674,6 +683,16 @@ fn controller(hub: &Hub, json: Value) -> Result<(), String> {
     match crate::protocol::ControllerInput::parse(&json.to_string())? {
         Some(crate::protocol::ControllerInput::Device(req)) => hub.controller_request(req),
         Some(crate::protocol::ControllerInput::Production(p)) => hub.set_production(p),
+        Some(crate::protocol::ControllerInput::Tags { device, tags }) => {
+            hub.set_tags(&device, tags).map(|_| ())
+        }
+        Some(crate::protocol::ControllerInput::Arrange(order)) => {
+            hub.arrange(order);
+            Ok(())
+        }
+        Some(crate::protocol::ControllerInput::Watch(_)) => {
+            panic!("watch goes through a controller's guard")
+        }
         None => Ok(()),
     }
 }
@@ -1113,4 +1132,302 @@ fn a_protocol_2_phone_is_asked_to_update() {
     while let Ok(msg) = phone.try_recv() {
         assert!(!matches!(msg, ServerToDevice::Message { .. }));
     }
+}
+
+// ---------------------------------------------------------------------------
+// Device management: preview watch, tags, order, last seen
+// ---------------------------------------------------------------------------
+
+/// The preview commands a phone was sent since the last call (`enabled`
+/// of each), skipping everything else.
+fn previews(phone: &mut mpsc::Receiver<ServerToDevice>) -> Vec<bool> {
+    std::iter::from_fn(|| phone.try_recv().ok())
+        .filter_map(|m| match m {
+            ServerToDevice::Preview { enabled, .. } => Some(enabled),
+            _ => None,
+        })
+        .collect()
+}
+
+fn ids(list: &[&str]) -> Option<Vec<String>> {
+    Some(list.iter().map(|s| s.to_string()).collect())
+}
+
+#[test]
+fn a_controller_watching_one_device_gets_only_its_preview() {
+    let hub = Arc::new(Hub::new());
+    let mut a = connect_phone(&hub, "a");
+    let mut b = connect_phone(&hub, "b");
+
+    let (_, _rx, first) = hub.controller_joined();
+    assert_eq!(previews(&mut a), [true]);
+    assert_eq!(previews(&mut b), [true]);
+
+    // Watching a: only b changes, and is switched off.
+    first.watch(ids(&["a", "not-yet-known"]));
+    assert_eq!(previews(&mut a), Vec::<bool>::new());
+    assert_eq!(previews(&mut b), [false]);
+    // The same watch again sends nothing.
+    first.watch(ids(&["a"]));
+    assert!(previews(&mut a).is_empty() && previews(&mut b).is_empty());
+
+    // A device that joins now gets its preview off: nobody watches it.
+    let mut c = connect_phone_raw(&hub, "c");
+    assert_eq!(previews(&mut c), [false]);
+
+    // A second controller that never sent watch wants every preview.
+    let (_, _rx2, second) = hub.controller_joined();
+    assert!(previews(&mut a).is_empty());
+    assert_eq!(previews(&mut b), [true]);
+    assert_eq!(previews(&mut c), [true]);
+
+    // It leaves: back to the first controller's watch.
+    drop(second);
+    assert!(previews(&mut a).is_empty());
+    assert_eq!(previews(&mut b), [false]);
+    assert_eq!(previews(&mut c), [false]);
+
+    // `null` is every device again.
+    controller_watch(
+        &first,
+        serde_json::json!({ "type": "watch", "devices": null }),
+    );
+    assert!(previews(&mut a).is_empty());
+    assert_eq!(previews(&mut b), [true]);
+    assert_eq!(previews(&mut c), [true]);
+
+    // The per-device preference still gates: switched off, a watch change
+    // sends it nothing.
+    controller(
+        &hub,
+        serde_json::json!({ "type": "preview", "device": "a", "enabled": false }),
+    )
+    .unwrap();
+    assert_eq!(previews(&mut a), [false]);
+    controller_watch(
+        &first,
+        serde_json::json!({ "type": "watch", "devices": ["b"] }),
+    );
+    assert!(previews(&mut a).is_empty());
+    assert!(previews(&mut b).is_empty());
+    assert_eq!(previews(&mut c), [false]);
+
+    // The last controller leaves: only what was on goes off.
+    drop(first);
+    assert!(previews(&mut a).is_empty());
+    assert_eq!(previews(&mut b), [false]);
+    assert!(previews(&mut c).is_empty());
+}
+
+#[test]
+fn image_stats_ignore_the_watch() {
+    let hub = Arc::new(Hub::new());
+    let mut a = connect_phone(&hub, "a");
+    let (_, _rx, guard) = hub.controller_joined();
+    guard.watch(Some(Vec::new()));
+    let sent: Vec<_> = std::iter::from_fn(|| a.try_recv().ok()).collect();
+    assert!(sent.contains(&ServerToDevice::Stats {
+        enabled: true,
+        fps: Some(DEFAULT_STATS_FPS)
+    }));
+    assert!(matches!(
+        sent.last(),
+        Some(ServerToDevice::Preview { enabled: false, .. })
+    ));
+}
+
+/// A connected phone whose hello messages are left in the channel.
+fn connect_phone_raw(hub: &Hub, id: &str) -> mpsc::Receiver<ServerToDevice> {
+    let (tx, rx) = mpsc::channel(DEVICE_QUEUE);
+    let conn = hub.new_connection_id();
+    join(hub, conn, hello(id, id), tx);
+    CONNS.with(|c| c.borrow_mut().insert(id.to_string(), conn));
+    rx
+}
+
+/// A `watch` frame through the server's parsing.
+fn controller_watch(guard: &ControllerGuard, json: Value) {
+    match crate::protocol::ControllerInput::parse(&json.to_string()) {
+        Ok(Some(crate::protocol::ControllerInput::Watch(devices))) => guard.watch(devices),
+        other => panic!("not a watch: {other:?}"),
+    }
+}
+
+#[test]
+fn watch_tags_and_arrange_parse() {
+    use crate::protocol::ControllerInput;
+    let parse = |v: Value| ControllerInput::parse(&v.to_string());
+    assert_eq!(
+        parse(serde_json::json!({ "type": "watch" })),
+        Ok(Some(ControllerInput::Watch(None)))
+    );
+    assert_eq!(
+        parse(serde_json::json!({ "type": "watch", "devices": ["a"] })),
+        Ok(Some(ControllerInput::Watch(ids(&["a"]))))
+    );
+    assert!(parse(serde_json::json!({ "type": "watch", "devices": [1] })).is_err());
+    assert!(parse(serde_json::json!({ "type": "watch", "devices": "a" })).is_err());
+    assert_eq!(
+        parse(serde_json::json!({ "type": "tags", "device": "a", "tags": ["x"] })),
+        Ok(Some(ControllerInput::Tags {
+            device: "a".into(),
+            tags: vec!["x".into()]
+        }))
+    );
+    assert!(parse(serde_json::json!({ "type": "tags", "tags": ["x"] })).is_err());
+    assert!(parse(serde_json::json!({ "type": "tags", "device": "a" })).is_err());
+    assert_eq!(
+        parse(serde_json::json!({ "type": "arrange", "order": ["b", "a"] })),
+        Ok(Some(ControllerInput::Arrange(vec!["b".into(), "a".into()])))
+    );
+    assert!(parse(serde_json::json!({ "type": "arrange" })).is_err());
+}
+
+#[test]
+fn tags_are_normalized() {
+    let long = "é".repeat(MAX_TAG_CHARS + 5);
+    let tags = normalize_tags(
+        [
+            "  Studio A ",
+            "studio a",
+            "",
+            "   ",
+            "Cr\u{7}owd\n",
+            &long,
+            "STUDIO A",
+        ]
+        .map(String::from),
+    );
+    assert_eq!(
+        tags,
+        ["Studio A", "Crowd", &"é".repeat(MAX_TAG_CHARS)].map(String::from)
+    );
+    let many = normalize_tags((0..MAX_TAGS + 4).map(|i| format!("t{i}")));
+    assert_eq!(many.len(), MAX_TAGS);
+    assert_eq!(many[MAX_TAGS - 1], format!("t{}", MAX_TAGS - 1));
+}
+
+#[test]
+fn tags_are_kept_saved_and_sent() {
+    let store = Arc::new(RecordingStore {
+        initial: vec![StoredDevice {
+            tags: vec!["Old".into(), "old".into()],
+            ..stored("cam1", "Cam 1")
+        }],
+        ..Default::default()
+    });
+    let hub = Hub::with_store(store.clone());
+    assert_eq!(hub.devices()[0].tags, ["Old"], "normalized when loaded");
+    let mut events = hub.subscribe();
+
+    controller(
+        &hub,
+        serde_json::json!({ "type": "tags", "device": "cam1", "tags": [" Studio A", "Crowd", "crowd"] }),
+    )
+    .unwrap();
+    let want = vec!["Studio A".to_string(), "Crowd".to_string()];
+    assert_eq!(
+        *events.try_recv().unwrap().event,
+        ControllerEvent::DeviceTags {
+            device: "cam1".into(),
+            tags: want.clone()
+        }
+    );
+    assert_eq!(hub.devices()[0].tags, want);
+    assert_eq!(store.saved.lock().unwrap().last().unwrap().tags, want);
+
+    // Unchanged: no event, no save.
+    let saves = store.saved.lock().unwrap().len();
+    assert_eq!(hub.set_tags("cam1", want.clone()), Ok(want));
+    assert!(events.try_recv().is_err());
+    assert_eq!(store.saved.lock().unwrap().len(), saves);
+
+    assert!(hub.set_tags("nope", vec!["x".into()]).is_err());
+
+    // No tags: none in the snapshot's JSON.
+    hub.set_tags("cam1", Vec::new()).unwrap();
+    let json = serde_json::to_value(hub.devices()).unwrap();
+    assert!(json[0].get("tags").is_none());
+}
+
+#[test]
+fn arrange_sets_and_keeps_the_display_order() {
+    let store = Arc::new(RecordingStore {
+        initial: vec![stored("a", "A"), stored("b", "B"), stored("c", "C")],
+        ..Default::default()
+    });
+    let hub = Hub::with_store(store.clone());
+    let mut events = hub.subscribe();
+    let order = |hub: &Hub| hub.devices().into_iter().map(|d| d.id).collect::<Vec<_>>();
+
+    // Unknown ids ignored, duplicates once, the rest after in their order.
+    controller(
+        &hub,
+        serde_json::json!({ "type": "arrange", "order": ["c", "x", "a", "c"] }),
+    )
+    .unwrap();
+    assert_eq!(order(&hub), ["c", "a", "b"]);
+    assert_eq!(
+        *events.try_recv().unwrap().event,
+        ControllerEvent::Order {
+            devices: vec!["c".into(), "a".into(), "b".into()]
+        }
+    );
+    assert_eq!(
+        store.order.lock().unwrap().as_deref(),
+        Some(&["c".to_string(), "a".into(), "b".into()][..])
+    );
+
+    // The same order again: nothing.
+    hub.arrange(vec!["c".into()]);
+    assert!(events.try_recv().is_err());
+
+    // A new device goes last; snapshots follow the order.
+    let _d = connect_phone(&hub, "d");
+    assert_eq!(order(&hub), ["c", "a", "b", "d"]);
+    let (snapshot, _rx) = hub.resync();
+    let snapshot: Value = serde_json::from_str(&snapshot).unwrap();
+    let ids: Vec<_> = snapshot["devices"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| d["id"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(ids, ["c", "a", "b", "d"]);
+}
+
+#[test]
+fn last_seen_is_set_on_hello_and_offline() {
+    let store = Arc::new(RecordingStore {
+        initial: vec![StoredDevice {
+            last_seen_s: Some(1_000),
+            ..stored("cam1", "Cam 1")
+        }],
+        ..Default::default()
+    });
+    let hub = Hub::with_store(store.clone());
+    assert_eq!(hub.devices()[0].last_seen_s, Some(1_000));
+
+    let _phone = connect_phone(&hub, "cam1");
+    let seen = hub.devices()[0].last_seen_s.unwrap();
+    assert!(seen > 1_000);
+    assert_eq!(
+        store.saved.lock().unwrap().last().unwrap().last_seen_s,
+        Some(seen)
+    );
+
+    let mut events = hub.subscribe();
+    let conn = CONNS.with(|c| c.borrow()["cam1"]);
+    hub.device_disconnected(conn, "cam1");
+    let frame = events.try_recv().unwrap();
+    let ControllerEvent::DeviceOffline { last_seen_s, .. } = &*frame.event else {
+        panic!("expected device_offline")
+    };
+    assert!(last_seen_s.is_some_and(|s| s >= seen));
+    assert!(frame.json.contains(r#""last_seen_s":"#));
+    assert_eq!(
+        store.saved.lock().unwrap().last().unwrap().last_seen_s,
+        *last_seen_s
+    );
+    assert_eq!(hub.devices()[0].last_seen_s, *last_seen_s);
 }

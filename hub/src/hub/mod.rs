@@ -1,5 +1,6 @@
 //! Hub logic: device registry, controller fan-out, tally and preview gating,
-//! and shading (production, image statistics).
+//! shading (production, image statistics) and device management (tags,
+//! order, which previews each controller watches).
 //!
 //! Transport independent. The WebSocket glue (`server.rs`, or the embedding
 //! server's own) feeds parsed messages in and drains the per-device channel
@@ -7,7 +8,7 @@
 //! is never held across an `.await`; each event is serialized once and
 //! broadcast typed and as JSON ([`EventFrame`]).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -27,6 +28,7 @@ use crate::store::{DeviceStore, NoStore, StoredDevice};
 
 mod admission;
 mod calls;
+mod manage;
 mod redact;
 mod shading;
 #[cfg(test)]
@@ -36,6 +38,7 @@ pub(crate) use admission::random_token;
 pub use admission::{check_hello_key, Admission, AdmitError, Challenge, Proof};
 pub use calls::CallError;
 use calls::PendingCall;
+pub use manage::{normalize_tags, MAX_TAGS, MAX_TAG_CHARS};
 use shading::{clamp_stats_fps, StatsPref};
 pub use shading::{default_production, DEFAULT_STATS_FPS, SHADING_PROTOCOL};
 
@@ -80,7 +83,7 @@ pub const DEFAULT_PREVIEW_FPS: f64 = 2.0;
 const CALL_ID_PREFIX: &str = "hub-";
 
 /// Preview settings a controller asked for, per device. Applied only while at
-/// least one controller is connected.
+/// least one controller is connected and watches the device.
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct PreviewPref {
     enabled: bool,
@@ -127,6 +130,10 @@ struct DeviceEntry {
     preview_pref: PreviewPref,
     stats_pref: StatsPref,
     conn: Option<Connection>,
+    /// The operator's tags, normalized ([`normalize_tags`]).
+    tags: Vec<String>,
+    /// When the device last said hello or went offline (unix seconds).
+    last_seen_s: Option<u64>,
 }
 
 impl DeviceEntry {
@@ -146,6 +153,8 @@ impl DeviceEntry {
             preview_pref: PreviewPref::default(),
             stats_pref: StatsPref::default(),
             conn: None,
+            tags: Vec::new(),
+            last_seen_s: None,
         };
         entry.set_key(public_key);
         entry
@@ -165,6 +174,8 @@ impl DeviceEntry {
             image_stats: self.image_stats.clone(),
             online: self.conn.is_some(),
             key_fingerprint: self.key_fingerprint(),
+            tags: self.tags.clone(),
+            last_seen_s: self.last_seen_s,
         }
     }
 
@@ -184,6 +195,8 @@ impl DeviceEntry {
         StoredDevice {
             info: self.info.clone(),
             public_key: self.public_key.clone(),
+            tags: self.tags.clone(),
+            last_seen_s: self.last_seen_s,
         }
     }
 
@@ -201,9 +214,11 @@ impl DeviceEntry {
         }
     }
 
-    fn preview_command(&self, controllers: usize) -> ServerToDevice {
+    /// `watched`: a connected controller shows this device's preview
+    /// ([`Inner::watched`]).
+    fn preview_command(&self, watched: bool) -> ServerToDevice {
         let p = self.preview_pref;
-        if controllers > 0 && p.enabled {
+        if watched && p.enabled {
             ServerToDevice::Preview {
                 enabled: true,
                 fps: Some(p.fps),
@@ -222,9 +237,12 @@ impl DeviceEntry {
 struct Inner {
     /// Keyed by `device.id` from `hello`.
     devices: HashMap<String, DeviceEntry>,
-    /// Insertion order for a stable card order in the UI.
+    /// Display order: insertion order, or as a controller arranged it
+    /// ([`Hub::arrange`]).
     order: Vec<String>,
-    controllers: usize,
+    /// Connected controllers by id, with the devices each one watches
+    /// (`None`: every device, a controller that never sent `watch`).
+    controllers: HashMap<u64, Option<HashSet<String>>>,
     /// Typed calls waiting for the phone's `result`, by call id.
     pending: HashMap<String, PendingCall>,
     /// When set, an unknown device needs a valid invite token and a device
@@ -245,7 +263,7 @@ impl Default for Inner {
         Self {
             devices: HashMap::new(),
             order: Vec::new(),
-            controllers: 0,
+            controllers: HashMap::new(),
             pending: HashMap::new(),
             invite_required: false,
             invites: HashMap::new(),
@@ -254,6 +272,14 @@ impl Default for Inner {
             production: default_production(),
         }
     }
+}
+
+/// Now as unix seconds, for `last_seen_s`.
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 impl Inner {
@@ -287,11 +313,20 @@ impl Default for Hub {
 /// Keeps a controller counted while alive. Dropping it may disable previews.
 pub struct ControllerGuard {
     hub: Arc<Hub>,
+    id: u64,
+}
+
+impl ControllerGuard {
+    /// This controller's `watch`: the devices whose previews it shows, or
+    /// `None` for every device (the default).
+    pub fn watch(&self, devices: Option<Vec<String>>) {
+        self.hub.watch(self.id, devices);
+    }
 }
 
 impl Drop for ControllerGuard {
     fn drop(&mut self) {
-        self.hub.controller_left();
+        self.hub.controller_left(self.id);
     }
 }
 
@@ -314,7 +349,13 @@ impl Hub {
                 Err(e) => warn!("Ignoring the stored production: {e}"),
             }
         }
-        for StoredDevice { info, public_key } in store.load() {
+        for StoredDevice {
+            info,
+            public_key,
+            tags,
+            last_seen_s,
+        } in store.load()
+        {
             let id = info.id.clone();
             if id.is_empty() || inner.devices.contains_key(&id) {
                 continue;
@@ -329,7 +370,10 @@ impl Hub {
                 ok
             });
             inner.order.push(id.clone());
-            inner.devices.insert(id, DeviceEntry::new(info, public_key));
+            let mut entry = DeviceEntry::new(info, public_key);
+            entry.tags = normalize_tags(tags);
+            entry.last_seen_s = last_seen_s;
+            inner.devices.insert(id, entry);
         }
         Self {
             inner: Mutex::new(inner),
@@ -457,9 +501,10 @@ impl Hub {
         key: Option<Option<String>>,
         link: Option<(DeviceTx, Option<String>)>,
     ) {
-        let controllers = inner.controllers;
+        let controllers = inner.controllers.len();
         let production = inner.production.clone();
         let id = hello.device.id.clone();
+        let watched = inner.watched(&id);
         // Older devices are fine (version 1 has no production); a newer one
         // may use messages this hub does not know.
         if hello.protocol > PROTOCOL_VERSION {
@@ -493,7 +538,11 @@ impl Hub {
             // An older app on the same device sends no statistics.
             entry.image_stats = None;
         }
-        let save = changed.then(|| entry.stored());
+        if link.is_some() {
+            entry.last_seen_s = Some(unix_now());
+        }
+        // A new connection is saved for its `last_seen_s` too.
+        let save = (changed || link.is_some()).then(|| entry.stored());
         entry.controls = hello.controls;
         entry.commands = hello.commands;
 
@@ -506,7 +555,7 @@ impl Hub {
             entry.conn = Some(Connection { id: conn, tx, host });
             // Bring the phone up to date with what the hub owns.
             entry.send(ServerToDevice::Tally { state: entry.tally });
-            entry.send(entry.preview_command(controllers));
+            entry.send(entry.preview_command(watched));
             if entry.shading() {
                 entry.send(ServerToDevice::Production(production));
                 entry.send_stats(controllers);
@@ -613,10 +662,14 @@ impl Hub {
         // reconnect (a stream counted live that is not).
         entry.status = None;
         entry.image_stats = None;
+        let last_seen_s = Some(unix_now());
+        entry.last_seen_s = last_seen_s;
+        self.store.save(&entry.stored());
         inner.drop_pending_for(device_id);
         info!("Device {device_id} offline");
         self.emit(ControllerEvent::DeviceOffline {
             device: device_id.to_string(),
+            last_seen_s,
         });
     }
 
@@ -647,12 +700,15 @@ impl Hub {
     pub fn controller_joined(
         self: &Arc<Self>,
     ) -> (String, broadcast::Receiver<EventFrame>, ControllerGuard) {
+        let id = self.new_connection_id();
         let mut inner = self.lock();
-        inner.controllers += 1;
-        if inner.controllers == 1 {
+        // A new controller watches every device until it sends `watch`.
+        Self::update_watch(&mut inner, |c| {
+            c.insert(id, None);
+        });
+        if inner.controllers.len() == 1 {
             info!("First controller connected, enabling previews and image stats");
             for entry in inner.devices.values_mut() {
-                entry.send(entry.preview_command(1));
                 entry.send_stats(1);
             }
         }
@@ -663,6 +719,7 @@ impl Hub {
             rx,
             ControllerGuard {
                 hub: Arc::clone(self),
+                id,
             },
         )
     }
@@ -673,13 +730,14 @@ impl Hub {
         (Self::snapshot_json(&inner), self.events.subscribe())
     }
 
-    fn controller_left(&self) {
+    fn controller_left(&self, id: u64) {
         let mut inner = self.lock();
-        inner.controllers = inner.controllers.saturating_sub(1);
-        if inner.controllers == 0 {
+        Self::update_watch(&mut inner, |c| {
+            c.remove(&id);
+        });
+        if inner.controllers.is_empty() {
             info!("Last controller disconnected, disabling previews and image stats");
             for entry in inner.devices.values_mut() {
-                entry.send(entry.preview_command(0));
                 entry.send_stats(0);
             }
         }
@@ -753,7 +811,8 @@ impl Hub {
     /// whether it comes from a controller or the camera operator.
     pub fn controller_request(&self, req: ControllerRequest) -> Result<(), String> {
         let mut inner = self.lock();
-        let controllers = inner.controllers;
+        let controllers = inner.controllers.len();
+        let watched = inner.watched(&req.device);
         let Some(entry) = inner.devices.get_mut(&req.device) else {
             return Err(format!("unknown device '{}'", req.device));
         };
@@ -773,7 +832,7 @@ impl Hub {
                     width: width.filter(|w| *w > 0).unwrap_or(entry.preview_pref.width),
                 };
                 entry.preview_pref = pref;
-                entry.send(entry.preview_command(controllers));
+                entry.send(entry.preview_command(watched));
                 Ok(())
             }
             ServerToDevice::Stats { enabled, fps } => {
@@ -821,13 +880,15 @@ mod preview_fps_tests {
                 info: serde_json::from_value(serde_json::json!({ "id": "a", "name": "Cam A" }))
                     .unwrap(),
                 public_key: None,
+                tags: Vec::new(),
+                last_seen_s: None,
             }]
         }
         fn save(&self, _device: &StoredDevice) {}
     }
 
     fn fps(hub: &Hub, id: &str) -> Option<f64> {
-        match hub.lock().devices[id].preview_command(1) {
+        match hub.lock().devices[id].preview_command(true) {
             ServerToDevice::Preview { fps, .. } => fps,
             other => panic!("not a preview command: {other:?}"),
         }

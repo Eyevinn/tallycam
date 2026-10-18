@@ -23,7 +23,8 @@ use tokio::time::{interval, timeout, MissedTickBehavior};
 use tracing::{debug, info, warn};
 
 use crate::hub::{
-    check_hello_key, AdmitError, Challenge, Hub, Proof, DEFAULT_INVITE_TTL, DEVICE_QUEUE,
+    check_hello_key, AdmitError, Challenge, ControllerGuard, Hub, Proof, DEFAULT_INVITE_TTL,
+    DEVICE_QUEUE,
 };
 use crate::protocol::{ControllerEvent, ControllerInput, DeviceMessage, CONTROL_PATH, DEVICE_PATH};
 use crate::protocol::{Hello, ServerToDevice};
@@ -673,7 +674,7 @@ async fn refuse(
 pub async fn controller_session(socket: WebSocket, hub: Arc<Hub>, addr: SocketAddr) {
     info!("Controller connected from {addr}");
     let (mut sink, mut stream) = socket.split();
-    let (snapshot, mut events, _guard) = hub.controller_joined();
+    let (snapshot, mut events, guard) = hub.controller_joined();
     if sink.send(Message::Text(snapshot.into())).await.is_err() {
         return;
     }
@@ -697,7 +698,7 @@ pub async fn controller_session(socket: WebSocket, hub: Arc<Hub>, addr: SocketAd
                 let Some(Ok(frame)) = frame else { break };
                 last_seen = tokio::time::Instant::now();
                 match frame {
-                    Message::Text(text) => handle_controller_text(&hub, text.as_str()),
+                    Message::Text(text) => handle_controller_text(&hub, &guard, text.as_str()),
                     Message::Close(_) => break,
                     _ => None,
                 }
@@ -722,8 +723,9 @@ pub async fn controller_session(socket: WebSocket, hub: Arc<Hub>, addr: SocketAd
     info!("Controller {addr} disconnected");
 }
 
-/// Returns a reply for this controller only, if any.
-fn handle_controller_text(hub: &Hub, text: &str) -> Option<String> {
+/// Returns a reply for this controller only, if any. `guard` is this
+/// controller's registration (for `watch`).
+fn handle_controller_text(hub: &Hub, guard: &ControllerGuard, text: &str) -> Option<String> {
     let reply = |device: Option<String>, message: String| {
         serde_json::to_string(&ControllerEvent::Error { device, message }).ok()
     };
@@ -749,6 +751,18 @@ fn handle_controller_text(hub: &Hub, text: &str) -> Option<String> {
             Ok(()) => None,
             Err(e) => reply(None, format!("production: {e}")),
         },
+        Ok(Some(ControllerInput::Watch(devices))) => {
+            guard.watch(devices);
+            None
+        }
+        Ok(Some(ControllerInput::Tags { device, tags })) => match hub.set_tags(&device, tags) {
+            Ok(_) => None,
+            Err(e) => reply(Some(device), e),
+        },
+        Ok(Some(ControllerInput::Arrange(order))) => {
+            hub.arrange(order);
+            None
+        }
         Ok(None) => None,
         Err(e) => reply(None, format!("bad request: {e}")),
     }

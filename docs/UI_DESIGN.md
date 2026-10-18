@@ -132,6 +132,10 @@ Right side shown; the left one is its mirror image.
   values in the values row. Values never take it as text colour, so yellow
   (held), red and green (tally), cyan (hub change) and orange (warning) keep
   their meaning.
+- **Shape: square-ish, not pills.** Selector and mode cells have an 8 pt
+  corner radius, the rocker track a 10 pt radius (a rounded rectangle, not a
+  capsule), the knob a rounded square with an 8 pt radius. The same on both
+  sides and on zoom.
 - **Sizes: easy to hit without looking.** Every cell is at least 44 pt high
   and 46 pt wide (Android 48 dp), the whole selector and mode switch about
   100 pt wide; they never shrink below that. The rocker is as long as the

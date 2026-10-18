@@ -1548,6 +1548,7 @@ name = "tallycam-android"
 version = "0.2.0"
 dependencies = [
  "jni",
+ "tallycam-core",
  "tallycam-core-ffi",
 ]
 

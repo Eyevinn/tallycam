@@ -21,6 +21,10 @@ use jni::JNIEnv;
 // library even though only the C symbols are referenced below.
 pub use tallycam_core_ffi;
 
+// Manual white balance (Camera2 gains and colour transform), straight on
+// the core.
+mod white_balance;
+
 #[repr(C)]
 struct LcClockMapping {
     tai_ns: i64,

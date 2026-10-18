@@ -26,3 +26,5 @@ pub mod image_stats;
 pub mod protocol;
 pub mod sei;
 pub mod ts;
+/// Manual white balance as temperature and tint (DNG colour model).
+pub mod white_balance;

@@ -14,4 +14,7 @@ crate-type = ["cdylib", "lib"]
 # Linked in as an rlib, so its UniFFI scaffolding, its C ABI and the clock
 # snapshot those calls read all live in this one library.
 tallycam-core-ffi = { path = "../ffi" }
+# The core itself, for wrappers with no C ABI in tallycam-core-ffi (white
+# balance).
+tallycam-core = { path = ".." }
 jni = { version = "0.21", default-features = false }

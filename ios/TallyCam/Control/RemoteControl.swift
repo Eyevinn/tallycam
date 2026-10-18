@@ -76,7 +76,7 @@ final class RemoteControl: ObservableObject {
     private var lastStatsSent = Date.distantPast
     /// The hub's production as last received (nil: none, the phone's own),
     /// applied once the camera controls exist.
-    private var production: CameraControls.Production?
+    @Published private(set) var production: CameraControls.Production?
     private var capture: Capture?
     private var controller: StreamController?
     private var cameraControls: [ControlDescriptor] = []
@@ -729,12 +729,18 @@ final class RemoteControl: ObservableObject {
         capture?.focus(atStreamPoint: point)
     }
 
-    /// Long press: focus at a point, then lock it there.
-    func localFocusLock(at point: CGPoint) {
+    /// Touch and hold: AE/AF lock (docs/UI_DESIGN.md, "Picture"). Focuses
+    /// at a point, then locks focus there and, with `exposureMode`, holds
+    /// the exposure at the values it had (manual, or locked without manual).
+    func localAeAfLock(at point: CGPoint, exposureMode: String?) {
         capture?.focus(atStreamPoint: point)
         Task { @MainActor [weak self] in
             try? await Task.sleep(for: .milliseconds(700))
-            self?.localSet(["focus_mode": .string("locked")])
+            var values: [String: JSONValue] = ["focus_mode": .string("locked")]
+            if let exposureMode {
+                values["exposure_mode"] = .string(exposureMode)
+            }
+            self?.localSet(values)
         }
     }
 

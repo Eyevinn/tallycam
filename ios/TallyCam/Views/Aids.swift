@@ -4,6 +4,7 @@ import UIKit
 
 /// The operator's framing and focus aids, each a persisted toggle. Drawn
 /// over the preview only, never into the stream (docs/SHADING.md).
+/// Grid and horizon level are on until switched off, the others off.
 enum Aid {
     static let grid = "aid.grid"
     static let horizon = "aid.horizon"
@@ -16,8 +17,8 @@ enum Aid {
 
 /// The small button that opens the aids menu.
 struct AidsMenu: View {
-    @AppStorage(Aid.grid) private var grid = false
-    @AppStorage(Aid.horizon) private var horizon = false
+    @AppStorage(Aid.grid) private var grid = true
+    @AppStorage(Aid.horizon) private var horizon = true
     @AppStorage(Aid.safeAreas) private var safeAreas = false
     @AppStorage(Aid.centreCuts) private var centreCuts = false
     @AppStorage(Aid.peaking) private var peaking = false

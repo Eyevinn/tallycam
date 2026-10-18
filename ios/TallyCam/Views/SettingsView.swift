@@ -18,9 +18,9 @@ struct SettingsView: View {
         NavigationStack {
             Form {
                 cameraSection
-                MainsSection(remote: remote, shading: remote.shading, live: controller.state != .idle)
                 connectionSection
                 streamSection
+                MainsSection(remote: remote, shading: remote.shading, live: controller.state != .idle)
                 orientationSection
                 clockSection
                 aboutSection
@@ -256,20 +256,25 @@ struct SettingsView: View {
     }
 }
 
-/// The phone's own production: mains frequency for flicker-free shutters
-/// (off: no mains-lit light, the shutter is free). A hub's production wins
-/// while one applies; not changeable while live.
+/// Mains frequency for flicker-free shutters (off: no mains-lit light, the
+/// shutter is free). Never locked by the hub: a change here applies until
+/// the hub's production changes. Not changeable while live. Left out when
+/// the camera has no mains control.
 private struct MainsSection: View {
-    let remote: RemoteControl
+    @ObservedObject var remote: RemoteControl
     @ObservedObject var shading: Shading
     let live: Bool
 
     var body: some View {
-        let descriptor = shading.descriptor("mains_hz")
-        let fromHub = descriptor?.readonly == true
+        if shading.descriptor("mains_hz") != nil {
+            section(fromHub: remote.production != nil)
+        }
+    }
+
+    private func section(fromHub: Bool) -> some View {
         Section {
             Picker("Mains", selection: Binding(
-                get: { shading.values["mains_hz"]?.double.map { Int($0) } ?? -1 },
+                get: { shading.values["mains_hz"]?.double.flatMap { Int(exactly: $0) } ?? -1 },
                 set: { remote.localSet(["mains_hz": .int($0)]) }
             )) {
                 Text("50 Hz").tag(50)
@@ -277,16 +282,16 @@ private struct MainsSection: View {
                 Text("Off").tag(0)
             }
             .pickerStyle(.segmented)
-            .disabled(descriptor == nil || fromHub || live)
+            .disabled(live)
         } header: {
             Text("Exposure")
         } footer: {
-            if fromHub {
-                Text("Set by the control hub")
-            } else if live {
-                Text("Stop the stream to change")
+            if live {
+                Text("Stop the stream to change.")
+            } else if fromHub {
+                Text("The control hub sets this for all cameras; a change here applies to this camera until the hub changes it.")
             } else {
-                Text("The shutter follows the mains frequency so mains-powered light does not flicker. Off where no mains-lit light is in the picture (outdoors).")
+                Text("The shutter follows the mains frequency so mains-lit light does not flicker. Off outdoors, where the shutter is free.")
             }
         }
     }

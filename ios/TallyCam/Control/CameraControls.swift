@@ -92,6 +92,10 @@ final class CameraControls: @unchecked Sendable {
     var localMainsHz: Int {
         didSet { UserDefaults.standard.set(localMainsHz, forKey: Self.mainsKey) }
     }
+    /// Mains set on the phone (Settings or `mains_hz`) since the hub's last
+    /// production change: the last write wins, and a new production clears
+    /// it. Never saved.
+    var mainsOverride: Int?
     /// The hub's production (docs/SHADING.md, "Shutter"); nil without a hub,
     /// when the phone is its own production: one mains period, or free when
     /// its mains is off. Never saved.
@@ -129,6 +133,8 @@ final class CameraControls: @unchecked Sendable {
     private var exposureSerial = 0
     private var descriptors: [ControlDescriptor] = []
     private var pollTimer: DispatchSourceTimer?
+    /// `CameraButtonControls` (iOS 18), the Camera Control button's sliders.
+    private var cameraButton: AnyObject?
     /// The operator's resolution; the lens may not have it (`attach`,
     /// `switchLens` fall back).
     private(set) var wantedResolution: VideoResolution
@@ -226,7 +232,7 @@ final class CameraControls: @unchecked Sendable {
                 let hint = status.limit == .tooDark ? "too dark: use a longer shutter or more light"
                     : mainsHz == 0 ? "too bright: use less light or an ND filter"
                     : "too bright even at the shortest flicker-free shutter for mains light; outdoors set mains off "
-                    + (serverProduction == nil ? "in Settings" : "in the hub's production")
+                    + (serverProduction == nil ? "in Settings" : "in the hub's production or in Settings")
                 onUpdate?(.log(level: "warn", message: String(format: "Auto ISO at ISO %.0f, %@", device.iso, hint)))
             }
         }
@@ -286,9 +292,10 @@ final class CameraControls: @unchecked Sendable {
     }
 
     /// Mains frequency (50 or 60 Hz, 0 for none) for flicker-free shutters:
-    /// the hub's production's while one applies, else the phone's own.
+    /// set on the phone since the production last changed, else the hub's
+    /// production's while one applies, else the phone's own.
     var mainsHz: Int {
-        serverProduction?.mainsHz ?? localMainsHz
+        mainsOverride ?? serverProduction?.mainsHz ?? localMainsHz
     }
 
     /// What the shutter follows now: free when the production says so, or
@@ -366,11 +373,14 @@ final class CameraControls: @unchecked Sendable {
         }
         pendingProduction = nil
         let before = (effectiveShutter, mainsHz)
+        if next != serverProduction {
+            // A new production: its mains applies again.
+            mainsOverride = nil
+        }
         serverProduction = next
         guard (effectiveShutter, mainsHz) != before else {
             // Every reconnect sends the production again: no exposure jump
-            // when nothing changed (it would undo auto ISO's steps). Only
-            // `mains_hz`'s read-only state may have changed.
+            // when nothing changed (it would undo auto ISO's steps).
             publishControlsIfChanged(force: false)
             return nil
         }
@@ -495,6 +505,7 @@ final class CameraControls: @unchecked Sendable {
     func startPolling() {
         publishControlsIfChanged(force: true)
         notifyFormatIfChanged()
+        rebuildCameraButton()
         let timer = DispatchSource.makeTimerSource(queue: queue)
         // Auto ISO samples at 8 Hz; the values go out at 4 Hz.
         timer.schedule(deadline: .now() + 0.125, repeating: 0.125, leeway: .milliseconds(20))
@@ -505,7 +516,11 @@ final class CameraControls: @unchecked Sendable {
             stepAutoIso()
             pollTicks += 1
             if pollTicks % 2 == 0 {
-                onUpdate?(.values(values()))
+                let values = values()
+                onUpdate?(.values(values))
+                if #available(iOS 18.0, *) {
+                    (cameraButton as? CameraButtonControls)?.refresh(values: values)
+                }
             }
         }
         pollTimer = timer
@@ -534,8 +549,7 @@ final class CameraControls: @unchecked Sendable {
             control.kind(self).map {
                 ControlDescriptor(id: control.id, label: control.label, group: control.group,
                                   kind: $0, enabledWhen: control.enabledWhen)
-                    .readonly(control.id == "shutter" && effectiveShutter != .free
-                        || control.id == "mains_hz" && serverProduction != nil)
+                    .readonly(control.id == "shutter" && effectiveShutter != .free)
                     .lockedWhileLive(control.id == "resolution" || control.id == "frame_rate"
                         || control.id == "mains_hz")
             }
@@ -735,6 +749,7 @@ final class CameraControls: @unchecked Sendable {
             onUpdate?(.log(level: "warn", message: warning))
         }
         log.info("Switched to \(newDevice.localizedName)")
+        rebuildCameraButton()
         onInputChanged?(newDevice.localizedName)
         onUpdate?(.log(level: "info", message: "Switched to \(lens.label) lens (\(newDevice.localizedName))"))
     }
@@ -889,7 +904,20 @@ final class CameraControls: @unchecked Sendable {
         reportedFormat = format
         log.info("Capture format \(format.width)x\(format.height) at \(format.frameRate) fps")
         configureGenlock()
+        rebuildCameraButton()
         onFormatChanged?(format)
+    }
+
+    /// The Camera Control button's sliders for the current device and format
+    /// (iPhone 16 and later; nothing elsewhere).
+    private func rebuildCameraButton() {
+        guard #available(iOS 18.0, *), session.supportsControls else {
+            return
+        }
+        let button = cameraButton as? CameraButtonControls
+            ?? CameraButtonControls(session: session, queue: queue, controls: self)
+        cameraButton = button
+        button.rebuild(device: device, values: values())
     }
 
     private func publishControlsIfChanged(force: Bool) {

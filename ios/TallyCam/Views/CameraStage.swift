@@ -1,7 +1,8 @@
 import SwiftUI
 
 /// Full-bleed camera preview with the operator's touch controls (tap to
-/// focus, long press to lock focus, pinch to zoom) and the aids drawn over
+/// focus and release an AE/AF lock, touch and hold to lock focus and
+/// exposure, pinch to zoom) and the aids drawn over
 /// the picture, or a quiet placeholder when there is no camera (no access,
 /// simulator).
 struct CameraStage: View {
@@ -17,8 +18,8 @@ struct CameraStage: View {
     /// change to the hub).
     private static let pinchInterval: TimeInterval = 0.05
 
-    @AppStorage(Aid.grid) private var grid = false
-    @AppStorage(Aid.horizon) private var horizon = false
+    @AppStorage(Aid.grid) private var grid = true
+    @AppStorage(Aid.horizon) private var horizon = true
     @AppStorage(Aid.safeAreas) private var safeAreas = false
     @AppStorage(Aid.centreCuts) private var centreCuts = false
     @AppStorage(Aid.peaking) private var peakingOn = false
@@ -30,6 +31,9 @@ struct CameraStage: View {
     /// Where focus was locked by a long press; cleared when focus leaves
     /// `locked` or on the next tap.
     @State private var lockPoint: CGPoint?
+    /// The hold switched exposure from auto to held; the next tap returns
+    /// it to auto.
+    @State private var exposureLocked = false
     // The touch in progress (tap or long press).
     @State private var touchStart: Date?
     @State private var touchMoved = false
@@ -59,7 +63,7 @@ struct CameraStage: View {
                     aids(in: rect)
                 }
                 if let lockPoint {
-                    FocusSquare(label: "AF LOCK")
+                    FocusSquare(label: exposureLocked ? "AE/AF LOCK" : "AF LOCK")
                         .position(lockPoint)
                         .transition(.opacity)
                 }
@@ -128,7 +132,7 @@ struct CameraStage: View {
 
     // MARK: Gestures
 
-    /// One finger: a tap focuses, holding still locks focus. Tracked by hand
+    /// One finger: a tap focuses, holding still locks focus and exposure. Tracked by hand
     /// so it can run alongside the pinch.
     private func touch(in size: CGSize) -> some Gesture {
         DragGesture(minimumDistance: 0, coordinateSpace: .local)
@@ -207,6 +211,13 @@ struct CameraStage: View {
             return
         }
         remote.localFocus(at: point)
+        // A tap anywhere releases the AE/AF lock back to auto.
+        if exposureLocked {
+            exposureLocked = false
+            if shading.mode(.exposure) != "auto" {
+                remote.localSet(["exposure_mode": .string("auto")])
+            }
+        }
         withAnimation(.easeOut(duration: 0.15)) {
             lockPoint = nil
             focusPoint = location
@@ -227,7 +238,15 @@ struct CameraStage: View {
         guard let point = streamPoint(location, in: size) else {
             return
         }
-        remote.localFocusLock(at: point)
+        // Exposure held at the values it had, where it was auto.
+        var exposureMode: String?
+        if shading.mode(.exposure) == "auto" {
+            let options = shading.descriptor("exposure_mode")?.options?.compactMap(\.value.string) ?? []
+            exposureMode = options.contains("manual") ? "manual" : options.contains("locked") ? "locked" : nil
+        }
+        exposureLocked = exposureLocked || exposureMode != nil
+        remote.localAeAfLock(at: point, exposureMode: exposureMode)
+        Haptics.tick()
         focusTask?.cancel()
         withAnimation(.easeOut(duration: 0.15)) {
             focusPoint = nil

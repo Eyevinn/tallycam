@@ -395,13 +395,12 @@ extension CameraControls {
                 guard Int(hz) != c.mainsHz else {
                     return nil
                 }
-                // The phone's own production; a hub's wins (docs/SHADING.md).
-                guard c.serverProduction == nil else {
-                    throw ControlError("set by the production on the control server")
-                }
                 guard !c.formatLocked else {
                     throw ControlError("not while live: stop the stream to change it")
                 }
+                // Never locked by the hub: the last write wins, until the
+                // hub's production changes (then its mains applies again).
+                c.mainsOverride = Int(hz)
                 c.localMainsHz = Int(hz)
                 c.applyProductionShutter()
                 return nil

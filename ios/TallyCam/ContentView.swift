@@ -282,14 +282,8 @@ struct ContentView: View {
     }
 
     private func zoomRocker(_ length: CGFloat) -> some View {
-        ZoomRocker(length: length) { rate in
-            if rate == 0 {
-                capture.controls.stopZoomRamp()
-            } else {
-                capture.controls.rampZoom(rate: rate)
-            }
-        }
-        .alignmentGuide(.rockerCentre) { $0[VerticalAlignment.center] }
+        ZoomControl(controls: capture.controls, shading: remote.shading, length: length)
+            .alignmentGuide(.rockerCentre) { $0[VerticalAlignment.center] }
     }
 
     /// The chosen group's mode button, rocker and value, mirroring zoom.

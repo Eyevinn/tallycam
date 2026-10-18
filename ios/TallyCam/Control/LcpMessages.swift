@@ -168,7 +168,9 @@ struct HelloMessage: Encodable {
     /// 1: with device keys (`public_key`, then `challenge` and `auth`).
     /// 2: production settings, image statistics and the live lock
     /// (docs/SHADING.md).
-    let `protocol` = 2
+    /// 3: 2 without ownership: the phone takes any value from the hub, the
+    /// last change wins (a protocol 2 phone is asked to update).
+    let `protocol` = 3
     let device: DeviceInfo
     /// The device key, base64 SEC1 (from the core's `DeviceKeyIdentity`).
     let publicKey: String?

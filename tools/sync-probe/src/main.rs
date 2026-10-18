@@ -56,6 +56,11 @@ Usage: sync-probe [OPTIONS] [PORT ...]          (default port 9100)
   --frames-csv PREFIX    write every stamped frame to PREFIX-<port>.csv (capture
                          and arrival TAI) for frame timing analysis
   --analyze CSV          print the frame timing of a saved CSV and exit
+  --dump-frames DIR      with --av: save every decoded frame as grey PNG in DIR,
+                         named f<index>_port<port>.png, where index is the frame
+                         slot on the TAI grid (capture time x fps, rounded), so
+                         genlocked cameras' frames of one instant sort together
+  --dump-fps N           frame rate of that grid (default 30)
   --quiet                only the summary
 ";
 
@@ -72,6 +77,8 @@ struct Args {
     duration_s: Option<u64>,
     quiet: bool,
     frames_csv: Option<String>,
+    dump_frames: Option<String>,
+    dump_fps: i64,
 }
 
 fn parse_args() -> Result<Args> {
@@ -88,6 +95,8 @@ fn parse_args() -> Result<Args> {
         duration_s: None,
         quiet: false,
         frames_csv: None,
+        dump_frames: None,
+        dump_fps: 30,
     };
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
@@ -112,6 +121,8 @@ fn parse_args() -> Result<Args> {
             "--duration-s" => a.duration_s = Some(value(&arg)?.parse().context("--duration-s")?),
             "--quiet" => a.quiet = true,
             "--frames-csv" => a.frames_csv = Some(value(&arg)?),
+            "--dump-frames" => a.dump_frames = Some(value(&arg)?),
+            "--dump-fps" => a.dump_fps = value(&arg)?.parse().context("--dump-fps")?,
             other => a.ports.push(
                 other
                     .parse()
@@ -121,6 +132,12 @@ fn parse_args() -> Result<Args> {
     }
     if a.ports.is_empty() {
         a.ports.push(9100);
+    }
+    if a.dump_frames.is_some() && !a.av {
+        anyhow::bail!("--dump-frames needs --av (it saves the decoded frames)");
+    }
+    if a.dump_fps <= 0 {
+        anyhow::bail!("--dump-fps must be positive");
     }
     Ok(a)
 }
@@ -458,6 +475,82 @@ struct Ctx {
     port: u16,
     clock: Arc<RxClock>,
     stats: Arc<Mutex<StreamStats>>,
+    dump: Option<Arc<FrameDump>>,
+}
+
+/// `--dump-frames`: grey frames written as PNG by a thread of their own, so
+/// the decoder never waits on the disk. Frames that do not fit the queue are
+/// dropped and counted.
+struct FrameDump {
+    dir: std::path::PathBuf,
+    fps: i64,
+    tx: std::sync::mpsc::SyncSender<(std::path::PathBuf, u32, u32, Vec<u8>)>,
+    dropped: std::sync::atomic::AtomicU64,
+}
+
+impl FrameDump {
+    fn start(dir: &str, fps: i64) -> Result<Arc<Self>> {
+        let dir = std::path::PathBuf::from(dir);
+        std::fs::create_dir_all(&dir)
+            .with_context(|| format!("--dump-frames {}", dir.display()))?;
+        let (tx, rx) = std::sync::mpsc::sync_channel::<(std::path::PathBuf, u32, u32, Vec<u8>)>(64);
+        std::thread::spawn(move || {
+            for (path, width, height, pixels) in rx {
+                if let Err(e) = write_png(&path, width, height, &pixels) {
+                    eprintln!("{}: {e}", path.display());
+                }
+            }
+        });
+        Ok(Arc::new(Self {
+            dir,
+            fps,
+            tx,
+            dropped: Default::default(),
+        }))
+    }
+
+    /// Queue one frame captured at `capture` (TAI ns): `width` bytes of each
+    /// of `height` rows, `stride` apart.
+    fn push(
+        &self,
+        port: u16,
+        capture: i64,
+        data: &[u8],
+        width: usize,
+        height: usize,
+        stride: usize,
+    ) {
+        let slot = (capture as i128 * self.fps as i128 + 500_000_000).div_euclid(1_000_000_000);
+        let path = self.dir.join(format!("f{slot:012}_port{port}.png"));
+        let mut pixels = Vec::with_capacity(width * height);
+        for row in data.chunks(stride).take(height) {
+            pixels.extend_from_slice(&row[..width.min(row.len())]);
+        }
+        if pixels.len() != width * height {
+            return;
+        }
+        if self
+            .tx
+            .try_send((path, width as u32, height as u32, pixels))
+            .is_err()
+            && self
+                .dropped
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                == 0
+        {
+            eprintln!("port {port}: --dump-frames cannot keep up, dropping frames");
+        }
+    }
+}
+
+fn write_png(path: &std::path::Path, width: u32, height: u32, pixels: &[u8]) -> Result<()> {
+    let file = std::io::BufWriter::new(std::fs::File::create(path)?);
+    let mut encoder = png::Encoder::new(file, width, height);
+    encoder.set_color(png::ColorType::Grayscale);
+    encoder.set_depth(png::BitDepth::Eight);
+    encoder.set_compression(png::Compression::Fast);
+    encoder.write_header()?.write_image_data(pixels)?;
+    Ok(())
 }
 
 /// Records glass-to-demux (`playout` false, sync=false) or glass-to-playout
@@ -512,6 +605,7 @@ fn report_pair(s: &mut StreamStats, flash: i64, beep: i64) {
 fn luma_sink(ctx: &Ctx) -> gst::Element {
     let stats = ctx.stats.clone();
     let port = ctx.port;
+    let dump = ctx.dump.clone();
     let sink = gst_app::AppSink::builder()
         .sync(false)
         .caps(
@@ -545,6 +639,16 @@ fn luma_sink(ctx: &Ctx) -> gst::Element {
                     .iter()
                     .find(|(p, _)| *p == pts.nseconds())
                     .map(|&(_, c)| c);
+                if let (Some(capture), Some(dump)) = (capture, &dump) {
+                    dump.push(
+                        port,
+                        capture,
+                        &map,
+                        info.width() as usize,
+                        info.height() as usize,
+                        stride,
+                    );
+                }
                 if let Some(capture) = capture {
                     if let Some(t) = s.flash.push(cells, capture) {
                         // One line per flash, to pair flashes across cameras.
@@ -998,6 +1102,10 @@ fn main() -> Result<()> {
     println!("{}", clock.line());
 
     let mut streams = Vec::new();
+    let dump = match &args.dump_frames {
+        Some(dir) => Some(FrameDump::start(dir, args.dump_fps)?),
+        None => None,
+    };
     for &port in &args.ports {
         let timing = match &args.frames_csv {
             Some(prefix) => {
@@ -1016,6 +1124,7 @@ fn main() -> Result<()> {
             port,
             clock: clock.clone(),
             stats: stats.clone(),
+            dump: dump.clone(),
         };
         let pipeline = build_stream(&args, ctx)?;
         pipeline.set_state(gst::State::Playing)?;

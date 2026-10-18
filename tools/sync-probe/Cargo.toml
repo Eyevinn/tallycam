@@ -11,3 +11,4 @@ gstreamer = { version = "0.25", features = ["v1_22"] }
 gstreamer-app = { version = "0.25", features = ["v1_22"] }
 gstreamer-video = { version = "0.25", features = ["v1_22"] }
 anyhow = "1"
+png = "0.17"

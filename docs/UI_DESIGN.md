@@ -142,7 +142,11 @@ Right side shown; the left one is its mirror image.
   screen allows:** 56 pt wide and as tall as the space between the top rows
   and the bottom row (leaving room for the value and K / Tint rows under
   it), never shorter than the selector and mode row beside it; both sides
-  the same. **Nothing moves
+  the same. Where that stack does not fit (a landscape phone: about 197 pt
+  between the rows), the value and the K / Tint row move beside the block on
+  its inner side, centred on the rocker, and the rocker takes the full
+  height. Lens buttons share the mode row's width (at least 30 pt wide each,
+  full height); the A | M cells stay full size. **Nothing moves
   when a group changes:** every slot has a fixed size worked out from the
   screen once, and the K / Tint row is kept (empty) for every group.
 - **Rocker.** The same component as zoom, same size, with the direction

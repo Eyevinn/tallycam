@@ -1,8 +1,16 @@
 # Tenants: several customers on one Strom
 
-Status: sketch, 2026-10-18. Nothing here is built. It covers Strom (and the
-TallyCam hub it embeds) and Open Live, the case being several Open Live
-customers sharing one Strom.
+Status: sketch, 2026-10-18. It covers Strom (and the TallyCam hub it
+embeds) and Open Live, the case being several Open Live customers sharing
+one Strom.
+
+**Conclusion so far: the isolation boundary is the container.** Strom runs
+untrusted web content and arbitrary GStreamer elements in one process (see
+"Why API scoping is not isolation"), so scoping its API by tenant would not
+keep customers apart. Supported today: one Strom per customer, as Strom's
+own docs require, with several productions of that one customer sharing it.
+Tenant keys in Strom (below) stay a later option, behind the conditions
+listed there.
 
 ## Today
 
@@ -36,7 +44,36 @@ So a Strom shared by two Open Live customers leaks, between them, flows, ports,
 cameras, preview pictures, tally and production settings. That is acceptable
 only while one Strom serves one customer.
 
-## Goal
+## Why API scoping is not isolation
+
+Everything below "The tenant key" scopes what callers can *ask* Strom to do.
+Inside one Strom process that is not enough:
+
+- **Untrusted web content.** Strom's documented rule is "one Strom container
+  per customer, on a locked network" (Strom `docs/HTML_RENDER.md`): the
+  Chromium in `strom-full` runs as root without its sandbox. One tenant's HTML
+  source would run in the process that holds every tenant's flows,
+  passphrases and PATs.
+- **Arbitrary GStreamer elements.** A flow may name any `element_type` with
+  any properties (`backend/src/gst/pipeline/construction.rs`, no allowlist).
+  A tenant could build `filesrc`/`filesink`/`multifilesink` and read or write
+  host files: other tenants' camera stores, `flows.json` with its
+  passphrases, the OSC PAT store, the config with the API keys. Blocks that
+  take paths (media player, recorders) are the same.
+- **One process, shared resources.** A GStreamer crash takes every tenant
+  down. CPU, GPU and NVENC sessions have no fairness, so quotas on flows,
+  ports and cameras do not cover what tenants really share.
+- **Other shared surfaces:** the media library (`/api/media`), discovery (NDI
+  and SAP announcements seen by all), and WHEP/WHIP endpoint ids (they must
+  not collide across tenants or be guessable).
+
+So a shared Strom across customers needs, before tenant keys mean anything:
+(a) blocks only, or an element and property allowlist, for tenant callers;
+(b) a path root per tenant for every file a flow touches; (c) a sandboxed
+Chromium; (d) some crash isolation (a process per tenant, at which point a
+container per tenant is simpler).
+
+## Goal (if a shared Strom is wanted)
 
 One Strom, several customers, each seeing and changing only their own
 things. Today's single-customer setups must keep working with no change to
@@ -145,6 +182,11 @@ What the TallyCam hub library needs:
 
 ## Phases
 
+The supported setup needs only phase 1: one Strom per customer, one TallyCam
+hub per Strom, and a production per flow. Phases 2 to 4 are for a shared
+Strom, and only after the conditions in "Why API scoping is not isolation"
+are met.
+
 1. **Hub library:** no statics; per-camera production. Small, and it helps
    single-tenant setups too (D6). **Done** (the unadmitted cap is per hub;
    `Hub::set_device_production`).
@@ -157,9 +199,10 @@ What the TallyCam hub library needs:
 
 ## Open questions
 
-- Is a shared Strom across OSC customers actually planned, or only shared
-  across several productions of one customer? Open Live's port-pool code
-  already expects several instances on one Strom.
+- Is a shared Strom across OSC customers actually wanted (Per's call), or
+  is one Strom per customer, shared by that customer's productions, enough?
+  Open Live's port-pool code expects several Open Live instances on one
+  Strom; with one Strom per customer those are one customer's instances.
 - Tenant keys in Strom's config file versus an admin API and store.
 - Admin view: one `/cameras` page per tenant, or one page with a tenant picker
   for the admin.

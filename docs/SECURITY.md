@@ -30,8 +30,8 @@ core, apps); the fixes are on main.
 
 ## Protected
 
-- **Admission:** a new phone needs an invite (with `--invites`, always in
-  Strom). A known phone proves its key on every connection: a fresh
+- **Admission:** a new phone needs an invite (the default; always in
+  Strom; not with `--open`). A known phone proves its key on every connection: a fresh
   256-bit nonce per challenge, a signature over the server id, the nonce,
   the device id and the host it dialled, checked against the host the
   connection reached (`Host`, or `X-Forwarded-Host` behind a proxy).
@@ -62,10 +62,10 @@ core, apps); the fixes are on main.
   operator token and invite tokens, and can drive the phones. Put it behind
   a TLS proxy (`--public-url wss://...`) for anything but a closed network.
   The apps take `ws://` only to local network hosts.
-- **The default hub is open.** Without `--invites` any host that reaches it
-  can join a camera and control every camera; it says so in a warning at
-  start. Use `--invites` (it generates an operator token) or
-  `--operator-token`.
+- **An open hub (`--open`)** lets any host that reaches it join a camera
+  and control every camera; it says so in a warning at start. The default is
+  invite-only with a generated operator token; use `--open` only on a closed
+  test network.
 - **HTTP connections have no read timeout** in `control-hub` (slow clients
   can hold sockets). Behind a proxy the proxy limits this.
 - **Unadmitted sockets are capped per hub, not per address:** one host can
@@ -83,7 +83,7 @@ core, apps); the fixes are on main.
 
 1. Strom: run it as the docs say, one per customer, behind TLS. Cameras
    always need an invite there.
-2. Standalone hub: `control-hub --invites --public-url wss://hub.example/...`
+2. Standalone hub: `control-hub --public-url wss://hub.example/...`
    behind a TLS proxy, with the token from the log (or
    `LCP_HUB_OPERATOR_TOKEN`, which keeps it out of `ps`). Open the page with
    the printed `#token=` link; it removes the token from the address bar.

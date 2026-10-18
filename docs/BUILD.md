@@ -102,8 +102,9 @@ cargo run --release -- --srt-url 'srt://192.0.2.20:9000?streamid={device}'
 cargo run --release -- --public-url wss://hub.example.com/lcp/v0/device
 cargo run --release -- --state-file devices.json              # keep known devices across restarts
 cargo run --release -- --preview-fps 5                        # preview images per second (default 2)
-cargo run --release -- --invites                              # invite-only; logs the operator link with its token
-cargo run --release -- --operator-token SECRET                # the page, invites and forgetting need the token
+cargo run --release                                           # invite-only (the default); logs the operator link with its token
+cargo run --release -- --operator-token SECRET                # that token instead of a generated one ($LCP_HUB_OPERATOR_TOKEN keeps it out of ps)
+cargo run --release -- --open                                 # closed test network only: no invites, no token
 cargo run --release -- --mains-hz 60 --shutter mains          # replace the stored production at startup
 ```
 
@@ -117,7 +118,8 @@ By default a phone streams to
 `srt://<hub address>:9000?streamid={device}&latency=100`, an SRT listener
 such as a Strom SRT input; the app replaces `{device}` with its stream id.
 
-To try the hub without a phone, run a simulated one:
+To try the hub without a phone, run a simulated one (against a hub started
+with `--open`, or give it an invite's control URL with `--url`):
 
 ```sh
 cargo run --release --bin fake_device -- --key cam2.key --name "Camera 2"

@@ -32,10 +32,13 @@ may change without notice. What works today:
 ## Quick start
 
 1. Start the control hub on a computer on the phone's network:
-   `cd control-hub && cargo run --release`.
-2. Open http://localhost:8090. It shows a QR code with the hub's address.
+   `cd control-hub && cargo run --release`. It logs the operator page link
+   with its token.
+2. Open that link (`http://<host>:8090/#token=...`) and choose "Add a
+   camera": it shows a one-time invite as a QR code.
 3. Scan it in TallyCam ("Scan QR code"), or with the phone's Camera app, and
-   join the hub. The camera appears in the hub with preview, tally, status
+   join the hub. (On a closed test network `--open` lets any phone join
+   without an invite and the page work without a token.) The camera appears in the hub with preview, tally, status
    and its controls.
 4. Go Live, from the phone or the hub. The phone streams SRT to the hub's
    host on port 9000, or to any SRT listener such as a Strom SRT input.

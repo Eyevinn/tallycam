@@ -1,8 +1,8 @@
 //! Standalone TallyCam hub: the `tallycam-hub` library served on its own.
 //!
 //! Usage: control-hub [--listen ADDR] [--public-url URL] [--srt-url URL] [--state-file PATH]
-//! [--invites] [--operator-token TOKEN] [--preview-fps N] [--mains-hz HZ] [--shutter mains|free|N]
-//! (env LCP_HUB_LISTEN, LCP_HUB_PUBLIC_URL, LCP_HUB_SRT_URL, LCP_HUB_STATE_FILE, LCP_HUB_INVITES=1,
+//! [--open] [--operator-token TOKEN] [--preview-fps N] [--mains-hz HZ] [--shutter mains|free|N]
+//! (env LCP_HUB_LISTEN, LCP_HUB_PUBLIC_URL, LCP_HUB_SRT_URL, LCP_HUB_STATE_FILE, LCP_HUB_OPEN=1,
 //! LCP_HUB_OPERATOR_TOKEN, LCP_HUB_PREVIEW_FPS, LCP_HUB_MAINS_HZ, LCP_HUB_SHUTTER)
 
 use std::net::SocketAddr;
@@ -22,7 +22,7 @@ struct Args {
     public_url: Option<String>,
     srt_url: Option<String>,
     state_file: Option<String>,
-    invites: bool,
+    open: bool,
     operator_token: Option<String>,
     preview_fps: Option<f64>,
     /// Given explicitly: replace the stored production's values.
@@ -37,7 +37,8 @@ fn parse_args() -> Result<Args, String> {
     let mut public_url = env("LCP_HUB_PUBLIC_URL");
     let mut srt_url = env("LCP_HUB_SRT_URL");
     let mut state_file = env("LCP_HUB_STATE_FILE");
-    let mut invites = env("LCP_HUB_INVITES").is_some_and(|v| v != "0" && v != "false");
+    // Invite-only unless asked to be open (a closed test network).
+    let mut open = env("LCP_HUB_OPEN").is_some_and(|v| v != "0" && v != "false");
     let mut operator_token = env("LCP_HUB_OPERATOR_TOKEN");
     let mut preview_fps = env("LCP_HUB_PREVIEW_FPS");
     let mut mains_hz = env("LCP_HUB_MAINS_HZ");
@@ -48,7 +49,9 @@ fn parse_args() -> Result<Args, String> {
             "--public-url" => public_url = Some(args.next().ok_or("--public-url needs a URL")?),
             "--srt-url" => srt_url = Some(args.next().ok_or("--srt-url needs a URL")?),
             "--state-file" => state_file = Some(args.next().ok_or("--state-file needs a path")?),
-            "--invites" => invites = true,
+            "--open" => open = true,
+            // The default since invites became it; kept for old scripts.
+            "--invites" => open = false,
             "--operator-token" => {
                 operator_token = Some(args.next().ok_or("--operator-token needs a value")?)
             }
@@ -65,7 +68,7 @@ fn parse_args() -> Result<Args, String> {
             "--help" | "-h" => {
                 println!(
                     "control-hub [--listen ADDR] [--public-url URL] [--srt-url URL] [--state-file PATH]\n\
-                     \x20           [--invites] [--operator-token TOKEN] [--preview-fps N]\n\
+                     \x20           [--open] [--operator-token TOKEN] [--preview-fps N]\n\
                      \x20           [--mains-hz HZ] [--shutter mains|free|N]\n\n\
                      --listen      ADDR to listen on ($LCP_HUB_LISTEN, default {DEFAULT_LISTEN}).\n\
                      --public-url  control URL handed to phones instead of ws://<lan ip>:<port>{DEVICE_PATH}\n\
@@ -76,13 +79,14 @@ fn parse_args() -> Result<Args, String> {
                      --state-file  JSON file that keeps the known devices and the production\n\
                      \x20             settings across restarts ($LCP_HUB_STATE_FILE). Default:\n\
                      \x20             none, the list starts empty.\n\
-                     --invites     a new phone needs a one-time invite (POST /api/invite, or\n\
-                     \x20             \"Add a camera\" on the page) and a device key; known phones\n\
-                     \x20             prove their key ($LCP_HUB_INVITES=1). Default: open, any\n\
-                     \x20             phone on the network joins.\n\
+                     --open        any phone on the network joins, and the page needs no token\n\
+                     \x20             unless --operator-token is given ($LCP_HUB_OPEN=1). Only for a\n\
+                     \x20             closed test network. Default: a new phone needs a one-time\n\
+                     \x20             invite (POST /api/invite, or \"Add a camera\" on the page) and\n\
+                     \x20             a device key; known phones prove their key.\n\
                      --operator-token  token the operator page, invites, forgetting devices and\n\
-                     \x20             camera control need ($LCP_HUB_OPERATOR_TOKEN). With --invites\n\
-                     \x20             and none given, one is made and the page link printed.\n\
+                     \x20             camera control need ($LCP_HUB_OPERATOR_TOKEN). Without\n\
+                     \x20             --open and none given, one is made and the page link printed.\n\
                      --preview-fps preview images per second from each phone while the page is\n\
                      \x20             open, 0.1 to 10 ($LCP_HUB_PREVIEW_FPS, default {DEFAULT_PREVIEW_FPS}).\n\
                      --mains-hz    mains frequency of the production's lights: 50, 60, or 0 for\n\
@@ -145,7 +149,7 @@ fn parse_args() -> Result<Args, String> {
         public_url,
         srt_url,
         state_file,
-        invites,
+        open,
         operator_token,
         preview_fps,
         mains_hz,
@@ -226,7 +230,7 @@ async fn main() {
         eprintln!("control-hub: {e}");
         std::process::exit(2);
     }
-    if args.invites {
+    if !args.open {
         hub.set_invite_required(true);
         info!("New phones need an invite and a device key");
     }
@@ -239,12 +243,11 @@ async fn main() {
             tallycam_hub::hub::redact_srt_url(&target.srt_url)
         );
     }
-    // With invites the hub is meant to be closed: the operator page, invites,
+    // Not open, the hub is closed: the operator page, invites,
     // forgetting devices and camera control then need a token.
-    let operator_token = args.operator_token.or_else(|| {
-        args.invites
-            .then(tallycam_hub::server::generate_operator_token)
-    });
+    let operator_token = args
+        .operator_token
+        .or_else(|| (!args.open).then(tallycam_hub::server::generate_operator_token));
     if let Some(token) = &operator_token {
         // The page lives where the phones' control URL points (the public URL
         // behind a proxy), with http for ws and https for wss.
@@ -263,9 +266,10 @@ async fn main() {
     }
     if operator_token.is_none() {
         warn!(
-            "Open hub: anyone who can reach {addr} can join a camera, control every camera \
-             and send its picture anywhere. For anything but a closed test network use \
-             --invites (an operator token and device keys), behind TLS (docs/SECURITY.md)."
+            "Open hub (--open): anyone who can reach {addr} can join a camera, control every \
+             camera and send its picture anywhere. Only for a closed test network; otherwise \
+             leave --open out (invites, an operator token and device keys) and run behind TLS \
+             (docs/SECURITY.md)."
         );
     }
     let options = tallycam_hub::server::ServerOptions { operator_token };

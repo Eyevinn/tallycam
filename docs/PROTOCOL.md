@@ -123,8 +123,8 @@ again every second (`status.stream.state` `connecting` with the reason in
   a QR code (`image/svg+xml`, one unit per module, scale it with CSS).
 - `POST /api/invite?target=<index>` (default 0): a one-time invite,
   `{deep_link, control_url, srt_url, qr_svg, expires_in_secs}`; the control
-  URL carries the token (`?token=`). With `--invites` the operator page shows
-  this instead of the plain deep link.
+  URL carries the token (`?token=`). With invites required (the default, not
+  `--open`) the operator page shows this instead of the plain deep link.
 - `DELETE /api/devices/{id}`: forget (revoke) a device, 204, or 404 for an
   unknown id. The page's "Forget" button.
 - Controller messages for many cameras (on the operator socket, besides
@@ -151,17 +151,19 @@ again every second (`status.stream.state` `connecting` with the reason in
     `last_seen_s` (unix seconds of the last `hello` or going offline; absent
     for a device not seen since it was kept), and `device_offline` carries
     `last_seen_s`. Snapshots list the devices in display order.
-- Operator token: with `--operator-token` (or `--invites`, which makes one and
-  logs the operator page link `http://<host>:<port>/#token=...`), creating
-  invites and forgetting devices need the `X-Operator-Token` header, and the
-  operator socket `?token=`. A header, so another site cannot forge these
+- Operator token: with `--operator-token`, or by default (not `--open`),
+  when the hub makes one and logs the operator page link
+  `http://<host>:<port>/#token=...`, creating invites and forgetting devices
+  need the `X-Operator-Token` header, and the operator socket the token (as
+  the subprotocol `tallycam.token.<token>`, or `?token=`). A header, so another site cannot forge these
   from the operator's browser. The page takes the token from its URL
-  fragment, which never reaches the server. Without a token the hub is open,
-  for a trusted LAN.
+  fragment, which never reaches the server. With `--open` and no token the
+  hub is open, for a closed test network.
 - Configuration: `--public-url` replaces the derived control URL (behind a
   proxy, see "Deployment" below); `--srt-url` sets the SRT URL handed out
   (default `srt://<address>:9000?streamid={device}&latency=100`);
-  `--invites` requires an invite (and so a device key) from new phones;
+  invites (and so a device key) are required from new phones unless
+  `--open`;
   `--state-file` keeps known devices and their keys, and the production
   settings (the key file of the hub's own tools is written owner-only, 0600,
   and never overwritten); `--mains-hz` and `--shutter`, when given, replace
@@ -249,7 +251,7 @@ phone                                   server
 
 ### Admission
 
-| Device | Invites off (standalone hub default) | Invites required (Strom, `--invites`) |
+| Device | Invites off (`--open`) | Invites required (the default; always in Strom) |
 |---|---|---|
 | Known, with this key | admitted | admitted |
 | Unknown, or known without a key | admitted, key bound | needs a valid invite token, which binds the key |

@@ -74,13 +74,11 @@ struct SideControl: View {
     /// row), in screen coordinates.
     @State private var zone: CGRect = .zero
 
-    /// The control's height: the rocker, with the value rows above it where
-    /// they are not beside the block; the tab's while hidden.
+    /// The control's height, hidden or not: the rocker with the tab above
+    /// it, or with the value rows (and the tab beside them) above.
     private var height: CGFloat {
-        if sides.hidden(side) {
-            return Chrome.control
-        }
-        return rowsBeside ? SideMetrics.rocker : SideMetrics.rocker + Chrome.gap + SideMetrics.rowsHeight
+        rowsBeside ? SideMetrics.rocker + Chrome.gap + Chrome.control
+            : SideMetrics.rocker + Chrome.gap + SideMetrics.rowsHeight
     }
 
     /// From the top of the zone to the control's top.
@@ -94,11 +92,23 @@ struct SideControl: View {
     }
 
     var body: some View {
+        // The tab at a fixed place just above the rocker at the screen edge,
+        // shown or hidden alike: the control folds away around it.
         Group {
-            if sides.hidden(side) {
-                tab
+            if rowsBeside {
+                VStack(alignment: side == .left ? .leading : .trailing, spacing: Chrome.gap) {
+                    tab
+                        .frame(width: SideMetrics.rockerWidth)
+                    folding(control)
+                }
             } else {
-                control
+                // The rows above the block leave the corner above the rocker.
+                folding(control)
+                    .overlay(alignment: side == .left ? .topLeading : .topTrailing) {
+                        tab
+                            .frame(width: SideMetrics.rockerWidth)
+                            .padding(.top, SideMetrics.rowsHeight - Chrome.control)
+                    }
             }
         }
         .offset(y: top)
@@ -106,21 +116,34 @@ struct SideControl: View {
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { zone = $0 }
     }
 
-    /// A hidden side: a tab at the edge in its group's colour; a tap brings
-    /// the side control back.
+    /// Hidden: the control keeps its place (nothing moves) but is not
+    /// drawn and takes no touches.
+    private func folding(_ control: some View) -> some View {
+        control
+            .opacity(sides.hidden(side) ? 0 : 1)
+            .allowsHitTesting(!sides.hidden(side))
+    }
+
+    /// Hide and show (docs/UI_DESIGN.md, "Hide and show: one tab"): centred
+    /// over the rocker, in the group's colour; the chevron points out to the edge while the control
+    /// shows (a tap folds it away), inward while hidden (a tap brings it
+    /// back with its group).
     private var tab: some View {
-        Button {
-            sides = sides.show(side)
+        let hidden = sides.hidden(side)
+        let pointsLeft = (side == .left) != hidden
+        return Button {
+            sides = hidden ? sides.show(side) : sides.hide(side)
         } label: {
-            Image(systemName: side == .left ? "chevron.right" : "chevron.left")
+            Image(systemName: pointsLeft ? "chevron.left" : "chevron.right")
                 .font(.system(size: 17, weight: .bold))
                 .foregroundStyle(.white)
+                .shadow(color: .black.opacity(0.5), radius: 2)
                 .frame(width: Chrome.control, height: Chrome.control)
                 .background(group.color.opacity(0.85), in: RoundedRectangle(cornerRadius: 10))
-                .shadow(color: .black.opacity(0.3), radius: 2)
+                .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(.white.opacity(0.4), lineWidth: 1))
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Show the \(side == .left ? "left" : "right") control (\(group.title))")
+        .accessibilityLabel("\(hidden ? "Show" : "Hide") the \(side == .left ? "left" : "right") control (\(group.title))")
     }
 
     private var control: some View {
@@ -189,7 +212,16 @@ struct SideLayout<Selector: View, Under: View, Bar: View, Value: View, Switch: V
             }
         } else {
             VStack(alignment: inward, spacing: Chrome.gap) {
-                rows
+                // Above the block; the corner above the rocker is the tab's.
+                HStack(spacing: Chrome.gap) {
+                    if side == .left {
+                        Color.clear.frame(width: SideMetrics.rockerWidth, height: 0)
+                        rows
+                    } else {
+                        rows
+                        Color.clear.frame(width: SideMetrics.rockerWidth, height: 0)
+                    }
+                }
                 HStack(alignment: .bottom, spacing: Chrome.gap) {
                     if side == .left {
                         bar
@@ -229,7 +261,7 @@ struct SideLayout<Selector: View, Under: View, Bar: View, Value: View, Switch: V
                 .frame(width: 0, height: SideMetrics.rowHeight)
                 .overlay(alignment: side == .left ? .leading : .trailing) { rowSwitch().fixedSize() }
         }
-        .frame(width: rowsBeside ? SideMetrics.besideWidth : SideMetrics.coreWidth,
+        .frame(width: rowsBeside ? SideMetrics.besideWidth : SideMetrics.blockWidth,
                height: SideMetrics.rowsHeight, alignment: side == .left ? .leading : .trailing)
     }
 }

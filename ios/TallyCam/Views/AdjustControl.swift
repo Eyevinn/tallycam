@@ -152,9 +152,8 @@ struct AdjustControl<Selector: View>: View {
 
 
     /// A | M: the filled cell is the mode; a tap on the other switches,
-    /// keeping the values. M for any held mode: locked and manual both keep
-    /// the values, and the rocker turns locked into manual anyway. A long
-    /// press on colour's is "white balance once".
+    /// keeping the values. Manual holds the camera's current values as
+    /// numbers. A long press on colour's is "white balance once".
     private var modeButton: some View {
         // White balance has a third cell, ◎: white balance once from the
         // picture, then held (M).

@@ -301,3 +301,6 @@ row's footer says why instead of the usual text.
   orange warnings and connecting, cyan a change from the hub (a 1 s flash).
 - Spacing from one set of constants (iOS `Chrome`, Android the same names):
   tally clearance 22, minimum edge 8, gap 10, row gap 6, zone gap 10.
+  Distance from a screen edge: max(safe-area inset + 8, 22), so chrome is
+  8 pt clear of the Dynamic Island, a cutout or the home indicator, and
+  22 pt in where there is none.

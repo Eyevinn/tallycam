@@ -262,15 +262,15 @@ struct Rocker: View {
 }
 
 /// The lens buttons in a zoom side control's mode row: one cell per lens
-/// the camera has (from the `lens` control), sharing the row, longest
-/// first, the active one filled. Nothing with a single lens.
+/// the camera has (from the `lens` control), sharing the row, widest left
+/// to longest right, the active one filled. Nothing with a single lens.
 struct LensSwitch: View {
     @ObservedObject var shading: Shading
     let onSelect: (String) -> Void
 
     var body: some View {
-        // Longest first.
-        let options = (shading.descriptor("lens")?.options ?? []).reversed().map { $0 }
+        // Widest left, longest right (0.5× 1× 4×): the camera lists them so.
+        let options = shading.descriptor("lens")?.options ?? []
         let current = shading.values["lens"]?.string
         if options.count > 1 {
             CellGrid(cells: options.map {

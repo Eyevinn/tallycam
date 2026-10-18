@@ -7,7 +7,7 @@ import Foundation
 // control runs (docs/UI_DESIGN.md).
 
 /// Exposure, colour and focus: the groups of the camera values row and the
-/// adjust strip (the `group` in their descriptors).
+/// side controls (the `group` in their descriptors).
 enum ShadingGroup: String, CaseIterable, Identifiable {
     case exposure
     case whiteBalance = "white_balance"
@@ -25,7 +25,7 @@ enum ShadingGroup: String, CaseIterable, Identifiable {
         }
     }
 
-    /// In the adjust control's group selector.
+    /// In the side controls' selector.
     var caption: String {
         switch self {
         case .exposure: "EXP"
@@ -365,22 +365,31 @@ struct Sides: Equatable {
         return sides
     }
 
-    /// A selector tap on one side: the chosen group again hides that side;
-    /// the other side's group swaps the two (each side keeps whether it is
+    /// A selector tap on one side: the chosen group again does nothing; the
+    /// other side's group swaps the two (each side keeps whether it is
     /// hidden).
     func choose(_ side: Side, _ group: SideGroup) -> Sides {
         var sides = self
         switch side {
-        case .left where group == left:
-            sides.leftHidden = true
-        case .right where group == right:
-            sides.rightHidden = true
+        case .left where group == left, .right where group == right:
+            break
         case .left:
             sides.right = group == right ? left : right
             sides.left = group
         case .right:
             sides.left = group == left ? right : left
             sides.right = group
+        }
+        return sides
+    }
+
+    /// A tap on a shown side's tab: it folds away, keeping its group.
+    func hide(_ side: Side) -> Sides {
+        var sides = self
+        if side == .left {
+            sides.leftHidden = true
+        } else {
+            sides.rightHidden = true
         }
         return sides
     }

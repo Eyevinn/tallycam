@@ -158,6 +158,8 @@ final class UiVectorTests: XCTestCase {
                 result = try start.choose(side, XCTUnwrap(choose["group"]?.string.flatMap(SideGroup.init(rawValue:))))
             } else if let show = vector["show"]?.string {
                 result = start.show(show == "left" ? .left : .right)
+            } else if let hide = vector["hide"]?.string {
+                result = start.hide(hide == "left" ? .left : .right)
             } else if let tap = vector["values_tap"]?.string {
                 result = try start.fromValues(XCTUnwrap(SideGroup(rawValue: tap)))
             } else if case let .array(available)? = vector["available"] {

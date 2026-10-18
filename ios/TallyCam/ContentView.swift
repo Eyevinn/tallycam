@@ -179,7 +179,7 @@ struct ContentView: View {
                 HStack(spacing: Chrome.gap) {
                     VStack(alignment: .leading, spacing: Chrome.zoneGap) {
                         sideColumn(.left, rowsBeside: rowsBeside, screenHeight: screenHeight)
-                        tools(vertical: false)
+                        tools
                             .frame(height: LiveButton.size, alignment: .bottom)
                     }
                     VStack(spacing: Chrome.zoneGap) {
@@ -208,7 +208,7 @@ struct ContentView: View {
                 }
                 unlockSlider
                 HStack(alignment: .bottom, spacing: Chrome.gap) {
-                    tools(vertical: false)
+                    tools
                     Spacer(minLength: 0)
                     audioMeter
                 }
@@ -223,8 +223,8 @@ struct ContentView: View {
         .animation(.easeInOut(duration: 0.2), value: remote.banner)
     }
 
-    /// Phones: the side controls in the bottom corners; the tools in the
-    /// upper-left corner (a column in landscape, a row in portrait) and the
+    /// Phones: the side controls in the bottom corners; the tools in a row
+    /// in the upper-left corner and the
     /// live button in the upper-right one with the meter on its inner side.
     /// Messages at the top centre; the slide to unlock at the bottom edge
     /// between the side controls (landscape) or just above them (portrait).
@@ -237,7 +237,9 @@ struct ContentView: View {
             }
             VStack(spacing: Chrome.zoneGap) {
                 HStack(alignment: .top, spacing: Chrome.gap) {
-                    tools(vertical: landscape)
+                    // A row: a column would run into the left side
+                    // control's tab on a landscape phone.
+                    tools
                     Spacer(minLength: 0)
                     HStack(spacing: Chrome.gap) {
                         audioMeter
@@ -383,11 +385,9 @@ struct ContentView: View {
     }
 
     /// Aids and screen lock; the QR scanner too while no hub is connected
-    /// and not live. A column (6 pt gaps) in a landscape phone's upper-left
-    /// corner, else a row.
-    private func tools(vertical: Bool) -> some View {
-        let layout = vertical ? AnyLayout(VStackLayout(spacing: 6)) : AnyLayout(HStackLayout(spacing: Chrome.gap))
-        return layout {
+    /// and not live. A row.
+    private var tools: some View {
+        HStack(spacing: Chrome.gap) {
             AidsMenu(remote: remote, shading: remote.shading)
             if !remote.connected, controller.state == .idle, !scanning {
                 Button(action: startScan) {

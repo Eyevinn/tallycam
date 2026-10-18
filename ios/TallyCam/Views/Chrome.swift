@@ -1,8 +1,11 @@
 import SwiftUI
 
 /// The shooting screen's one grid: every piece of chrome is placed with
-/// these, never with its own numbers (docs/APPS.md, "The shooting screen").
+/// these, never with its own numbers (docs/UI_DESIGN.md, "Look").
 enum Chrome {
+    /// The doc's minimum edge (docs/UI_DESIGN.md, "Look"): the least
+    /// padding inside a safe-area inset, see `edge`.
+    static let minEdge: CGFloat = 8
     /// Width of the tally border plus a margin: chrome stays clear of it.
     static let tallyClearance: CGFloat = 22
     /// Round buttons and the bottom row.
@@ -16,12 +19,11 @@ enum Chrome {
     /// Between the zones (top, middle, bottom).
     static let zoneGap: CGFloat = 10
 
-    /// Padding inside the safe area: chrome sits max(inset, tally
-    /// clearance) from each screen edge, never the inset plus the clearance
-    /// (under the Dynamic Island directly; at the clearance where an edge
-    /// has no inset, landscape top for example).
+    /// Padding inside the safe area: chrome sits max(inset + minEdge, tally
+    /// clearance) from each screen edge, 8 pt clear of the Dynamic Island
+    /// and the home indicator, 22 pt where an edge has no inset (as Android).
     static func edge(_ inset: CGFloat) -> CGFloat {
-        max(0, tallyClearance - inset)
+        max(minEdge, tallyClearance - inset)
     }
 }
 

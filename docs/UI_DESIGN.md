@@ -155,7 +155,8 @@ knob while it moves; the lens buttons follow the active lens.
   rockers.
 - Aids drawn over the picture only, each switch persisted: grid, horizon
   level, safe areas (93 % / 90 %), centre cuts (4:3, 9:16), focus peaking
-  (edges in red).
+  (edges in red). Grid and horizon level are on from the first launch, the
+  others off.
 
 ## States
 

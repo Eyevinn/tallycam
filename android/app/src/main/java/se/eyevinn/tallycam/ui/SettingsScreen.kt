@@ -3,6 +3,7 @@ package se.eyevinn.tallycam.ui
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -133,6 +134,13 @@ fun SettingsScreen(model: AppModel, atPicture: Boolean = false, onScan: () -> Un
                         " Adaptive bitrate lowers the video bitrate when the network cannot carry it, and raises it again up to the bitrate set.", width) {
                     Field(srt, { srt = it }, "srt://host:port?streamid=...", url = true, enabled = !live)
                     Divider()
+                    // The URL's `latency`: the field follows; applies on the next Go Live.
+                    val latency = model.shading.values.optInt("srt_latency_ms", 120)
+                    Stepper("SRT latency", "$latency ms", enabled = srt.isNotEmpty(),
+                            canDown = latency > 0, canUp = latency < 8000,
+                            onDown = { model.localSet(JSONObject().put("srt_latency_ms", (latency - 20).coerceAtLeast(0))); srt = model.settings.srtUrl },
+                            onUp = { model.localSet(JSONObject().put("srt_latency_ms", (latency + 20).coerceAtMost(8000))); srt = model.settings.srtUrl })
+                    Divider()
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text("Adaptive bitrate", color = Color.White)
                         Spacer(Modifier.weight(1f))
@@ -197,6 +205,7 @@ fun SettingsScreen(model: AppModel, atPicture: Boolean = false, onScan: () -> Un
                         clock.findings.forEach { Text(it, color = Secondary, fontSize = 13.sp, modifier = Modifier.padding(top = 6.dp)) }
                     }
                 }
+                DiagnosticsSection(model, width)
                 // About.
                 Section("About", null, width) {
                     val id = model.deviceId
@@ -339,18 +348,18 @@ private fun PictureSection(model: AppModel, live: Boolean, width: Modifier) {
             Segmented(model.videoCodecs, model.settings.videoCodec, !live) { model.localSet(JSONObject().put("video_codec", it)) }
             Divider()
         }
+        Labeled("Audio codec", "")
+        Segmented(listOf("opus" to "Opus", "aac" to "AAC"), model.settings.audioCodec, !live) {
+            model.localSet(JSONObject().put("audio_codec", it))
+        }
+        Divider()
         // Bitrate in 500 kbit/s steps, within the control's range.
         val range = AppModel.BITRATE_KBPS
         val kbps = v.optInt("bitrate_kbps", 0)
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("Bitrate", color = Color.White)
-            Spacer(Modifier.weight(1f))
-            TextButton(onClick = { model.localSet(JSONObject().put("bitrate_kbps", (kbps - 500).coerceAtLeast(range.first))) },
-                       enabled = !live && kbps > range.first) { Text("−", fontSize = 20.sp) }
-            Text("$kbps kbit/s" + if (model.settings.bitrateKbps <= 0) " (auto)" else "", color = Secondary, style = Chrome.tabular)
-            TextButton(onClick = { model.localSet(JSONObject().put("bitrate_kbps", (kbps + 500).coerceAtMost(range.last))) },
-                       enabled = !live && kbps < range.last) { Text("+", fontSize = 20.sp) }
-        }
+        Stepper("Bitrate", "$kbps kbit/s" + if (model.settings.bitrateKbps <= 0) " (auto)" else "", enabled = !live,
+                canDown = kbps > range.first, canUp = kbps < range.last,
+                onDown = { model.localSet(JSONObject().put("bitrate_kbps", (kbps - 500).coerceAtLeast(range.first))) },
+                onUp = { model.localSet(JSONObject().put("bitrate_kbps", (kbps + 500).coerceAtMost(range.last))) })
         Divider()
         Labeled("Picture", model.pictureSummary)
     }
@@ -368,7 +377,7 @@ private fun SyncSection(model: AppModel, width: Modifier) {
     if ("genlock" !in d && "stabilization" !in d) return
     // Refreshed with the screen's tick (the parent recomposes each second).
     val state = model.genlockState()
-    Section("Sync", "Genlock aligns frames with other cameras on the same clock. Stabilization off for multi-camera sync tests.", width) {
+    Section("Sync", "Genlock aligns frames with other cameras on the same clock. The offset moves where this camera's frames land, for calibration. Stabilization off for multi-camera sync tests.", width) {
         if ("genlock" in d) {
             val on = v.optBoolean("genlock")
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -383,14 +392,65 @@ private fun SyncSection(model: AppModel, width: Modifier) {
                 }
                 androidx.compose.material3.Switch(checked = on, onCheckedChange = { model.localSet(JSONObject().put("genlock", it)) })
             }
+            if (on && "genlock_offset_us" in d) {
+                Divider()
+                val us = Math.round(v.optDouble("genlock_offset_us", 0.0)).toInt()
+                // 100 µs steps; a double tap on the value is 0.
+                Stepper("Genlock offset", "$us µs", enabled = true, canDown = us > -50000, canUp = us < 50000,
+                        onDown = { model.localSet(JSONObject().put("genlock_offset_us", (us - 100).coerceAtLeast(-50000))) },
+                        onUp = { model.localSet(JSONObject().put("genlock_offset_us", (us + 100).coerceAtMost(50000))) },
+                        onReset = { model.localSet(JSONObject().put("genlock_offset_us", 0)) })
+            }
         }
         if ("stabilization" in d) {
             if ("genlock" in d) Divider()
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Stabilization", color = Color.White)
-                Spacer(Modifier.weight(1f))
-                androidx.compose.material3.Switch(checked = v.optString("stabilization") == "standard",
-                    onCheckedChange = { model.localSet(JSONObject().put("stabilization", if (it) "standard" else "off")) })
+            // The modes the lens has.
+            Labeled("Stabilization", "")
+            Segmented(options(d["stabilization"]), v.optString("stabilization"), true) {
+                model.localSet(JSONObject().put("stabilization", it))
+            }
+        }
+    }
+}
+
+/** A value between − and + buttons; [onReset] on a double tap of the value. */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+@Composable
+private fun Stepper(label: String, value: String, enabled: Boolean, canDown: Boolean, canUp: Boolean, onDown: () -> Unit,
+                    onUp: () -> Unit, onReset: (() -> Unit)? = null) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(label, color = Color.White)
+        Spacer(Modifier.weight(1f))
+        TextButton(onClick = onDown, enabled = enabled && canDown) { Text("−", fontSize = 20.sp) }
+        Text(value, color = Secondary, style = Chrome.tabular,
+             modifier = if (onReset == null || !enabled) Modifier
+                        else Modifier.combinedClickable(onClick = {}, onDoubleClick = onReset))
+        TextButton(onClick = onUp, enabled = enabled && canUp) { Text("+", fontSize = 20.sp) }
+    }
+}
+
+/**
+ * Diagnostics (docs/UI_DESIGN.md, "Settings"), collapsed until opened:
+ * Share clock log (the `clock_log` command's text, through the share
+ * sheet). Android has no torch probe or frame duration (docs/APPS.md).
+ */
+@Composable
+private fun DiagnosticsSection(model: AppModel, width: Modifier) {
+    var open by remember { mutableStateOf(false) }
+    val context = androidx.compose.ui.platform.LocalContext.current
+    Section("Diagnostics", "For measurements and support. Nothing here is needed to film.", width) {
+        Row(Modifier.fillMaxWidth().clickable { open = !open }.padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("Diagnostics", color = Color.White)
+            Spacer(Modifier.weight(1f))
+            Text(if (open) "⌃" else "⌄", color = Secondary, fontSize = 18.sp)
+        }
+        if (open) {
+            Divider()
+            Action("Share clock log", Color(0xFF0A84FF)) {
+                val send = android.content.Intent(android.content.Intent.ACTION_SEND).setType("text/plain")
+                    .putExtra(android.content.Intent.EXTRA_SUBJECT, "TallyCam clock log, ${model.displayName}")
+                    .putExtra(android.content.Intent.EXTRA_TEXT, model.clockLogText())
+                context.startActivity(android.content.Intent.createChooser(send, "Share clock log"))
             }
         }
     }

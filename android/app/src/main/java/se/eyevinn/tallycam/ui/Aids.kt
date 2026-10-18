@@ -100,7 +100,7 @@ class Aids(context: Context) {
 
 /** The button that opens the aids menu. */
 @Composable
-fun AidsMenu(aids: Aids) {
+fun AidsMenu(aids: Aids, model: AppModel) {
     var open by remember { mutableStateOf(false) }
     Box {
         ChromeButton("▦", active = aids.anyOn) { open = true }
@@ -119,6 +119,19 @@ fun AidsMenu(aids: Aids) {
             item("centreCuts", "Centre cuts (4:3, 9:16)", aids.centreCuts)
             HorizontalDivider()
             item("peaking", "Focus peaking (sharp edges in red)", aids.peaking)
+            // The torch: a light on the subject, kept with the switches flipped
+            // while filming; only where the lens has one, and the hub can switch it too.
+            if ("torch" in model.shading.descriptors) {
+                HorizontalDivider()
+                val torch = model.shading.values.optBoolean("torch")
+                DropdownMenuItem(
+                    text = { Text("Torch") },
+                    leadingIcon = {
+                        Checkbox(torch, onCheckedChange = null, colors = CheckboxDefaults.colors(checkedColor = Color(0xFFFFD60A)))
+                    },
+                    onClick = { model.localSet(org.json.JSONObject().put("torch", !torch)) },
+                )
+            }
         }
     }
 }

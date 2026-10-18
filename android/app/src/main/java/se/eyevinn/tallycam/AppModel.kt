@@ -782,6 +782,12 @@ class AppModel(private val context: Context) : LcpClient.Listener, LiveStream.Li
      */
     fun genlockState(): Pair<String, Double>? = camera.genlockStatus?.let { genlockStateName(it) to it[1] / 1e6 }
 
+    /** The clock's log and reports as text, for Settings' "Share clock log" (as the `clock_log` command sends them). */
+    fun clockLogText(lines: Int = 2000): String {
+        val c = clock ?: return "Clock not running"
+        return (c.logLines(emptyList(), lines.toUInt()) + listOf("", c.reportsText())).joinToString("\n")
+    }
+
     /** The video codecs this phone encodes (H.264, and HEVC where it has an encoder). */
     val videoCodecs: List<Pair<String, String>> by lazy {
         buildList {

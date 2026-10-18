@@ -170,7 +170,7 @@ private fun BoxScope.ShootingScreen(model: AppModel, onScan: () -> Unit) {
     val tools = @Composable {
         // Aids and screen lock; the QR scanner too while no hub is connected and not live.
         Row(horizontalArrangement = Arrangement.spacedBy(Chrome.gap)) {
-            AidsMenu(aids)
+            AidsMenu(aids, model)
             if (model.link != AppModel.Link.CONNECTED && idle) {
                 Box(Modifier.semantics { contentDescription = "Scan QR code" }) { ChromeButton("⌗", onClick = onScan) }
             }

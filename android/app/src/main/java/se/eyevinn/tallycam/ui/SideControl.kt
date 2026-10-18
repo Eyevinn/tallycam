@@ -286,18 +286,28 @@ internal fun zoomFactorText(model: AppModel): String {
  * the one in use filled (white for auto, yellow for held), a tap on the
  * other switches to it, keeping the values. M is any held mode: manual,
  * locked (by the hub, or focus locked on the picture), or the lock a camera
- * uses where it has no manual (Android's white balance). A long press on
- * colour's is "white balance once".
+ * uses where it has no manual (Android's white balance). For white balance
+ * a third cell, ◎, sets it once from the picture and holds it (as does a
+ * long press on A or M).
  */
 @Composable
 private fun ModeRow(model: AppModel, group: String, mode: String) {
     val auto = mode == "auto"
     val held = if (mode == "locked") "locked" else heldMode(model, group)
     val wbOnce: (() -> Unit)? = if (group == "white_balance") ({ model.localWhiteBalanceOnce() }) else null
-    Cells(listOf(listOf(
+    val cells = mutableListOf(
         Cell("A", on = auto, fill = Color.White, description = "${title(group)} auto", longPress = wbOnce),
         Cell("M", on = !auto, fill = Chrome.yellow, description = "${title(group)} $held", longPress = wbOnce),
-    )), fontSize = 17.sp) { _, column -> model.localSet(JSONObject().put(modeKey(group), if (column == 0) "auto" else held)) }
+    )
+    // White balance: ◎ sets it once from the picture and holds it (M).
+    if (wbOnce != null) cells += Cell("◎", on = false, description = "White balance once")
+    Cells(listOf(cells), fontSize = 17.sp) { _, column ->
+        when (column) {
+            0 -> model.localSet(JSONObject().put(modeKey(group), "auto"))
+            1 -> model.localSet(JSONObject().put(modeKey(group), held))
+            else -> model.localWhiteBalanceOnce()
+        }
+    }
 }
 
 /** K or Tint for colour's rocker. */

@@ -39,9 +39,10 @@ pub type Mat3 = [[f64; 3]; 3];
 
 pub const IDENTITY: Mat3 = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
 
-/// The temperature range the functions clamp to, K.
+/// The temperature range the functions clamp to, K: the apps' range (above
+/// 10000 K AVFoundation's gains run out, and Android follows iOS).
 pub const MIN_TEMPERATURE_K: f64 = 2000.0;
-pub const MAX_TEMPERATURE_K: f64 = 15000.0;
+pub const MAX_TEMPERATURE_K: f64 = 10000.0;
 /// The tint range the functions clamp to (Adobe tint units, as AVFoundation).
 pub const MAX_TINT: f64 = 150.0;
 
@@ -172,7 +173,7 @@ pub fn illuminant_temperature_k(light_source: u32) -> Option<f64> {
 }
 
 /// The camera gains for an illuminant of `temperature_k` and `tint`
-/// (clamped to 2000-15000 K and ±150): a neutral under it comes out
+/// (clamped to 2000-10000 K and ±150): a neutral under it comes out
 /// neutral. None for a NaN input or an unusable calibration.
 pub fn gains_for(temperature_k: f64, tint: f64, cal: &Calibration) -> Option<Gains> {
     let (_, _, _, white) = prepare(temperature_k, tint, cal)?;
@@ -236,7 +237,7 @@ fn gains_of(white: [f64; 3]) -> Gains {
 
 /// The illuminant (temperature K, tint) that the gains neutralise, e.g. the
 /// `COLOR_CORRECTION_GAINS` of an auto white balance capture result; the
-/// inverse of [`gains_for`]. Clamped to 2000-15000 K and ±150. None for
+/// inverse of [`gains_for`]. Clamped to 2000-10000 K and ±150. None for
 /// non-positive or non-finite gains or an unusable calibration.
 pub fn temperature_tint_for(gains: Gains, cal: &Calibration) -> Option<(f64, f64)> {
     let g = (gains.gr + gains.gb) * 0.5;
@@ -749,7 +750,7 @@ mod tests {
 
     #[test]
     fn xy_round_trip() {
-        for k in [2000.0, 2856.0, 4000.0, 5000.0, 6504.0, 10000.0, 15000.0] {
+        for k in [2000.0, 2856.0, 4000.0, 5000.0, 6504.0, 8000.0, 10000.0] {
             for tint in [-150.0, -50.0, 0.0, 10.0, 50.0, 150.0] {
                 // Exact on the locus; the isotherms are interpolated, so far
                 // off it the two directions differ slightly (as in the SDK).
@@ -791,7 +792,7 @@ mod tests {
     #[test]
     fn gains_are_at_least_one() {
         for cal in sets() {
-            for k in [2000.0, 3000.0, 5000.0, 8000.0, 15000.0] {
+            for k in [2000.0, 3000.0, 5000.0, 8000.0, 10000.0] {
                 for tint in [-150.0, 0.0, 150.0] {
                     let g = gains_for(k, tint, &cal).unwrap();
                     let all = [g.r, g.gr, g.gb, g.b];
@@ -807,7 +808,7 @@ mod tests {
     fn lower_temperature_more_blue_gain() {
         for cal in sets() {
             let mut last = 0.0;
-            let mut k = 15000.0;
+            let mut k = 10000.0;
             while k >= 2000.0 {
                 let g = gains_for(k, 0.0, &cal).unwrap();
                 let ratio = g.b / g.r;
@@ -876,7 +877,7 @@ mod tests {
         // negative Bradford cone); the gains are still there.
         for cal in sets() {
             let mut k = 2000.0;
-            while k <= 15000.0 {
+            while k <= 10000.0 {
                 let mut tint = -150.0;
                 while tint <= 150.0 {
                     match color_transform_for(k, tint, &cal) {
@@ -935,10 +936,10 @@ mod tests {
     fn clamps_out_of_range() {
         let cal = pixel_7_pro();
         assert_eq!(gains_for(100.0, 0.0, &cal), gains_for(2000.0, 0.0, &cal));
-        assert_eq!(gains_for(1.0e6, 0.0, &cal), gains_for(15000.0, 0.0, &cal));
+        assert_eq!(gains_for(1.0e6, 0.0, &cal), gains_for(10000.0, 0.0, &cal));
         assert_eq!(
             gains_for(f64::INFINITY, 0.0, &cal),
-            gains_for(15000.0, 0.0, &cal)
+            gains_for(10000.0, 0.0, &cal)
         );
         assert_eq!(
             gains_for(5000.0, 400.0, &cal),

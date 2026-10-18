@@ -38,7 +38,7 @@ fn calibration(env: &JNIEnv, cal: &JDoubleArray) -> Option<Calibration> {
 /// B (all ≥ 1), then the colour transform, row-major (rows sum to 1).
 /// Returns how many values it wrote: 13, 4 (gains only: no transform for
 /// this calibration and illuminant) or 0 (none: a bad calibration or NaN).
-/// Temperature clamps to 2000-15000 K, tint to ±150.
+/// Temperature clamps to 2000-10000 K, tint to ±150.
 #[no_mangle]
 pub extern "system" fn Java_se_eyevinn_tallycam_core_Hot_whiteBalanceFor(
     env: JNIEnv,
@@ -73,7 +73,7 @@ pub extern "system" fn Java_se_eyevinn_tallycam_core_Hot_whiteBalanceFor(
 
 /// `cal` (length 56, above); `gains` (length 4): R, Gr, Gb, B, e.g. an
 /// auto capture result's `COLOR_CORRECTION_GAINS`. On true, `out`
-/// (length 2) holds the temperature (K, 2000-15000) and tint (±150) they
+/// (length 2) holds the temperature (K, 2000-10000) and tint (±150) they
 /// neutralise.
 #[no_mangle]
 pub extern "system" fn Java_se_eyevinn_tallycam_core_Hot_whiteBalanceTemperatureTint(

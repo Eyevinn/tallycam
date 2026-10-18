@@ -429,10 +429,7 @@ class CameraControls(
         const val NO_MANUAL_WHITE_BALANCE = "no manual white balance on this camera"
         private const val EXPECTED_MODE = "expected auto or manual"
 
-        /**
-         * As iOS (AVFoundation's gains run out above 10000 K); the core
-         * itself goes to 15000.
-         */
+        /** As iOS and the core (AVFoundation's gains run out above 10000 K). */
         const val MIN_KELVIN = 2000.0
         const val MAX_KELVIN = 10000.0
         const val MAX_TINT = 150.0

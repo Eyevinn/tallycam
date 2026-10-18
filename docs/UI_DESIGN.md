@@ -136,6 +136,8 @@ Right side shown; the left one is its mirror image.
   manual anyway. Moving the rocker in auto switches white balance and focus
   to manual; exposure stays in auto and changes the compensation. For zoom
   the lens buttons take this row (only on a camera with more than one lens).
+  For white balance a third cell, `◎`, sits beside `A` and `M`: a tap sets
+  the white balance once from the picture (`wb_one_shot`) and holds it (`M`).
 - **A colour per group,** so the usual setup is recognised at a glance (blue
   left, red right by default): zoom blue, exposure red, white balance
   violet, focus green. It marks only the control: the rocker's outline and
@@ -207,6 +209,9 @@ the lens buttons, which follow the active lens.
   level, safe areas (93 % / 90 %), centre cuts (4:3, 9:16), focus peaking
   (edges in red). Grid and horizon level are on from the first launch, the
   others off.
+- The aids menu also holds **Torch** (on/off, only where the lens has one).
+  It is a light on the subject, not an aid, but it belongs with the
+  switches the operator flips while filming. The hub can switch it too.
 
 ## States
 
@@ -225,8 +230,8 @@ the lens buttons, which follow the active lens.
   the link has none; while live, "The stream URL applies on the next Go
   Live"), and Join / Cancel. A link for the hub already in use applies
   without asking. A restored or recreated screen never asks again.
-- **Live.** Settings that cannot change mid-stream (format, mains) are disabled
-  with a note; the values row and the rockers work as always.
+- **Live.** Settings that cannot change mid-stream (resolution, frame rate,
+  video and audio codec, mains) are disabled with a note; the values row and the rockers work as always.
 
 ## Settings
 
@@ -244,12 +249,13 @@ row's footer says why instead of the usual text.
 |---|---|---|
 | **Camera name** | Text field, the default name (model and the start of the id) as placeholder | "How the hub and Strom show this camera. The operator can rename it too; empty uses the model." |
 | **Control hub** | Link dot and state (Connected, Reconnecting, Not set up) with the host; the URL field (`ws://host:8090/lcp/v0/device`), reconnecting when submitted or on Done if changed; "Scan QR code" (disabled while live); "Disconnect and forget server" (only when a hub is set; asks "Forget the control hub?", "The phone disconnects from the hub. Scan its QR code to connect again.", Forget server / Cancel) | Idle: "To connect, scan the QR code in the control hub here or with the Camera app." Live: "Stop the stream to scan here; the Camera app works while live." |
-| **Stream (SRT)** | The URL field (disabled while live); Adaptive bitrate switch; while live: Encoder now (with adaptive bitrate), Round trip, Retransmitted / dropped | Idle: "Set by the QR code. Edit only if you know the address." Live: "Stop the stream to change the address." Then always: "Adaptive bitrate lowers the video bitrate when the network cannot carry it, and raises it again up to the bitrate set." |
-| **Picture** | Segmented pickers labelled Lens, Resolution, Frame rate (what the active lens offers: the `resolution` and `frame_rate` controls' lists) and Video codec; Bitrate as a stepper, "− 6000 kbit/s +" in 500 kbit/s steps within the control's range, "(auto)" while unset; all disabled while live | "Stop the stream to change." while live; otherwise none |
-| **Sync** | Genlock switch with its state (Locked, Locking, Off) and the phase error when locked; Stabilization switch | "Genlock aligns frames with other cameras on the same clock. Stabilization off for multi-camera sync tests." |
+| **Stream (SRT)** | The URL field (disabled while live); SRT latency as a stepper, "− 120 ms +" in 20 ms steps (0 to 8000; it is the URL's `latency`, so the field and the stepper show the same value; a change applies on the next Go Live); Adaptive bitrate switch; while live: Encoder now (with adaptive bitrate), Round trip, Retransmitted / dropped | Idle: "Set by the QR code. Edit only if you know the address." Live: "Stop the stream to change the address." Then always: "Adaptive bitrate lowers the video bitrate when the network cannot carry it, and raises it again up to the bitrate set." |
+| **Picture** | Segmented pickers labelled Lens, Resolution, Frame rate (what the active lens offers: the `resolution` and `frame_rate` controls' lists) Video codec and Audio codec (Opus, AAC); Bitrate as a stepper, "− 6000 kbit/s +" in 500 kbit/s steps within the control's range, "(auto)" while unset; all disabled while live | "Stop the stream to change." while live; otherwise none |
+| **Sync** | Genlock switch with its state (Locked, Locking, Off) and the phase error when locked; Genlock offset as a stepper in µs (−50000 to 50000, 100 µs steps, double tap for 0), shown only while genlock is on; Stabilization as a segmented picker of the modes the lens has (Off, Standard, Cinematic, ...) | "Genlock aligns frames with other cameras on the same clock. The offset moves where this camera's frames land, for calibration. Stabilization off for multi-camera sync tests." |
 | **Exposure** | Mains: 50 Hz / 60 Hz / Off, segmented, showing the mains in use. Disabled only while live; under a hub's production a change holds for this camera until the hub sends a different production (last write wins). Left out when the camera has no mains control | "The shutter follows the mains frequency so mains-lit light does not flicker. Off outdoors, where the shutter is free." Under a hub production: "The control hub sets this for all cameras; a change here applies to this camera until the hub changes it." Live: "Stop the stream to change." |
 | **Orientation** | Auto / Landscape / Portrait, segmented (where the app can stream portrait) | "Auto follows how the phone is held." While a change waits: "The stream keeps its geometry while live; the new setting applies when it stops." |
 | **Clock** | Health (dot and word), Synchronised, Estimated error, Maximum error, Reference ("name (address)"), Stratum, Sources reachable ("3 of 4"), then the findings as small text; "Clock not running" without a clock | "The phone's own NTP-disciplined clock, used to timestamp frames." |
+| **Diagnostics** | Collapsed by default ("Diagnostics", a disclosure row). Torch probe (runs the `torch_probe` command and shows its summary when done); Share clock log (`clock_log`, through the share sheet); in Debug builds also Frame duration (`frame_duration`, µs) | "For measurements and support. Nothing here is needed to film." |
 | **About** | App version ("0.2.0 (12)"), Camera name, Model, the OS and its version ("iOS", "Android"), Stream id, Device key (first 16 hex characters in groups of 4, monospaced; the hub's camera page shows the same) | None |
 
 ## Look

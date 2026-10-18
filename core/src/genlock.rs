@@ -111,6 +111,14 @@ pub struct GenlockStatus {
     pub frame_duration_ns: f64,
     /// Correction against the nominal period, ppm (negative: shorter).
     pub correction_ppm: f64,
+    /// Catching a late phase up on the next grid point by lengthening
+    /// frames, because the format cannot run fast enough to trim it.
+    pub slipping: bool,
+    /// Frames at the format's shortest duration still land later each
+    /// window: this sensor is too slow to hold the grid on this format. The
+    /// phase drifts late and wraps a frame about every half period / rate
+    /// error; a format that runs faster than nominal fixes it.
+    pub format_too_slow: bool,
 }
 
 pub struct Genlock {
@@ -128,6 +136,12 @@ pub struct Genlock {
     /// The previous window's mean error, to tell a held offset from a pull.
     last_mean: Option<f64>,
     good_windows: u32,
+    /// Durations published in a row at the format's minimum, windows in a
+    /// row the phase moved later (positive) or earlier there, and the
+    /// verdict drawn from them.
+    floor_windows: u32,
+    floor_trend: i32,
+    too_slow: bool,
     status: GenlockStatus,
 }
 
@@ -146,12 +160,17 @@ impl Genlock {
             last_error: None,
             last_mean: None,
             good_windows: 0,
+            floor_windows: 0,
+            floor_trend: 0,
+            too_slow: false,
             status: GenlockStatus {
                 state: GenlockState::FreeRun,
                 phase_error_ns: 0.0,
                 phase_error_max_ns: 0.0,
                 frame_duration_ns: period,
                 correction_ppm: 0.0,
+                slipping: false,
+                format_too_slow: false,
             },
         }
     }
@@ -206,7 +225,7 @@ impl Genlock {
                 self.last_mean = None;
                 // Keep the learned rate, drop the phase steering.
                 self.correction = self.integral;
-                return Some(self.publish(self.status.phase_error_ns, 0.0));
+                return Some(self.publish(self.status.phase_error_ns, 0.0, false));
             }
             return None;
         }
@@ -242,14 +261,14 @@ impl Genlock {
         let n = f64::from(self.count);
         // Fast acquisition can carry the unwrapped error past the grid edge
         // within one window: fold the mean back onto [-P/2, P/2).
-        let mut mean = self.sum / n;
-        mean -= self.period * ((mean + self.period / 2.0) / self.period).floor();
+        let mean = self.fold(self.sum / n);
         let max_abs = self.max_abs;
         // Keep the unwrapped error continuous into the next window, but
         // bring it back onto [-P/2, P/2) once the window is closed.
         self.last_error = Some(self.phase_error_ns(capture_tai_ns));
         self.reset_window();
 
+        self.judge_floor(mean);
         self.update_lock(mean);
         // A format that cannot run faster than nominal can only lengthen
         // frames: catch a late phase up on the next grid point instead. The
@@ -258,8 +277,13 @@ impl Genlock {
         // back (an iPad 6 at 1080p30 sits at about +1600 ppm).
         let headroom = self.period + self.integral - self.cfg.min_frame_duration_ns;
         // Slip only when trimming cannot catch up within ten windows; a slip
-        // is a whole frame of disturbance, trimming is invisible.
-        let slip = mean > self.cfg.lock_threshold_ns && headroom.max(0.0) * n < 0.1 * mean;
+        // is a whole frame of disturbance, trimming is invisible. Never for
+        // a sensor too slow for the format: it would drift late again at
+        // once (a slip every 13 s at +75 ppm). Left to drift, it wraps on
+        // its own at half a period and is pulled back from the early side.
+        let slip = !self.too_slow
+            && mean > self.cfg.lock_threshold_ns
+            && headroom.max(0.0) * n < 0.1 * mean;
         let control = if slip { mean - self.period } else { mean };
         let limit = self.period
             * 1e-6
@@ -296,16 +320,51 @@ impl Genlock {
         // would only run away).
         let floor = (self.cfg.min_frame_duration_ns - self.period).max(-limit);
         if (wanted - clamped).abs() < f64::EPSILON {
-            self.integral = integral.clamp(floor.min(limit), limit);
+            let mut next = integral.clamp(floor.min(limit), limit);
+            // The minimum saturates the output too. While frames there still
+            // catch the phase up, the learned rate is the headroom the trim
+            // runs on: unlearning it would run it down to the floor and turn
+            // a 0.7 ms trim into a slip. Only a sensor too slow for the
+            // format unlearns it there.
+            if clamped < floor && !self.too_slow {
+                next = next.max(self.integral.min(limit));
+            }
+            self.integral = next;
         }
         self.correction = clamped;
-        Some(self.publish(mean, max_abs))
+        Some(self.publish(mean, max_abs, slip))
+    }
+
+    /// Watches the phase while frames run at the format's minimum. A
+    /// verdict takes three windows in a row the same way, so a clock step
+    /// or the noise of one window does not flip it.
+    fn judge_floor(&mut self, mean: f64) {
+        // Two durations at the minimum in a row: the last two windows both
+        // ran there, so their difference is the floor's own drift.
+        match self.last_mean {
+            Some(prev) if self.floor_windows >= 2 => {
+                self.floor_trend = if self.fold(mean - prev) > 0.0 {
+                    self.floor_trend.max(0) + 1
+                } else {
+                    self.floor_trend.min(0) - 1
+                };
+                if self.floor_trend >= 3 {
+                    self.too_slow = true;
+                } else if self.floor_trend <= -3 {
+                    self.too_slow = false;
+                }
+            }
+            _ => self.floor_trend = 0,
+        }
     }
 
     fn update_lock(&mut self, mean: f64) {
         match self.state {
             GenlockState::Locked => {
-                if mean.abs() > self.cfg.unlock_threshold_ns {
+                // No hysteresis for a phase that cannot be held: it would
+                // stay "locked" while drifting to the unlock threshold.
+                let drifting = self.too_slow && mean > self.cfg.lock_threshold_ns;
+                if mean.abs() > self.cfg.unlock_threshold_ns || drifting {
                     self.state = GenlockState::Acquiring;
                     self.good_windows = 0;
                 }
@@ -323,14 +382,26 @@ impl Genlock {
         }
     }
 
-    fn publish(&mut self, mean: f64, max_abs: f64) -> f64 {
+    /// Folds an error onto [-period/2, period/2).
+    fn fold(&self, e: f64) -> f64 {
+        e - self.period * ((e + self.period / 2.0) / self.period).floor()
+    }
+
+    fn publish(&mut self, mean: f64, max_abs: f64, slipping: bool) -> f64 {
         let duration = (self.period + self.correction).max(self.cfg.min_frame_duration_ns);
+        if duration <= self.cfg.min_frame_duration_ns {
+            self.floor_windows += 1;
+        } else {
+            self.floor_windows = 0;
+        }
         self.status = GenlockStatus {
             state: self.state,
             phase_error_ns: mean,
             phase_error_max_ns: max_abs,
             frame_duration_ns: duration,
             correction_ppm: (duration - self.period) / self.period * 1e6,
+            slipping,
+            format_too_slow: self.too_slow,
         };
         duration
     }
@@ -417,6 +488,72 @@ mod tests {
             }
             each(i, &mut s, &g);
         }
+    }
+
+    /// The line time of a format whose shortest frame is `period`, about
+    /// 7.4 us: a format's shortest frame is a whole number of lines.
+    fn lines_of(period: f64) -> f64 {
+        period / (period / 7_400.0).round()
+    }
+
+    /// What a run did, seen from the sensor and from the loop's windows.
+    #[derive(Debug, Default)]
+    struct Tally {
+        /// When (s into the run) the sensor moved on to another grid point:
+        /// a whole frame dropped or repeated against the grid.
+        frame_slips: Vec<f64>,
+        windows: u32,
+        slip_windows: u32,
+        locked_windows: u32,
+        /// Largest |mean error| of a locked window, ns.
+        worst_locked_ns: f64,
+    }
+
+    /// Feeds `seconds` of frames from `s` to `g`, calling `each` before
+    /// every frame (to step or bend the sensor).
+    fn tally(
+        g: &mut Genlock,
+        s: &mut Sensor,
+        seconds: u32,
+        mut each: impl FnMut(u32, &mut Sensor, &Genlock),
+    ) -> Tally {
+        let cfg = *g.config();
+        let period = cfg.period_ns();
+        let grid_point = |s: &Sensor| ((s.t - T0) / period).round() as i64 - i64::from(s.frame);
+        let mut out = Tally::default();
+        let mut point = grid_point(s);
+        for i in 0..seconds * cfg.fps_num / cfg.fps_den {
+            each(i, s, g);
+            let t = s.next();
+            if let Some(d) = g.on_frame(t, true) {
+                s.ask(d);
+                let st = g.status();
+                out.windows += 1;
+                out.slip_windows += u32::from(st.slipping);
+                if std::env::var("GL_TRACE").is_ok() {
+                    eprintln!(
+                        "{} {:?} e {:.0} us c {:.1} ppm slip {} slow {} fw {} tr {}",
+                        i / 30,
+                        st.state,
+                        st.phase_error_ns / 1e3,
+                        st.correction_ppm,
+                        st.slipping,
+                        st.format_too_slow,
+                        g.floor_windows,
+                        g.floor_trend
+                    );
+                }
+                if st.state == GenlockState::Locked {
+                    out.locked_windows += 1;
+                    out.worst_locked_ns = out.worst_locked_ns.max(st.phase_error_ns.abs());
+                }
+            }
+            if grid_point(s) != point {
+                point = grid_point(s);
+                out.frame_slips.push(f64::from(i) * period / 1e9);
+            }
+        }
+        out
     }
 
     #[test]
@@ -519,7 +656,9 @@ mod tests {
     #[test]
     fn locks_by_lengthening_when_frames_cannot_be_shorter() {
         // A 30 fps maximum format: no frame shorter than nominal. The sensor
-        // runs fast, as measured, and starts 10 ms late.
+        // runs fast, as measured, and starts 10 ms late. Its shortest frame
+        // is a whole number of lines; with 7.4 us lines it would be 4504.5
+        // and round up 110 ppm, slower than the grid, which no trim holds.
         let period = 1e9 / 30.0;
         let cfg = GenlockConfig {
             min_frame_duration_ns: period,
@@ -527,6 +666,7 @@ mod tests {
         };
         let mut g = Genlock::new(cfg);
         let mut s = Sensor::new(T0 + 10_000_000.0, period);
+        s.step_ns = lines_of(period);
         let mut locked = None;
         for i in 0..60 * 30 {
             let t = s.next();
@@ -647,6 +787,152 @@ mod tests {
             g.status().correction_ppm >= -1.0,
             "rate wound below nominal"
         );
+    }
+
+    #[test]
+    fn trims_a_small_late_step_when_frames_cannot_be_shorter() {
+        // Locked on the minimum-is-nominal format with the measured -75 ppm
+        // sensor, then the phase jumps 0.7 ms late. The learned lengthening
+        // gives back 2.5 us a frame, so the trim takes about ten windows. It
+        // used to unlearn that against the minimum and slip a frame instead.
+        let period = 1e9 / 30.0;
+        let cfg = GenlockConfig {
+            min_frame_duration_ns: period,
+            ..Default::default()
+        };
+        let mut g = Genlock::new(cfg);
+        let mut s = Sensor::new(T0 + 6_000_000.0, period);
+        s.step_ns = lines_of(period);
+        tally(&mut g, &mut s, 60, |_, _, _| {});
+        assert_eq!(g.status().state, GenlockState::Locked);
+        let mut back = None;
+        let after = tally(&mut g, &mut s, 60, |i, s, g| {
+            if i == 0 {
+                s.t += 700_000.0;
+            }
+            if i > 30 && back.is_none() && g.status().phase_error_ns.abs() < 150_000.0 {
+                back = Some(i / 30);
+            }
+        });
+        assert!(after.frame_slips.is_empty(), "{after:?}");
+        assert_eq!(after.slip_windows, 0, "{after:?}");
+        let back = back.expect("never trimmed back");
+        assert!(back <= 15, "trimmed back after {back} s");
+        assert_eq!(after.locked_windows, after.windows, "{after:?}");
+        assert!(!g.status().format_too_slow);
+    }
+
+    #[test]
+    fn trims_a_late_step_with_the_learned_headroom() {
+        // The iPad 6 (1600 ppm fast) on its minimum-is-nominal format, then
+        // 3 ms late. Nominal leaves no headroom, but the learned lengthening
+        // leaves 53 us a frame: trim within two windows, no slip.
+        let period = 1e9 / 30.0;
+        let cfg = GenlockConfig {
+            min_frame_duration_ns: period,
+            ..Default::default()
+        };
+        let mut g = Genlock::new(cfg);
+        let mut s = Sensor::new(T0 + 6_000_000.0, period);
+        s.bias_ppm = -1_600.0;
+        tally(&mut g, &mut s, 60, |_, _, _| {});
+        assert_eq!(g.status().state, GenlockState::Locked);
+        let after = tally(&mut g, &mut s, 60, |i, s, _| {
+            if i == 0 {
+                s.t += 3_000_000.0;
+            }
+        });
+        assert!(after.frame_slips.is_empty(), "{after:?}");
+        assert_eq!(after.slip_windows, 0, "{after:?}");
+        assert_eq!(g.status().state, GenlockState::Locked);
+    }
+
+    #[test]
+    fn drifts_instead_of_slipping_when_the_sensor_is_too_slow_for_the_format() {
+        // A sensor 75 ppm slow on a format with no frame shorter than
+        // nominal: frames at the minimum land 2.5 us late each, and nothing
+        // the loop can ask for stops that. The phase must drift late, wrap at
+        // half a period (a whole frame against the grid) and be pulled back
+        // from the early side: one frame every half period / 75 ppm, 222 s
+        // plus the pull. It used to slip at 0.5 ms late, every 13 s, and
+        // reported Locked up to 1.9 ms off. Run with 7.4 us lines too, which
+        // make the shortest frame 185 ppm slow.
+        let period = 1e9 / 30.0;
+        let cfg = GenlockConfig {
+            min_frame_duration_ns: period,
+            ..Default::default()
+        };
+        for step_ns in [lines_of(period), 7_400.0] {
+            let mut g = Genlock::new(cfg);
+            let mut s = Sensor::new(T0 + 6_000_000.0, period);
+            s.bias_ppm = 75.0;
+            s.step_ns = step_ns;
+            let shortest = (period / step_ns).round() * step_ns * (1.0 + 75e-6);
+            let wrap_s = period / 2.0 / (shortest - period) * period / 1e9;
+            // The learned rate never goes below the minimum.
+            let floor = |_: u32, _: &mut Sensor, g: &Genlock| {
+                assert!(g.integral >= -1e-9, "integral {}", g.integral);
+            };
+            // One slip while acquiring, before anything is known; the verdict
+            // takes a few windows of drift after the lock.
+            let start = tally(&mut g, &mut s, 30, floor);
+            assert!(start.frame_slips.len() == 1 && start.slip_windows <= 3);
+            assert!(g.status().format_too_slow, "{step_ns}: {start:?}");
+            let run = tally(&mut g, &mut s, 1800, floor);
+            assert_eq!(run.slip_windows, 0, "{step_ns}: {run:?}");
+            assert!(run.frame_slips.len() >= 3, "{step_ns}: {run:?}");
+            for w in run.frame_slips.windows(2) {
+                let gap = w[1] - w[0];
+                assert!(
+                    gap > wrap_s && gap < wrap_s + 20.0,
+                    "{step_ns}: a frame after {gap:.0} s, expected {wrap_s:.0} s"
+                );
+            }
+            // Locked only while the phase really is on the grid.
+            assert!(
+                run.worst_locked_ns < cfg.lock_threshold_ns,
+                "{step_ns}: {run:?}"
+            );
+            assert!(g.status().format_too_slow);
+        }
+    }
+
+    #[test]
+    fn locks_again_when_a_too_slow_sensor_speeds_up() {
+        // Too slow for the format at first (+75 ppm), then the sensor runs
+        // 75 ppm fast, at several points of the drift. Frames at the minimum
+        // catch up again, the verdict clears, and the loop slips at most
+        // once (it unlearned its rate while too slow) and holds the grid.
+        // The slip must not teach the rate: its first window follows a slow
+        // drift, so the phase looks held, and learning there asks for
+        // frames 1600 ppm long and keeps it off the grid for minutes.
+        let period = 1e9 / 30.0;
+        let cfg = GenlockConfig {
+            min_frame_duration_ns: period,
+            ..Default::default()
+        };
+        for at in [240, 280, 320, 360] {
+            let mut g = Genlock::new(cfg);
+            let mut s = Sensor::new(T0 + 6_000_000.0, period);
+            s.step_ns = lines_of(period);
+            s.bias_ppm = 75.0;
+            tally(&mut g, &mut s, at, |_, _, _| {});
+            assert!(g.status().format_too_slow);
+            s.bias_ppm = -75.0;
+            let mut locked = None;
+            let first = tally(&mut g, &mut s, 60, |i, _, g| {
+                if locked.is_none() && g.status().state == GenlockState::Locked {
+                    locked = Some(i / 30);
+                }
+            });
+            assert!(first.frame_slips.len() <= 1, "{at}: {first:?}");
+            let locked = locked.expect("never locked again");
+            assert!(locked <= 30, "{at}: locked again after {locked} s");
+            assert!(!g.status().format_too_slow);
+            let held = tally(&mut g, &mut s, 60, |_, _, _| {});
+            assert!(held.frame_slips.is_empty(), "{at}: {held:?}");
+            assert_eq!(held.locked_windows, held.windows, "{at}: {held:?}");
+        }
     }
 
     #[test]

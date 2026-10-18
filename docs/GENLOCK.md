@@ -226,6 +226,26 @@ Open:
 - 25, 50 and 60 fps, 4K and HEVC, and other phone models are not tried.
 - `activeLockedVideoFrameDuration` and hardware genlock are not tried.
 
+## Formats with no room to shorten
+
+Genlock trims the frame duration around the nominal period, but a format
+whose shortest frame is the nominal one (min frame duration = 1/fps) can only
+lengthen frames. A sensor that runs fast is held by lengthening. One that runs
+slow can not be: it falls behind the grid by its rate error (75 ppm is 2.5 µs
+a frame at 30 fps), and nothing short of a slip brings it back.
+
+The loop treats a duration held at the format's minimum as saturated, so
+its integral does not unlearn the trim (a small late step is trimmed back in
+instead of slipping). When three windows in a row at the minimum drift later,
+it judges the format too slow for the sensor (`format_too_slow` in the
+status) and stops slipping: the phase drifts late, wraps at half a period
+and is pulled back in from the early side. At +75 ppm and 30 fps that is
+one whole-frame wrap about every 227 s instead of a slip every 14 s, and the
+state is Locked only while the error is within the lock threshold. Three
+windows catching up clear the verdict. The app should prefer a format with
+shorter frames (most phones have one at the same size) when it sees it;
+`format_too_slow` is not yet in the FFI status or the apps.
+
 ## Auto ISO
 
 Genlock needs the frame duration, which iOS auto exposure moves, so exposure

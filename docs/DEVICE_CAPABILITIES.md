@@ -59,7 +59,8 @@ the de facto camera tracking protocol for virtual studios and AR graphics.
 - Physical controls: iOS 26 lets capture apps map the Camera Control button,
   the volume buttons and AirPods stem clicks (H2 AirPods) to actions
   (`AVCaptureEventInteraction`). Uses: "call the gallery", "I'm ready",
-  "go live" with consent.
+  "go live" with consent. The Camera Control's zoom and exposure sliders are
+  in (docs/UI_DESIGN.md, "Picture").
 
 ### Timecode
 

@@ -28,10 +28,10 @@ name, and the value itself is where you go to change it.
 
 ## What TallyCam shows
 
-**Phone.** One row under the status line, always shown:
-`1080p30 │ ISO 26 │ 1/100 │ +0.3 EV │ 5200 K +4 │ AF`. Each value is the way
-in to adjust it; manual or locked values are yellow, a value the hub just
-set flashes cyan. Battery, thermal state and tally are in the status row and
+**Phone.** One row under the status line (in landscape part of the one top
+bar), always shown: `1080p30 │ ISO 26 │ 1/100 │ +0.3 EV │ 5200 K +4 │ AF`.
+A tap on a value selects its group on a side control; manual values are
+yellow, a value the hub just set flashes cyan. Battery, thermal state and tally are in the status row and
 the name chip. The design: docs/UI_DESIGN.md.
 
 **Hub.** The same values, in the phone's formats, on one line on every

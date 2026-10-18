@@ -25,7 +25,7 @@ into `build/core/` at the repository root (also not committed).
 `build/core/TallyCamCore.xcframework` for other consumers.
 
 The unit tests (Swift-side logic: the core's hot path, SEI, the muxer,
-messages, provisioning links) run with the scheme `TallyCamTests`, not
+messages, provisioning links, the shared UI vectors) run with the scheme `TallyCamTests`, not
 hosted in the app:
 
 ```sh

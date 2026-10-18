@@ -400,8 +400,8 @@ statistics"; computed by `core/src/image_stats.rs`.
 | `message` | `text` | shown to the person at the phone |
 | `preview` | `enabled`, `fps?` (default 1), `width?` (default 480) | start or stop preview images |
 | `challenge` | `server`, `nonce` | prove the device key, see "Device keys" |
-| `production` | `mains_hz`, `shutter` (`"mains"`, `"free"` or a denominator) | protocol 2: the production's mains frequency and shutter; kept until the stream stops when it arrives while live. The shutter is free under `"free"`, and under `"mains"` with `mains_hz` 0 |
-| `stats` | `enabled`, `fps?` (default 1, 0.2 to 4) | protocol 2: start or stop `image_stats` |
+| `production` | `mains_hz`, `shutter` (`"mains"`, `"free"` or a denominator) | protocol 2 and up: the production's mains frequency and shutter; kept until the stream stops when it arrives while live. The shutter is free under `"free"`, and under `"mains"` with `mains_hz` 0 |
+| `stats` | `enabled`, `fps?` (default 1, 0.2 to 4) | protocol 2 and up: start or stop `image_stats` |
 
 Exposure, colour and focus are plain controls: the server and the camera
 operator both change them at any time, and the last write wins (SHADING.md,
@@ -431,8 +431,7 @@ that does not own them).
 - `group`: UI grouping. Suggested: `stream`, `lens`, `exposure`,
   `white_balance`, `focus`, `image`, `audio`.
 - `enabled_when`: the control is only writable when the other controls have
-  these values; a list means any of them (`{"focus_mode": ["manual",
-  "auto"]}`). The UI greys it out otherwise, but still shows its value.
+  these values; a list means any of them. The UI greys it out otherwise, but still shows its value.
 - `readonly: true`: shown, never set. `readonly_reason` (optional text) says
   why, for the UI ("no manual exposure on this camera").
 - `locked_while_live: true`: refused while the stream is live (format,
@@ -492,7 +491,7 @@ an older phone as `manual`.
 
 Commands: `focus_at {x, y}` (point of interest for focus and exposure, in
 normalized frame coordinates), `wb_one_shot` (measure white balance once, then
-lock), `clock_log {lines?, kinds?}` (the clock discipline log, see "Clock
+hold it in `manual`), `clock_log {lines?, kinds?}` (the clock discipline log, see "Clock
 log"), `torch_probe {mode?, cycles?, on_ms?, off_ms?}` (a measurement of the
 torch against the capture timing; `mode` is `self`, `emit` or `watch`; results
 as `log` messages and files on the phone; see GENLOCK.md, "Torch probe").

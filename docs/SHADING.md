@@ -17,7 +17,7 @@ auto or manual, D14). **The shader (hub page) and the camera operator
 (phone) can both change exposure, colour and focus at any time. Nothing is
 locked either way: the last write wins** (D13). Both see the values the
 other set: the phone in its values row (a value the hub just set flashes
-cyan) and its adjust control, the hub from `state`.
+cyan) and on its side controls, the hub from `state`.
 
 ## Control groups
 
@@ -96,7 +96,7 @@ an old controller. A phone ignores `own` and `release` from an old hub.
   stream state does not read as live after a reconnect), and `image_stats`
   when its statistics are switched off.
 
-### What a protocol 2 device must do
+### What a protocol 3 device must do
 
 1. On `production`: apply `mains_hz` and the shutter, or keep them until the
    stream stops if live (see "Shutter").
@@ -104,7 +104,7 @@ an old controller. A phone ignores `own` and `release` from an old hub.
 3. Apply `set` and `command` on any group, as from the operator. Report the
    result in `state`, as for every control.
 
-A version 1 device needs none of this. The hub accepts both versions, and
+A version 1 device needs none of this; a version 2 device does 1 and 2. The hub accepts both versions, and
 warns only about a version newer than its own.
 
 ## Shutter
@@ -178,10 +178,10 @@ Android; differences in docs/APPS.md). For shading it means:
 
 - **Values row:** the camera's values, always shown; a manual group's value
   is yellow, auto white.
-- **Adjust control:** exposure ramps `ev_bias` in auto and ISO in manual;
+- **Side controls:** exposure ramps `ev_bias` in auto and ISO in manual;
   colour `wb_temperature` or `wb_tint`; focus `focus_position`. Moving
-  colour or focus in auto switches it to manual. A long press on colour's
-  mode switch is `wb_one_shot`.
+  colour or focus in auto switches it to manual. Colour's `◎` cell (or a
+  long press on its mode switch) is `wb_one_shot`.
 - **Hub changes:** a value the hub just set flashes cyan for a second, so
   the operator sees the shader act; nothing else changes on the phone (D13).
 - **Exposure warning:** `CLIP` (red) or `DARK` (orange) after ISO, from the
@@ -238,15 +238,19 @@ in the core.
 
 - **All cameras side by side,** each with its preview, a waveform or
   histogram from `image_stats` (switchable), clip and crush shares, tally,
-  the camera values line (as on the phone) and an exposure warning badge
-  (auto ISO at its limit, from the phone's warn log; clipping or too dark
-  from the statistics). The Cameras view shows the values line and badge
-  too.
-- **Per camera:** exposure and colour modes, ISO (log slider, with the
-  production shutter shown next to it; the shutter is editable in manual
-  exposure when it is free), white balance temperature and tint. Every
-  control of an online camera is editable, within its descriptor
-  (`readonly`, `enabled_when`, `locked_while_live`).
+  the camera values line (as on the phone, manual values yellow, a change
+  from the phone cyan for a second) and an exposure warning badge (auto ISO
+  at its limit, from the phone's warn log; clipping or too dark from the
+  statistics). The Cameras view shows the values line and badge too.
+- **Per camera, as on an RCP:** A | M for exposure, colour and focus; ISO
+  (log slider) or EV, the production shutter as text (a choice in manual
+  exposure when it is free), temperature, tint, white balance once, focus
+  position. Every control of an online camera is editable within its
+  descriptor; a disabled one always says why (`readonly_reason`,
+  `enabled_when`, not while live, offline, an app to update).
+- **Tags** by the name: a camera's own mains where it differs from the
+  production, "Update app" (protocol 2, which refuses shading from the
+  hub), "Older app" (protocol 1).
 - **Copy colour to all:** sets this camera's `wb_temperature` and `wb_tint`
   on every other online camera.
 - **Match to camera N:** in phase 1 the same as copy, but for one camera.
@@ -296,7 +300,8 @@ controls next to the phone's.
 
 ## Decisions
 
-Taken on 2026-10-16, D13 and D14 on 2026-10-18. The references above point here.
+Taken on 2026-10-16, D13 and D14 on 2026-10-18. The references above point
+here.
 
 - **D1. Bright light: a free shutter.** At 1/50 and f/1.8 a sunny exterior
   needs about ISO 1, far below the sensor's minimum (32 or so), and without
@@ -343,9 +348,9 @@ Taken on 2026-10-16, D13 and D14 on 2026-10-18. The references above point here.
 
 ## Phases
 
-1. **Built:** protocol 2 (`production`, `stats`, `image_stats`), the
-   production shutter and auto ISO as exposure auto, the live lock on format
-   and codecs, the phone's values row, adjust control and aids, image
-   statistics and the exposure warning, the hub's production settings and
-   the shader view (side by side, copy and match).
+1. **Built:** protocol 3 (`production`, `stats`, `image_stats`, no
+   ownership), the production shutter and auto ISO as exposure auto, the
+   live lock on format and codecs, the phone's values row, side controls
+   and aids, image statistics and the exposure warning, the hub's
+   production settings and the shader view (side by side, copy and match).
 2. **Design only:** the auto-shader.

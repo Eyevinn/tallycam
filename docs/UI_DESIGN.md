@@ -66,7 +66,10 @@ bottom row above it.
    another is chosen; the choice is remembered.
 6. **Bottom row.** Left: aids menu, QR scan (only while no hub is connected and
    not live), screen lock. Right: microphone meter, then (landscape) the live
-   button in the bottom-right corner, at a fixed place that never moves.
+   button in the bottom-right corner, at a fixed place that never moves. The
+   live button is dark at standby, orange connecting, red live; a tap starts,
+   a hold stops (with a filling ring and a "Hold to stop" hint), with a
+   haptic when it goes live or stops.
 
 The tally border (14 pt, red on program, green on preview) frames the screen;
 all chrome stays inside it and the safe areas.
@@ -150,13 +153,15 @@ knob while it moves; the lens buttons follow the active lens.
 - iPhone 16 and later: the Camera Control button offers zoom and exposure
   (EV in auto, ISO in manual) as app controls; the same values as the
   rockers.
-- Aids drawn over the picture only: grid, horizon level, safe areas, centre
-  cuts, focus peaking.
+- Aids drawn over the picture only, each switch persisted: grid, horizon
+  level, safe areas (93 % / 90 %), centre cuts (4:3, 9:16), focus peaking
+  (edges in red).
 
 ## States
 
 - **Screen lock.** Everything stays visible but the rockers, which hide; only
-  the slide to unlock (in the bottom row's place) takes touches.
+  the slide to unlock (in the bottom row's place) takes touches. A toast
+  suggests it at Go Live.
 - **Not connected.** A centred card: "Scan QR code" (the in-app scanner),
   "Enter manually", "Not now". The QR button stays in the bottom row.
 - **Scanning.** A viewfinder square, the instruction and Cancel over the

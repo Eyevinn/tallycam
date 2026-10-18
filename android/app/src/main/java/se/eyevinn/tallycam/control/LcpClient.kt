@@ -32,7 +32,8 @@ class LcpClient(private val listener: Listener) {
         .pingInterval(5, TimeUnit.SECONDS)
         .readTimeout(0, TimeUnit.MILLISECONDS)
         .build()
-    private var socket: WebSocket? = null
+    /** Set on main; read on the preview thread too ([sendDroppable]). */
+    @Volatile private var socket: WebSocket? = null
     private var url: String? = null
     private var backoffMs = 1000L
     private var generation = 0
@@ -68,6 +69,13 @@ class LcpClient(private val listener: Listener) {
         if (socket.queueSize() > DROPPABLE_QUEUE_BYTES) return false
         return socket.send(message.toString())
     }
+
+    /**
+     * Whether [sendDroppable] would send now: connected and not behind. Any
+     * thread; lets a caller skip building a preview (JPEG, Base64) the link
+     * would drop.
+     */
+    fun canSendDroppable(): Boolean = socket?.let { it.queueSize() <= DROPPABLE_QUEUE_BYTES } ?: false
 
     /** Admitted: the next reconnect starts from a short delay again. */
     fun resetBackoff() {

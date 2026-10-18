@@ -32,6 +32,7 @@ import android.view.Surface
 import se.eyevinn.tallycam.core.Hot
 import se.eyevinn.tallycam.control.Settings as Prefs
 import java.io.ByteArrayOutputStream
+import java.nio.ByteBuffer
 import java.util.concurrent.Executor
 import kotlin.math.roundToLong
 
@@ -131,15 +132,16 @@ class CameraCapture(context: Context) {
         ?: manager.cameraIdList.firstOrNull()
         private set
 
-    /** The active camera's characteristics, cached (a binder call each otherwise; read per frame). */
+    /** The active camera's characteristics, cached (a binder call each otherwise; [caps] reads it). */
     @Volatile private var cachedCharacteristics: Pair<String, CameraCharacteristics>? = null
 
     val characteristics: CameraCharacteristics?
-        get() {
-            val id = cameraId ?: return null
-            cachedCharacteristics?.let { (cached, c) -> if (cached == id) return c }
-            return manager.getCameraCharacteristics(id).also { cachedCharacteristics = id to it }
-        }
+        get() = cameraId?.let(::characteristicsOf)
+
+    private fun characteristicsOf(id: String): CameraCharacteristics {
+        cachedCharacteristics?.let { (cached, c) -> if (cached == id) return c }
+        return manager.getCameraCharacteristics(id).also { cachedCharacteristics = id to it }
+    }
 
     /** Run once the session no longer uses the surfaces it dropped (camera thread). */
     private val afterConfigure = mutableListOf<() -> Unit>()
@@ -184,6 +186,13 @@ class CameraCapture(context: Context) {
 
     /** Receives preview JPEGs (on the preview thread); null stops them. */
     @Volatile var onThumbnail: ((ByteArray, Int, Int) -> Unit)? = null
+
+    /**
+     * Asked (camera thread) before a due preview image is made; false skips
+     * it (no NV21 copy, JPEG or send) and the next frame asks again. For a
+     * link that would drop it (LcpClient.canSendDroppable). Null: always.
+     */
+    @Volatile var thumbnailGate: (() -> Boolean)? = null
     private var lastThumbNs = 0L
     /** JPEG compression runs here, off the camera thread. */
     private val previewThread = HandlerThread("preview-jpeg").also { it.start() }
@@ -273,24 +282,137 @@ class CameraCapture(context: Context) {
 
     // MARK: Capabilities of the active camera
 
-    private fun capabilities(): IntArray =
-        characteristics?.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES) ?: IntArray(0)
+    /**
+     * What the active camera offers at the wanted size, read once: every
+     * CameraCharacteristics.get is a metadata lookup, and the stream
+     * configuration map is built anew on each. Immutable, so any thread
+     * reads it (the per-frame genlock, the request on every zoom step, the
+     * state four times a second on main).
+     */
+    private class Caps(
+        val cameraId: String?,
+        val wantedHeight: Int,
+        val hasManualSensor: Boolean,
+        val hasManualWhiteBalance: Boolean,
+        val hasAeLock: Boolean,
+        val hasAwbLock: Boolean,
+        val colorCalibration: DoubleArray?,
+        val hasTorch: Boolean,
+        val isoRange: Range<Int>?,
+        val exposureRange: Range<Long>?,
+        val evRange: Pair<Range<Int>, Float>?,
+        val minFocusDiopters: Float?,
+        val zoomRange: Range<Float>?,
+        val hasStabilization: Boolean,
+        val antibandingModes: List<Int>,
+        val frameRates: List<Int>,
+        val resolutions: List<Int>,
+        val streamSize: Size,
+        /** The encoder output's shortest frame at [streamSize], ns; 0: unknown. */
+        val minFrameDurationNs: Long,
+        val thumbSize: Size,
+        val timestampsAreBootTime: Boolean,
+        val activeArray: Rect?,
+    )
 
-    val hasManualSensor: Boolean
-        get() = CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_SENSOR in capabilities()
+    @Volatile private var cachedCaps: Caps? = null
+
+    /** The snapshot for the camera and size now; rebuilt when either changes (switchLens, setResolution). */
+    private val caps: Caps
+        get() {
+            val id = cameraId
+            val height = wantedHeight
+            val cached = cachedCaps
+            if (cached != null && cached.cameraId == id && cached.wantedHeight == height) return cached
+            return readCaps(id, height, cached).also { cachedCaps = it }
+        }
+
+    /** The calibration is per camera: kept from `previous` for the same one (its identity keys the white balance). */
+    private fun readCaps(id: String?, height: Int, previous: Caps?): Caps {
+        val c = id?.let(::characteristicsOf)
+        val capabilities = c?.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES) ?: IntArray(0)
+        val calibration = if (previous != null && previous.cameraId == id) previous.colorCalibration
+                          else c?.let(::readCalibration)
+        val map = c?.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+        val encoder = map?.getOutputSizes(android.media.MediaCodec::class.java)?.toList().orEmpty()
+        val preview = map?.getOutputSizes(SurfaceTexture::class.java)?.toList().orEmpty()
+        // 16:9 sizes the camera gives both an encoder and a preview.
+        val sizes = encoder.filter { it in preview && it.width * 9 == it.height * 16 }
+        // The wanted 16:9 height, else the nearest smaller, else anything.
+        val streamSize = sizes.filter { it.height <= height }.maxByOrNull { it.height }
+            ?: sizes.minByOrNull { it.height }
+            ?: encoder.maxByOrNull { it.width * it.height }
+            ?: Size(1280, 720)
+        val ev = c?.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE)?.let { range ->
+            c.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP)?.toFloat()
+                ?.takeIf { range.lower != range.upper }?.let { range to it }
+        }
+        return Caps(
+            cameraId = id,
+            wantedHeight = height,
+            hasManualSensor = CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_SENSOR in capabilities,
+            // Raw gains and a colour transform, which needs a colour calibration.
+            hasManualWhiteBalance = CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_POST_PROCESSING in capabilities &&
+                calibration != null &&
+                c?.get(CameraCharacteristics.CONTROL_AWB_AVAILABLE_MODES)?.contains(CameraMetadata.CONTROL_AWB_MODE_OFF) == true,
+            hasAeLock = c?.get(CameraCharacteristics.CONTROL_AE_LOCK_AVAILABLE) == true,
+            hasAwbLock = c?.get(CameraCharacteristics.CONTROL_AWB_LOCK_AVAILABLE) == true,
+            colorCalibration = calibration,
+            hasTorch = c?.get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true,
+            isoRange = c?.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE),
+            exposureRange = c?.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE),
+            evRange = ev,
+            minFocusDiopters = c?.get(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE)?.takeIf { it > 0f },
+            zoomRange = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                c?.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE)?.takeIf { it.upper > it.lower }
+            } else null,
+            hasStabilization = c?.get(CameraCharacteristics.CONTROL_AVAILABLE_VIDEO_STABILIZATION_MODES)
+                ?.contains(CameraMetadata.CONTROL_VIDEO_STABILIZATION_MODE_ON) == true,
+            antibandingModes = c?.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_ANTIBANDING_MODES)?.toList().orEmpty(),
+            // Fixed frame rates (AE target ranges with equal ends), lowest first.
+            frameRates = c?.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
+                ?.filter { it.lower == it.upper }?.map { it.upper }?.distinct()?.sorted().orEmpty()
+                .ifEmpty { listOf(30) },
+            resolutions = sizes.map { it.height }.filter { it in listOf(720, 1080, 2160) }.distinct().sorted(),
+            streamSize = streamSize,
+            // Throws for a size the map lacks (the 1280x720 fallback).
+            minFrameDurationNs = map?.let {
+                runCatching { it.getOutputMinFrameDuration(android.media.MediaCodec::class.java, streamSize) }.getOrNull()
+            } ?: 0L,
+            thumbSize = thumbSize(map?.getOutputSizes(ImageFormat.YUV_420_888)?.toList().orEmpty()),
+            timestampsAreBootTime = c?.get(CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE) ==
+                CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE_REALTIME,
+            activeArray = c?.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE),
+        )
+    }
+
+    /** The camera's colour calibration ([ColorCalibration]); null: none. */
+    private fun readCalibration(c: CameraCharacteristics): DoubleArray? {
+        fun matrix(key: CameraCharacteristics.Key<ColorSpaceTransform>): DoubleArray? = c.get(key)?.let { t ->
+            val r = arrayOfNulls<Rational>(9)
+            t.copyElements(r, 0)
+            DoubleArray(9) { r[it]?.toDouble() ?: 0.0 }
+        }
+        return ColorCalibration.pack(
+            c.get(CameraCharacteristics.SENSOR_REFERENCE_ILLUMINANT1),
+            c.get(CameraCharacteristics.SENSOR_REFERENCE_ILLUMINANT2)?.toInt()?.and(0xff),
+            matrix(CameraCharacteristics.SENSOR_COLOR_TRANSFORM1),
+            matrix(CameraCharacteristics.SENSOR_COLOR_TRANSFORM2),
+            matrix(CameraCharacteristics.SENSOR_CALIBRATION_TRANSFORM1),
+            matrix(CameraCharacteristics.SENSOR_CALIBRATION_TRANSFORM2),
+            matrix(CameraCharacteristics.SENSOR_FORWARD_MATRIX1),
+            matrix(CameraCharacteristics.SENSOR_FORWARD_MATRIX2),
+        )
+    }
+
+    val hasManualSensor: Boolean get() = caps.hasManualSensor
 
     /** Manual white balance: raw gains and a colour transform, which needs a colour calibration. */
-    val hasManualWhiteBalance: Boolean
-        get() = CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_POST_PROCESSING in capabilities() &&
-            colorCalibration != null &&
-            characteristics?.get(CameraCharacteristics.CONTROL_AWB_AVAILABLE_MODES)
-                ?.contains(CameraMetadata.CONTROL_AWB_MODE_OFF) == true
+    val hasManualWhiteBalance: Boolean get() = caps.hasManualWhiteBalance
 
-    val hasAeLock: Boolean
-        get() = characteristics?.get(CameraCharacteristics.CONTROL_AE_LOCK_AVAILABLE) == true
+    val hasAeLock: Boolean get() = caps.hasAeLock
 
-    val hasAwbLock: Boolean
-        get() = characteristics?.get(CameraCharacteristics.CONTROL_AWB_LOCK_AVAILABLE) == true
+    val hasAwbLock: Boolean get() = caps.hasAwbLock
 
     /** Exposure can be held: sensor values, else the AE lock. */
     val canHoldExposure: Boolean get() = hasManualSensor || hasAeLock
@@ -298,101 +420,38 @@ class CameraCapture(context: Context) {
     /** White balance can be held: manual gains, else the AWB lock. */
     val canHoldWhiteBalance: Boolean get() = hasManualWhiteBalance || hasAwbLock
 
-    /** The active camera's colour calibration ([ColorCalibration]), cached per camera; null: none. */
-    @Volatile private var cachedCalibration: Pair<String, DoubleArray?>? = null
+    /** The active camera's colour calibration ([ColorCalibration]); null: none. */
+    val colorCalibration: DoubleArray? get() = caps.colorCalibration
 
-    val colorCalibration: DoubleArray?
-        get() {
-            val id = cameraId ?: return null
-            cachedCalibration?.let { (cached, cal) -> if (cached == id) return cal }
-            val c = characteristics ?: return null
-            fun matrix(key: CameraCharacteristics.Key<ColorSpaceTransform>): DoubleArray? = c.get(key)?.let { t ->
-                val r = arrayOfNulls<Rational>(9)
-                t.copyElements(r, 0)
-                DoubleArray(9) { r[it]?.toDouble() ?: 0.0 }
-            }
-            val cal = ColorCalibration.pack(
-                c.get(CameraCharacteristics.SENSOR_REFERENCE_ILLUMINANT1),
-                c.get(CameraCharacteristics.SENSOR_REFERENCE_ILLUMINANT2)?.toInt()?.and(0xff),
-                matrix(CameraCharacteristics.SENSOR_COLOR_TRANSFORM1),
-                matrix(CameraCharacteristics.SENSOR_COLOR_TRANSFORM2),
-                matrix(CameraCharacteristics.SENSOR_CALIBRATION_TRANSFORM1),
-                matrix(CameraCharacteristics.SENSOR_CALIBRATION_TRANSFORM2),
-                matrix(CameraCharacteristics.SENSOR_FORWARD_MATRIX1),
-                matrix(CameraCharacteristics.SENSOR_FORWARD_MATRIX2),
-            )
-            cachedCalibration = id to cal
-            return cal
-        }
+    val hasTorch: Boolean get() = caps.hasTorch
 
-    val hasTorch: Boolean
-        get() = characteristics?.get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
+    val isoRange: Range<Int>? get() = caps.isoRange
 
-    val isoRange: Range<Int>?
-        get() = characteristics?.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)
-
-    val exposureRange: Range<Long>?
-        get() = characteristics?.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE)
+    val exposureRange: Range<Long>? get() = caps.exposureRange
 
     /** Exposure compensation in steps, and the step in EV. */
-    val evRange: Pair<Range<Int>, Float>?
-        get() {
-            val c = characteristics ?: return null
-            val range = c.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE) ?: return null
-            val step = c.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP)?.toFloat() ?: return null
-            return if (range.lower == range.upper) null else range to step
-        }
+    val evRange: Pair<Range<Int>, Float>? get() = caps.evRange
 
     /** Closest focus in diopters; null for a fixed-focus lens. */
-    val minFocusDiopters: Float?
-        get() = characteristics?.get(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE)?.takeIf { it > 0f }
+    val minFocusDiopters: Float? get() = caps.minFocusDiopters
 
-    val zoomRange: Range<Float>?
-        get() = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            characteristics?.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE)?.takeIf { it.upper > it.lower }
-        } else null
+    val zoomRange: Range<Float>? get() = caps.zoomRange
 
-    val hasStabilization: Boolean
-        get() = characteristics?.get(CameraCharacteristics.CONTROL_AVAILABLE_VIDEO_STABILIZATION_MODES)
-            ?.contains(CameraMetadata.CONTROL_VIDEO_STABILIZATION_MODE_ON) == true
+    val hasStabilization: Boolean get() = caps.hasStabilization
 
-    val antibandingModes: List<Int>
-        get() = characteristics?.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_ANTIBANDING_MODES)?.toList().orEmpty()
+    val antibandingModes: List<Int> get() = caps.antibandingModes
 
     /** Fixed frame rates (AE target ranges with equal ends), lowest first. */
-    val frameRates: List<Int>
-        get() = characteristics?.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
-            ?.filter { it.lower == it.upper }?.map { it.upper }?.distinct()?.sorted().orEmpty()
-            .ifEmpty { listOf(30) }
+    val frameRates: List<Int> get() = caps.frameRates
 
-    private val sizes get() = characteristics?.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
-
-    /** 16:9 sizes the camera gives both an encoder and a preview. */
-    private fun streamSizes(): List<Size> {
-        val map = sizes ?: return emptyList()
-        val encoder = map.getOutputSizes(android.media.MediaCodec::class.java)?.toList().orEmpty()
-        val preview = map.getOutputSizes(SurfaceTexture::class.java)?.toList().orEmpty()
-        return encoder.filter { it in preview && it.width * 9 == it.height * 16 }
-    }
-
-    /** 720, 1080, 2160 where the camera has them in 16:9. */
-    val resolutions: List<Int>
-        get() = streamSizes().map { it.height }.filter { it in listOf(720, 1080, 2160) }.distinct().sorted()
+    /** 720, 1080, 2160 where the camera has them in 16:9 (for both an encoder and a preview). */
+    val resolutions: List<Int> get() = caps.resolutions
 
     /** The stream's size: the wanted 16:9 height, else the nearest smaller, else anything. */
-    val streamSize: Size
-        get() {
-            val all = streamSizes()
-            return all.filter { it.height <= wantedHeight }.maxByOrNull { it.height }
-                ?: all.minByOrNull { it.height }
-                ?: sizes?.getOutputSizes(android.media.MediaCodec::class.java)?.maxByOrNull { it.width * it.height }
-                ?: Size(1280, 720)
-        }
+    val streamSize: Size get() = caps.streamSize
 
     /** The sensor's timestamps in CLOCK_BOOTTIME (else CLOCK_MONOTONIC). */
-    val timestampsAreBootTime: Boolean
-        get() = characteristics?.get(CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE) ==
-            CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE_REALTIME
+    val timestampsAreBootTime: Boolean get() = caps.timestampsAreBootTime
 
     /** Added to a sensor timestamp to get CLOCK_BOOTTIME ns. */
     fun timestampOffsetNs(): Long =
@@ -552,6 +611,8 @@ class CameraCapture(context: Context) {
             device?.close()
             device = null
             cameraId = id
+            // Read here, on the camera thread, not by the next reader.
+            cachedCaps = readCaps(id, wantedHeight, cachedCaps)
             // Another camera, another calibration and AWB.
             autoGains = null
             autoTransform = null
@@ -569,6 +630,7 @@ class CameraCapture(context: Context) {
     fun setResolution(height: Int) {
         handler.post {
             wantedHeight = height
+            cachedCaps = readCaps(cameraId, height, cachedCaps)
             texture?.setDefaultBufferSize(streamSize.width, streamSize.height)
             configure()
             onControlsChanged?.invoke()
@@ -649,6 +711,8 @@ class CameraCapture(context: Context) {
             onError?.invoke("No camera")
             return
         }
+        // The snapshot read on the camera thread, before the session needs it.
+        caps
         if (device != null) {
             configure()
             return
@@ -690,7 +754,7 @@ class CameraCapture(context: Context) {
         val device = device ?: return runAfterConfigure()
         session?.close()
         session = null
-        val thumbSize = thumbSize()
+        val thumbSize = caps.thumbSize
         if (thumbnails?.width != thumbSize.width || thumbnails?.height != thumbSize.height) {
             thumbnails?.close()
             thumbnails = ImageReader.newInstance(thumbSize.width, thumbSize.height, ImageFormat.YUV_420_888, 2)
@@ -824,9 +888,15 @@ class CameraCapture(context: Context) {
     private fun takesManualGains(s: Settings): Boolean {
         if (!hasManualWhiteBalance) return false
         val cal = colorCalibration ?: return false
-        val count = Hot.whiteBalanceFor(cal, s.wbTemperatureK, s.wbTint, DoubleArray(13))
+        val cached = gainsCount?.takeIf { it.calibration === cal && it.k == s.wbTemperatureK && it.tint == s.wbTint }
+        val count = cached?.count ?: Hot.whiteBalanceFor(cal, s.wbTemperatureK, s.wbTint, DoubleArray(13))
+            .also { gainsCount = GainsCount(cal, s.wbTemperatureK, s.wbTint, it) }
         return count == 13 || (count >= 4 && autoTransform != null)
     }
+
+    /** The core's gain count for a calibration, K and tint ([takesManualGains], any thread: replaced whole). */
+    private class GainsCount(val calibration: DoubleArray, val k: Double, val tint: Double, val count: Int)
+    @Volatile private var gainsCount: GainsCount? = null
 
     /**
      * Camera thread: AWB off, the core's gains for the settings' K and tint,
@@ -890,7 +960,7 @@ class CameraCapture(context: Context) {
 
     /** A metering rectangle of a tenth of the active array around a normalised point. */
     private fun meteringRegion(point: Pair<Float, Float>): MeteringRectangle? {
-        val array = characteristics?.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE) ?: return null
+        val array = caps.activeArray ?: return null
         val w = array.width() / 10
         val h = array.height() / 10
         val cx = (array.left + point.first * array.width()).toInt()
@@ -932,8 +1002,9 @@ class CameraCapture(context: Context) {
             }
             return
         }
-        val minFrame = sizes?.getOutputMinFrameDuration(android.media.MediaCodec::class.java, streamSize) ?: 0L
-        val key = Triple(s.frameRate, minFrame, streamSize)
+        val caps = caps
+        val minFrame = caps.minFrameDurationNs
+        val key = Triple(s.frameRate, minFrame, caps.streamSize)
         if (key != genlockKey) {
             if (genlockLoop != 0L) Hot.genlockFree(genlockLoop)
             genlockLoop = Hot.genlockNew(s.frameRate, 1, minFrame.toDouble())
@@ -979,8 +1050,8 @@ class CameraCapture(context: Context) {
         autoIsoBias = Double.NaN
     }
 
-    private fun thumbSize(): Size {
-        val yuv = sizes?.getOutputSizes(ImageFormat.YUV_420_888)?.toList().orEmpty()
+    /** The small YUV stream's size, from the camera's YUV sizes. */
+    private fun thumbSize(yuv: List<Size>): Size {
         // 16:9 like the picture, so masks and statistics cover what is streamed.
         val wide = yuv.filter { it.width * 9 == it.height * 16 }
         return yuv.firstOrNull { it.width == 640 && it.height == 360 }
@@ -1005,6 +1076,7 @@ class CameraCapture(context: Context) {
             val interval = thumbnailIntervalNs
             val sink = onThumbnail
             if (sink == null || interval <= 0 || now - lastThumbNs < interval) return
+            if (thumbnailGate?.invoke() == false) return
             if (!nv21Busy.compareAndSet(false, true)) return
             lastThumbNs = now
             val w = image.width
@@ -1279,31 +1351,91 @@ internal object ColorCalibration {
 internal object Yuv {
     /** Into `out` (w * h * 3 / 2 bytes): luma rows in bulk, chroma interleaved V U. */
     fun toNv21(image: android.media.Image, out: ByteArray) {
-        val w = image.width
-        val h = image.height
-        val y = image.planes[0]
-        val u = image.planes[1]
-        val v = image.planes[2]
-        val yBuf = y.buffer
+        val (y, u, v) = image.planes
+        toNv21(image.width, image.height, y.buffer, y.rowStride, y.pixelStride, u.buffer, u.rowStride, u.pixelStride,
+               v.buffer, v.rowStride, v.pixelStride, out)
+    }
+
+    /** A row of a plane, bulk read (camera thread, and tests). */
+    private var row = ByteArray(0)
+
+    /**
+     * The planes as Image gives them (absolute indices from 0; positions
+     * are moved). Rows come out in bulk; chroma that already is NV21 (V U
+     * interleaved, the U plane one byte into the V plane, as most HALs
+     * give it) is copied as whole rows.
+     */
+    fun toNv21(w: Int, h: Int, yBuf: ByteBuffer, yRowStride: Int, yPixelStride: Int,
+               uBuf: ByteBuffer, uRowStride: Int, uPixelStride: Int,
+               vBuf: ByteBuffer, vRowStride: Int, vPixelStride: Int, out: ByteArray) {
         var o = 0
-        if (y.pixelStride == 1) {
-            for (row in 0 until h) {
-                yBuf.position(row * y.rowStride)
+        if (yPixelStride == 1) {
+            for (r in 0 until h) {
+                yBuf.position(r * yRowStride)
                 yBuf.get(out, o, w)
                 o += w
             }
         } else {
-            for (row in 0 until h) for (col in 0 until w) out[o++] = yBuf.get(row * y.rowStride + col * y.pixelStride)
-        }
-        val vBuf = v.buffer
-        val uBuf = u.buffer
-        for (row in 0 until h / 2) {
-            val vBase = row * v.rowStride
-            val uBase = row * u.rowStride
-            for (col in 0 until w / 2) {
-                out[o++] = vBuf.get(vBase + col * v.pixelStride)
-                out[o++] = uBuf.get(uBase + col * u.pixelStride)
+            for (r in 0 until h) {
+                val line = readRow(yBuf, r * yRowStride, (w - 1) * yPixelStride + 1)
+                for (col in 0 until w) out[o++] = line[col * yPixelStride]
             }
+        }
+        val cw = w / 2
+        val ch = h / 2
+        if (cw == 0 || ch == 0) return
+        if (uPixelStride == 2 && vPixelStride == 2 && uRowStride == vRowStride && isNv21(uBuf, vBuf)) {
+            // V U V U ... from the V plane; its last U is past the V plane's end on the last row.
+            for (r in 0 until ch) {
+                vBuf.position(r * vRowStride)
+                vBuf.get(out, o, 2 * cw - 1)
+                out[o + 2 * cw - 1] = uBuf.get(r * uRowStride + 2 * (cw - 1))
+                o += 2 * cw
+            }
+            return
+        }
+        val vLength = (cw - 1) * vPixelStride + 1
+        val uLength = (cw - 1) * uPixelStride + 1
+        if (row.size < vLength + uLength) row = ByteArray(vLength + uLength)
+        val line = row
+        for (r in 0 until ch) {
+            vBuf.position(r * vRowStride)
+            vBuf.get(line, 0, vLength)
+            uBuf.position(r * uRowStride)
+            uBuf.get(line, vLength, uLength)
+            var vi = 0
+            var ui = vLength
+            for (col in 0 until cw) {
+                out[o++] = line[vi]
+                out[o++] = line[ui]
+                vi += vPixelStride
+                ui += uPixelStride
+            }
+        }
+    }
+
+    private fun readRow(buf: ByteBuffer, start: Int, length: Int): ByteArray {
+        if (row.size < length) row = ByteArray(length)
+        buf.position(start)
+        buf.get(row, 0, length)
+        return row
+    }
+
+    /**
+     * Whether the U plane starts one byte into the V plane (NV21 in
+     * memory): a byte of V written shows in U. Restored at once; false for
+     * a read-only buffer.
+     */
+    private fun isNv21(uBuf: ByteBuffer, vBuf: ByteBuffer): Boolean {
+        if (vBuf.isReadOnly || vBuf.limit() < 2 || uBuf.limit() < 1) return false
+        val saved = vBuf.get(1)
+        val flipped = saved.toInt().inv().toByte()
+        return try {
+            vBuf.put(1, flipped)
+            // Twice, so a U that held the flipped value already is not taken for the same memory.
+            uBuf.get(0) == flipped && run { vBuf.put(1, saved); uBuf.get(0) == saved }
+        } finally {
+            vBuf.put(1, saved)
         }
     }
 

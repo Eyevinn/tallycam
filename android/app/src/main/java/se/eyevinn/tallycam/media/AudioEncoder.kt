@@ -151,8 +151,12 @@ class AudioEncoder(private val aac: Boolean, private val sink: Sink) {
     companion object {
         const val RATE = 48_000
         private const val TAG = "AudioEncoder"
-        /** 10 ms of 16-bit mono. */
-        private const val CHUNK_BYTES = RATE / 100 * 2
+        /**
+         * 20 ms of 16-bit mono: Opus's default frame, one packet a read
+         * (50 wakeups a second, not 100). AAC buffers its 1024 samples
+         * across reads either way.
+         */
+        private const val CHUNK_BYTES = RATE / 50 * 2
         /** Opus's usual pre-skip, 312 samples, until the encoder says. */
         private const val OPUS_DELAY_NS = 312L * 1_000_000_000L / RATE
         /**

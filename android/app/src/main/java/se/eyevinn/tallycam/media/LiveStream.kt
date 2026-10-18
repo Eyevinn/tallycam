@@ -356,7 +356,10 @@ class LiveStream(private val listener: Listener) {
                 frameCounter++
                 // `now` is the PCR's clock (PCR = now - PCR delay): the host clock now.
                 val now = Hot.hostNowNs()
-                Hot.tsVideo(mux, avcc, len, keyframe, hostNs, hostNs, mapping[0], flags, frameCounter, uncertainty, now)
+                // Send capture 0: no frame marks, so the SRT thread makes no
+                // onFrameSent calls (two JNA callbacks a frame), which Android
+                // does not use.
+                Hot.tsVideo(mux, avcc, len, keyframe, hostNs, 0, mapping[0], flags, frameCounter, uncertainty, now)
                 // The first keyframe came too late for its PCR (the encoder
                 // warming up): ask for another now rather than wait a GOP.
                 if (keyframe) keyframeRequested = false
@@ -400,7 +403,7 @@ class LiveStream(private val listener: Listener) {
 
     private companion object {
         const val TAG = "LiveStream"
-        /** About 300 ms of 10 ms Opus packets. */
+        /** About 640 ms of 20 ms Opus packets (AAC's are 21 ms). */
         const val AUDIO_PACKETS = 32
     }
 }

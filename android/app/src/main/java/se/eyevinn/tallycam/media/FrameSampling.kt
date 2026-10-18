@@ -109,14 +109,16 @@ internal class StatsGrid {
  * Focus peaking as an overlay (docs/SHADING.md, D10), as iOS
  * PeakingProcessor: the luma plane downscaled to 320 wide (camera thread),
  * a 3x3 Sobel, and the strongest 7 % of edges above a floor as opaque
- * pixels of a mask (analysis thread). Two bitmaps alternate so the one on
- * screen is never written. Nothing is allocated per frame.
+ * pixels of an ALPHA_8 mask (analysis thread; a quarter of ARGB's bytes,
+ * drawn in the paint's colour). Two bitmaps alternate so the one on screen
+ * is never written. Nothing is allocated per frame.
  */
 internal class Peaking {
     private var small = ByteArray(0)
     private var gradient = IntArray(0)
     private val histogram = IntArray(256)
-    private var pixels = IntArray(0)
+    /** The mask's bytes, rows [android.graphics.Bitmap.getRowBytes] apart. */
+    private var pixels = java.nio.ByteBuffer.allocate(0)
     private val bitmaps = arrayOfNulls<android.graphics.Bitmap>(2)
     private var next = 0
     var width = 0
@@ -150,10 +152,7 @@ internal class Peaking {
     fun mask(): android.graphics.Bitmap {
         val w = width
         val h = height
-        if (gradient.size != w * h) {
-            gradient = IntArray(w * h)
-            pixels = IntArray(w * h)
-        }
+        if (gradient.size != w * h) gradient = IntArray(w * h)
         histogram.fill(0)
         val luma = small
         for (y in 1 until h - 1) {
@@ -177,15 +176,23 @@ internal class Peaking {
             }
         }
         val threshold = maxOf(MINIMUM_GRADIENT, percentile((w - 2) * (h - 2)))
-        for (k in 0 until w * h) pixels[k] = if (gradient[k] >= threshold) -1 else 0
         val slot = next
         next = 1 - next
         var bitmap = bitmaps[slot]
         if (bitmap == null || bitmap.width != w || bitmap.height != h) {
-            bitmap = android.graphics.Bitmap.createBitmap(w, h, android.graphics.Bitmap.Config.ARGB_8888)
+            bitmap = android.graphics.Bitmap.createBitmap(w, h, android.graphics.Bitmap.Config.ALPHA_8)
             bitmaps[slot] = bitmap
         }
-        bitmap!!.setPixels(pixels, 0, w, 0, 0, w, h)
+        val stride = bitmap!!.rowBytes
+        if (pixels.capacity() != stride * h) pixels = java.nio.ByteBuffer.allocate(stride * h)
+        val mask = pixels.array()
+        for (y in 0 until h) {
+            var k = y * w
+            var o = y * stride
+            for (x in 0 until w) mask[o++] = if (gradient[k++] >= threshold) OPAQUE else 0
+        }
+        pixels.rewind()
+        bitmap.copyPixelsFromBuffer(pixels)
         return bitmap
     }
 
@@ -202,6 +209,7 @@ internal class Peaking {
 
     companion object {
         private const val WIDTH = 320
+        private const val OPAQUE = 0xFF.toByte()
         private const val EDGE_SHARE = 0.07
         /** A soft picture shows no edges rather than its noise. */
         private const val MINIMUM_GRADIENT = 150

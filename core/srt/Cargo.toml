@@ -12,5 +12,7 @@ tallycam-core = { path = "..", default-features = false }
 srt-protocol = "0.4.4"
 bytes = "1"
 rand = "0.8"
-log = "0.4"
+# debug and trace (ours and srt-protocol's, per packet) compiled out of
+# release builds; info and above stay.
+log = { version = "0.4", features = ["release_max_level_info"] }
 libc = "0.2"

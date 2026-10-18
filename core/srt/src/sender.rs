@@ -34,6 +34,10 @@ use crate::queue::{PushError, SpscQueue, MARK_FRAME_END, MARK_FRAME_START};
 
 /// IPv4 + UDP header bytes, counted in `bytes_sent` like the Swift sender.
 const IP_UDP_HEADER: u64 = 28;
+/// Room for one serialized SRT packet (at most 1500 bytes: max_packet_size).
+const DATAGRAM: usize = 1600;
+/// Datagrams sent together at most (one sendmmsg(2) on Linux and Android).
+const TX_BATCH: usize = 32;
 /// Handshake packets are repeated this often until answered (libsrt: 250 ms).
 const HANDSHAKE_REPEAT: Duration = Duration::from_millis(250);
 /// Wait between connection attempts when reconnecting.
@@ -571,6 +575,7 @@ impl Worker {
             Ok(s) => s,
             Err(e) => return End::Failed(format!("socket: {e}")),
         };
+        let mut tx = Tx::new(&socket);
         let local_ip = socket.local_addr().map(|a| a.ip()).unwrap_or(match remote {
             SocketAddr::V4(_) => IpAddr::V4(Ipv4Addr::UNSPECIFIED),
             SocketAddr::V6(_) => IpAddr::V6(Ipv6Addr::UNSPECIFIED),
@@ -610,7 +615,7 @@ impl Worker {
                 next_tick = now + HANDSHAKE_REPEAT;
                 if let ConnectionResult::SendPacket((mut p, _)) = connect.handle_tick(now) {
                     stamp_conclusion(&mut p, socket_start, now);
-                    self.send_packet(&socket, &p);
+                    self.send_now(&mut tx, &p);
                 }
             }
             loop {
@@ -633,11 +638,11 @@ impl Worker {
                             socket_start = Some(now);
                         }
                         stamp_conclusion(&mut p, socket_start, now);
-                        self.send_packet(&socket, &p)
+                        self.send_now(&mut tx, &p)
                     }
                     ConnectionResult::Connected(p, c) => {
                         if let Some((p, _)) = p {
-                            self.send_packet(&socket, &p);
+                            self.send_now(&mut tx, &p);
                         }
                         break 'handshake c;
                     }
@@ -701,7 +706,7 @@ impl Worker {
                     dest_sockid: remote_sockid,
                     control_type: ControlTypes::Shutdown,
                 });
-                self.send_packet(&socket, &shutdown);
+                self.send_now(&mut tx, &shutdown);
                 debug!(
                     "SRT closed; {} timeout retransmits not sent",
                     st.rto_suppressed
@@ -709,6 +714,9 @@ impl Worker {
                 return End::Closed;
             }
             let now = Instant::now();
+            // The host clock once per round: every payload's age is taken
+            // against it.
+            let host_now_ns = (self.now_ns)();
             let mut open = true;
 
             // Payloads from the producer, first and at the time the engine's
@@ -719,7 +727,7 @@ impl Worker {
             // a bandwidth cap) at a time, one sleep and wakeup per packet.
             // This way the timer run below sends the whole burst at once.
             while let Some(slot) = self.shared.queue.front() {
-                let src = self.source_time(slot.enqueued_ns, now, start_time);
+                let src = source_time(slot.enqueued_ns, host_now_ns, now, start_time);
                 if slot.marks != 0 {
                     st.marks.push_back(FrameMark {
                         seq: next_seq,
@@ -735,7 +743,7 @@ impl Worker {
                     .pump(
                         &mut st,
                         &mut conn,
-                        &socket,
+                        &mut tx,
                         timers_at,
                         Input::Data(Some((src, data))),
                     )
@@ -797,14 +805,14 @@ impl Worker {
                     .pump(
                         &mut st,
                         &mut conn,
-                        &socket,
+                        &mut tx,
                         now,
                         Input::Packet(Ok((packet, remote))),
                     )
                     .is_some();
             }
 
-            let wait = self.pump(&mut st, &mut conn, &socket, now, Input::Timer);
+            let wait = self.pump(&mut st, &mut conn, &mut tx, now, Input::Timer);
             timers_at = now;
             self.publish(&conn, &st, base);
             self.adaptive(std::mem::take(&mut st.stats_updated));
@@ -864,21 +872,27 @@ impl Worker {
         }
     }
 
-    /// The source time srt-protocol stamps a payload with (its TSBPD
-    /// timestamp): when the producer queued it, not when this thread woke.
-    fn source_time(&self, enqueued_ns: i64, now: Instant, start: Instant) -> Instant {
-        let age = ((self.now_ns)() - enqueued_ns).max(0) as u64;
-        now.checked_sub(Duration::from_nanos(age))
-            .map_or(start, |t| t.max(start))
-    }
-
     /// Feeds one input and runs the engine until it waits: the time until
-    /// its next timer, or None when it closed the connection.
+    /// its next timer, or None when it closed the connection. The packets it
+    /// sends leave together when it waits (or every [`TX_BATCH`]).
     fn pump(
         &self,
         st: &mut SessionState,
         conn: &mut DuplexConnection,
-        socket: &UdpSocket,
+        tx: &mut Tx,
+        now: Instant,
+        input: Input,
+    ) -> Option<Duration> {
+        let wait = self.run_engine(st, conn, tx, now, input);
+        self.count_sent(tx.flush());
+        wait
+    }
+
+    fn run_engine(
+        &self,
+        st: &mut SessionState,
+        conn: &mut DuplexConnection,
+        tx: &mut Tx,
         now: Instant,
         input: Input,
     ) -> Option<Duration> {
@@ -904,7 +918,7 @@ impl Worker {
                             continue;
                         }
                     }
-                    self.send_packet(socket, &p);
+                    self.count_sent(tx.push(&p));
                 }
                 Action::ReleaseData(_) => input = Input::DataReleased,
                 Action::UpdateStatistics(_) => {
@@ -940,19 +954,15 @@ impl Worker {
         }
     }
 
-    fn send_packet(&self, socket: &UdpSocket, packet: &Packet) {
-        let mut out = [0u8; 1600];
-        let mut w = &mut out[..];
-        packet.serialize(&mut w);
-        let len = 1600 - w.len();
-        match socket.send(&out[..len]) {
-            Ok(_) => {
-                self.shared
-                    .bytes_sent
-                    .fetch_add(len as u64 + IP_UDP_HEADER, Ordering::Relaxed);
-            }
-            // Lost like on the wire; SRT retransmits.
-            Err(e) => debug!("SRT send: {e}"),
+    /// Sends one packet now (with any queued before it).
+    fn send_now(&self, tx: &mut Tx, packet: &Packet) {
+        let bytes = tx.push(packet) + tx.flush();
+        self.count_sent(bytes);
+    }
+
+    fn count_sent(&self, bytes: u64) {
+        if bytes > 0 {
+            self.shared.bytes_sent.fetch_add(bytes, Ordering::Relaxed);
         }
     }
 
@@ -977,6 +987,132 @@ impl Worker {
         s.send_buffer_us
             .store(st.tx_buffered_time.as_micros() as u64, Ordering::Relaxed);
     }
+}
+
+/// The source time srt-protocol stamps a payload with (its TSBPD
+/// timestamp): when the producer queued it, not when this thread woke.
+/// `host_now_ns` is the host clock read at `now`.
+fn source_time(enqueued_ns: i64, host_now_ns: i64, now: Instant, start: Instant) -> Instant {
+    let age = (host_now_ns - enqueued_ns).max(0) as u64;
+    now.checked_sub(Duration::from_nanos(age))
+        .map_or(start, |t| t.max(start))
+}
+
+/// Outgoing datagrams, serialized into buffers reused for the whole
+/// connection (not zeroed per packet) and sent in batches: one
+/// sendmmsg(2) per batch on Linux and Android, one send(2) each elsewhere.
+/// Order and bytes are what sending each packet at once would put on the
+/// wire.
+struct Tx<'a> {
+    socket: &'a UdpSocket,
+    bufs: Box<[[u8; DATAGRAM]]>,
+    lens: [usize; TX_BATCH],
+    n: usize,
+}
+
+impl<'a> Tx<'a> {
+    fn new(socket: &'a UdpSocket) -> Self {
+        Tx {
+            socket,
+            bufs: vec![[0u8; DATAGRAM]; TX_BATCH].into_boxed_slice(),
+            lens: [0; TX_BATCH],
+            n: 0,
+        }
+    }
+
+    /// Queues one packet; sends the batch once full. Returns the bytes sent
+    /// (as [`Tx::flush`]).
+    fn push(&mut self, packet: &Packet) -> u64 {
+        let mut w = &mut self.bufs[self.n][..];
+        packet.serialize(&mut w);
+        self.lens[self.n] = DATAGRAM - w.len();
+        self.n += 1;
+        if self.n == TX_BATCH {
+            self.flush()
+        } else {
+            0
+        }
+    }
+
+    /// Sends the queued datagrams. Returns their bytes on the wire (IP and
+    /// UDP headers included) of those the kernel took; one it refused is
+    /// lost like on the wire (SRT resends).
+    fn flush(&mut self) -> u64 {
+        let n = std::mem::take(&mut self.n);
+        if n == 0 {
+            return 0;
+        }
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        {
+            send_batch(self.socket, &self.bufs[..n], &self.lens[..n])
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "android")))]
+        {
+            send_each(self.socket, &self.bufs[..n], &self.lens[..n])
+        }
+    }
+}
+
+/// One send(2) per datagram (macOS and iOS have no sendmmsg).
+#[cfg_attr(any(target_os = "linux", target_os = "android"), allow(dead_code))]
+fn send_each(socket: &UdpSocket, bufs: &[[u8; DATAGRAM]], lens: &[usize]) -> u64 {
+    let mut bytes = 0;
+    for (buf, &len) in bufs.iter().zip(lens) {
+        match socket.send(&buf[..len]) {
+            Ok(_) => bytes += len as u64 + IP_UDP_HEADER,
+            Err(e) => debug!("SRT send: {e}"),
+        }
+    }
+    bytes
+}
+
+/// sendmmsg(2): the batch in one system call (or a few, when the kernel
+/// takes part of it or refuses one datagram, which is then skipped as a
+/// failed send(2) would lose it).
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn send_batch(socket: &UdpSocket, bufs: &[[u8; DATAGRAM]], lens: &[usize]) -> u64 {
+    let n = bufs.len().min(TX_BATCH);
+    // SAFETY: plain C structs; all-zero is a valid (empty) value.
+    let mut iov: [libc::iovec; TX_BATCH] = unsafe { std::mem::zeroed() };
+    let mut msgs: [libc::mmsghdr; TX_BATCH] = unsafe { std::mem::zeroed() };
+    for i in 0..n {
+        iov[i] = libc::iovec {
+            iov_base: bufs[i].as_ptr() as *mut libc::c_void,
+            iov_len: lens[i],
+        };
+        // Connected socket: no address.
+        msgs[i].msg_hdr.msg_iov = &mut iov[i];
+        msgs[i].msg_hdr.msg_iovlen = 1;
+    }
+    let fd = socket.as_raw_fd();
+    let mut bytes = 0;
+    let mut i = 0;
+    while i < n {
+        // SAFETY: `msgs[i..n]` point into `iov` and `bufs`, alive and
+        // unchanged for the call; the kernel only reads them (and writes
+        // msg_len).
+        let r = unsafe { libc::sendmmsg(fd, msgs[i..].as_mut_ptr(), (n - i) as _, 0) };
+        if r < 0 {
+            let e = io::Error::last_os_error();
+            if e.kind() == ErrorKind::Interrupted {
+                continue;
+            }
+            debug!("SRT send: {e}");
+            i += 1;
+            continue;
+        }
+        let sent = (r as usize).min(n - i);
+        if sent == 0 {
+            i += 1;
+            continue;
+        }
+        bytes += lens[i..i + sent]
+            .iter()
+            .map(|&len| len as u64 + IP_UDP_HEADER)
+            .sum::<u64>();
+        i += sent;
+    }
+    bytes
 }
 
 fn is_conclusion(p: &Packet) -> bool {
@@ -1206,6 +1342,124 @@ mod tests {
         let t = Instant::now();
         w.sleep(Duration::from_secs(1), None);
         assert!(t.elapsed() < Duration::from_millis(500));
+    }
+
+    fn data_packet(i: u32) -> Packet {
+        use srt_protocol::packet::{DataEncryption, DataPacket, MsgNumber, PacketLocation};
+        Packet::Data(DataPacket {
+            seq_number: SeqNumber::new_truncate(1000 + i),
+            message_loc: PacketLocation::ONLY,
+            in_order_delivery: false,
+            encryption: DataEncryption::None,
+            retransmitted: false,
+            message_number: MsgNumber::new_truncate(i),
+            timestamp: TimeStamp::from_micros(i * 10),
+            dest_sockid: srt_protocol::packet::SocketId(0x1234),
+            // Sizes from 1 to a full SRT payload, every byte numbered.
+            payload: (0..1 + (i as usize * 97) % 1316)
+                .map(|b| (b as u32 ^ i) as u8)
+                .collect::<Vec<u8>>()
+                .into(),
+        })
+    }
+
+    /// A receiving socket and a sender connected to it.
+    fn socket_pair() -> (UdpSocket, UdpSocket) {
+        let rx = UdpSocket::bind("127.0.0.1:0").unwrap();
+        rx.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        let tx = open_socket(rx.local_addr().unwrap()).unwrap();
+        (rx, tx)
+    }
+
+    fn receive(rx: &UdpSocket, count: usize) -> Vec<Packet> {
+        let mut buf = [0u8; 2048];
+        (0..count)
+            .map(|_| {
+                let n = rx.recv(&mut buf).unwrap();
+                Packet::parse(&mut &buf[..n], false).unwrap()
+            })
+            .collect()
+    }
+
+    /// Batched (sendmmsg on Linux and Android, send(2) each elsewhere), the
+    /// datagrams leave as sending each packet at once would put them on the
+    /// wire: all of them, in order, byte for byte; the buffers are reused
+    /// between batches and packets of other sizes.
+    #[test]
+    fn tx_sends_every_packet_in_order() {
+        let (rx, socket) = socket_pair();
+        let mut tx = Tx::new(&socket);
+        let packets: Vec<Packet> = (0..2 * TX_BATCH as u32 + 11).map(data_packet).collect();
+        let mut bytes = 0;
+        for p in &packets[..TX_BATCH + 5] {
+            bytes += tx.push(p);
+        }
+        // The first batch left when it was full; the rest waits for flush.
+        assert!(bytes > 0);
+        assert_eq!(tx.n, 5);
+        bytes += tx.flush();
+        assert_eq!(tx.flush(), 0, "nothing queued");
+        for p in &packets[TX_BATCH + 5..] {
+            bytes += tx.push(p);
+        }
+        bytes += tx.flush();
+        let wire: u64 = packets
+            .iter()
+            .map(|p| {
+                let mut v = Vec::new();
+                p.serialize(&mut v);
+                v.len() as u64 + IP_UDP_HEADER
+            })
+            .sum();
+        assert_eq!(bytes, wire);
+        assert_eq!(receive(&rx, packets.len()), packets);
+    }
+
+    /// Both send paths directly (the fallback is the only one on macOS and
+    /// iOS; on Linux both run).
+    #[test]
+    fn send_paths_put_the_same_datagrams_on_the_wire() {
+        let packets: Vec<Packet> = (0..TX_BATCH as u32).map(data_packet).collect();
+        let mut bufs = vec![[0u8; DATAGRAM]; TX_BATCH];
+        let mut lens = [0usize; TX_BATCH];
+        for (i, p) in packets.iter().enumerate() {
+            let mut w = &mut bufs[i][..];
+            p.serialize(&mut w);
+            lens[i] = DATAGRAM - w.len();
+        }
+        let wire: u64 = lens.iter().map(|&l| l as u64 + IP_UDP_HEADER).sum();
+        let (rx, socket) = socket_pair();
+        assert_eq!(send_each(&socket, &bufs, &lens), wire);
+        assert_eq!(receive(&rx, packets.len()), packets);
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        {
+            assert_eq!(send_batch(&socket, &bufs, &lens), wire);
+            assert_eq!(receive(&rx, packets.len()), packets);
+            // Part of a batch.
+            assert_eq!(
+                send_batch(&socket, &bufs[3..7], &lens[3..7]),
+                lens[3..7]
+                    .iter()
+                    .map(|&l| l as u64 + IP_UDP_HEADER)
+                    .sum::<u64>()
+            );
+            assert_eq!(receive(&rx, 4), packets[3..7]);
+        }
+    }
+
+    #[test]
+    fn source_time_is_the_age_against_one_host_clock_reading() {
+        let start = Instant::now();
+        let now = start + Duration::from_millis(500);
+        let host_now = 10_000_000_000;
+        assert_eq!(
+            source_time(host_now - 3_000_000, host_now, now, start),
+            now - Duration::from_millis(3)
+        );
+        // Queued after the reading: at `now`; older than the connection:
+        // at its start.
+        assert_eq!(source_time(host_now + 1, host_now, now, start), now);
+        assert_eq!(source_time(0, host_now, now, start), start);
     }
 
     #[test]

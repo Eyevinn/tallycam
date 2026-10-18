@@ -1558,6 +1558,7 @@ version = "0.2.0"
 dependencies = [
  "base64",
  "libc",
+ "memchr",
  "p256",
  "serde",
  "serde_json",

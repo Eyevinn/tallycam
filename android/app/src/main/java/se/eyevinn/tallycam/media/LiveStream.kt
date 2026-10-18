@@ -170,7 +170,6 @@ class LiveStream(private val listener: Listener) {
         @Volatile private var ceilingKbps = 0
         @Volatile var encoderKbps = 0
             private set
-        private var avcc: ByteBuffer = ByteBuffer.allocateDirect(256 * 1024)
         private val config: ByteBuffer = ByteBuffer.allocateDirect(1024)
         /** Stream thread only: the clock mapping of the frame being muxed. */
         private val mapping = LongArray(5)
@@ -335,17 +334,16 @@ class LiveStream(private val listener: Listener) {
                 if (mux == 0L || parameterSets.remaining() > config.capacity()) return
                 config.clear()
                 config.put(parameterSets).flip()
-                if (!Hot.tsSetVideoFormat(mux, config, config.limit(), 4)) {
+                // Frames go in as MediaCodec gives them, Annex B (length size 0).
+                if (!Hot.tsSetVideoFormat(mux, config, config.limit(), 0)) {
                     Log.w(TAG, "Encoder parameter sets not accepted")
                 }
             }
 
             override fun onVideoFrame(frame: ByteBuffer, ptsUs: Long, keyframe: Boolean) {
                 if (mux == 0L) return
-                val needed = AnnexB.capacityFor(frame.remaining())
-                if (avcc.capacity() < needed) avcc = ByteBuffer.allocateDirect(needed * 2)
-                val len = AnnexB.toLengthPrefixed(frame, avcc)
-                if (len == 0) return
+                // The encoder's direct buffer, position to limit: no copy.
+                if (!frame.isDirect || !frame.hasRemaining()) return
                 val hostNs = ptsUs * 1000 + timestampOffsetNs
                 // tai, utc, est error, max error, flags (1 synced, 2 disciplined): no object per frame.
                 Hot.clockMap(hostNs, mapping)
@@ -359,7 +357,8 @@ class LiveStream(private val listener: Listener) {
                 // Send capture 0: no frame marks, so the SRT thread makes no
                 // onFrameSent calls (two JNA callbacks a frame), which Android
                 // does not use.
-                Hot.tsVideo(mux, avcc, len, keyframe, hostNs, 0, mapping[0], flags, frameCounter, uncertainty, now)
+                Hot.tsVideoAt(mux, frame, frame.position(), frame.remaining(), keyframe, hostNs, 0, mapping[0], flags,
+                              frameCounter, uncertainty, now)
                 // The first keyframe came too late for its PCR (the encoder
                 // warming up): ask for another now rather than wait a GOP.
                 if (keyframe) keyframeRequested = false

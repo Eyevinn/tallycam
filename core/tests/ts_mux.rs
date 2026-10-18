@@ -582,3 +582,104 @@ fn a_late_first_keyframe_does_not_start_the_stream() {
     assert!(!m.wants_keyframe());
     assert_eq!(m.late_video_frames(), 0);
 }
+
+/// MediaCodec's layout (`nal_length_size` 0, the frames as Annex B) gives
+/// byte for byte the stream VideoToolbox's (4-byte lengths) gives for the
+/// same NAL units: the real x264 sample (its own AUD, SPS and PPS inline,
+/// 3- and 4-byte start codes) and frames of all sizes in both codecs.
+#[test]
+fn annexb_frames_mux_like_length_prefixed_frames() {
+    let sample = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../ios/TallyCamTests/Resources/sample.h264"
+    ))
+    .unwrap();
+    let units = access_units(&sample);
+    let sps = units[0].iter().find(|n| n[0] & 0x1F == 7).unwrap();
+    let pps = units[0].iter().find(|n| n[0] & 0x1F == 8).unwrap();
+    let mut h264: Vec<(Vec<Vec<u8>>, bool)> = units
+        .iter()
+        .map(|u| {
+            let keyframe = u.iter().any(|n| n[0] & 0x1F == 5);
+            (u.iter().map(|n| n.to_vec()).collect(), keyframe)
+        })
+        .collect();
+    let mut hevc = Vec::new();
+    for i in 0..60usize {
+        let keyframe = i % 30 == 0;
+        let mut nal = if keyframe {
+            vec![0x26, 0x01, 0xAF]
+        } else {
+            vec![0x02, 0x01, 0xD0]
+        };
+        nal.resize(nal.len() + (i * 997) % 9000 + i, 0x5A);
+        // An encoder SEI first, as MediaCodec may write one.
+        hevc.push((vec![vec![0x4E, 0x01, 0x05, 0x01, 0x80], nal], keyframe));
+    }
+    for i in 0..60usize {
+        let mut nal = vec![if i % 30 == 0 { 0x65 } else { 0x41 }, 0x88];
+        nal.resize(nal.len() + (i * 1499) % 20000, 0x33);
+        h264.push((vec![nal], i % 30 == 0));
+    }
+    let hevc_sets: [&[u8]; 3] = [
+        &[0x40, 0x01, 0x0C],
+        &[0x42, 0x01, 0x01],
+        &[0x44, 0x01, 0xC1],
+    ];
+    for (codec, frames, sets) in [
+        (VideoCodec::H264, &h264, vec![&sps[..], &pps[..]]),
+        (VideoCodec::Hevc, &hevc, hevc_sets.to_vec()),
+    ] {
+        let run = |nal_length_size: usize| {
+            let mut m = Muxer::new(codec, Some(AudioCodec::Opus), 80 * MS);
+            m.set_video_format(sets.iter().copied(), nal_length_size)
+                .unwrap();
+            m.set_audio_format(48_000, 1).unwrap();
+            let mut out = Out::default();
+            let t0 = 5_000 * MS;
+            for (i, (nals, keyframe)) in frames.iter().enumerate() {
+                let nals: Vec<&[u8]> = nals.iter().map(|n| &n[..]).collect();
+                let data = if nal_length_size == 0 {
+                    // Alternating 4- and 3-byte start codes.
+                    let mut d = Vec::new();
+                    for (j, n) in nals.iter().enumerate() {
+                        d.extend_from_slice(&[0, 0, 0, 1][j % 2..]);
+                        d.extend_from_slice(n);
+                    }
+                    d
+                } else {
+                    length_prefixed(&nals)
+                };
+                let t = t0 + i as i64 * 33 * MS;
+                let frame = VideoFrame {
+                    data: &data,
+                    keyframe: *keyframe,
+                    pts_ns: t,
+                    sei: Some(fields(1_800_000_000_000_000_000 + i as u64, i as u32)),
+                };
+                assert!(m.write_video(&frame, t + 30 * MS, &mut out.sink()));
+                m.write_audio(&[0xFC; 40], t, t + 20 * MS, &mut out.sink());
+            }
+            out
+        };
+        let expected = run(4);
+        let annexb = run(annexb::ANNEX_B);
+        assert_eq!(annexb.chunks, expected.chunks, "{codec:?}");
+        assert!(annexb.bytes == expected.bytes, "{codec:?}: streams differ");
+        let frames_read = annexb
+            .events()
+            .iter()
+            .filter(|e| matches!(e, Event::Video { sei: Some(_), .. }))
+            .count();
+        assert_eq!(frames_read, frames.len());
+    }
+}
+
+#[test]
+fn nal_length_size_above_4_is_rejected() {
+    let mut m = Muxer::new(VideoCodec::H264, None, 80 * MS);
+    assert!(m.set_video_format([SPS, PPS], 5).is_err());
+    for n in 0..=4 {
+        m.set_video_format([SPS, PPS], n).unwrap();
+    }
+}

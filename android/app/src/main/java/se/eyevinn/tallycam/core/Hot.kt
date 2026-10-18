@@ -44,6 +44,16 @@ object Hot {
 
     @JvmStatic external fun tsSetAudioFormat(mux: Long, sampleRate: Int, channels: Int): Boolean
 
+    /**
+     * Like [tsVideo], on `len` bytes from absolute index `offset` of `data`
+     * (a MediaCodec output buffer as it is: Annex B with a video format of
+     * NAL length size 0).
+     */
+    @JvmStatic external fun tsVideoAt(
+        mux: Long, data: ByteBuffer, offset: Int, len: Int, keyframe: Boolean, ptsNs: Long, sendCaptureNs: Long,
+        seiCaptureNs: Long, seiFlags: Int, seiFrameCounter: Int, seiUncertaintyUs: Int, nowNs: Long,
+    ): Int
+
     /** NAL units with 4-byte big-endian lengths. seiCaptureNs 0: no timestamp SEI. */
     @JvmStatic external fun tsVideo(
         mux: Long, data: ByteBuffer, len: Int, keyframe: Boolean, ptsNs: Long, sendCaptureNs: Long,

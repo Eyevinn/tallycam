@@ -98,14 +98,22 @@ fn as_bool(value: bool) -> jboolean {
 
 /// The first `len` bytes of a direct buffer, or None.
 fn direct<'a>(env: &JNIEnv, buffer: &JByteBuffer, len: jint) -> Option<&'a [u8]> {
+    direct_at(env, buffer, 0, len)
+}
+
+/// `len` bytes of a direct buffer from absolute index `offset` (its
+/// position and limit are not read), or None when they are not all in it.
+fn direct_at<'a>(env: &JNIEnv, buffer: &JByteBuffer, offset: jint, len: jint) -> Option<&'a [u8]> {
     let ptr = env.get_direct_buffer_address(buffer).ok()?;
     let capacity = env.get_direct_buffer_capacity(buffer).ok()?;
+    let offset = usize::try_from(offset).ok()?;
     let len = usize::try_from(len).ok()?;
-    if ptr.is_null() || len > capacity {
+    if ptr.is_null() || offset.checked_add(len)? > capacity {
         return None;
     }
-    // SAFETY: a direct buffer of at least `len` bytes, alive for the call.
-    Some(unsafe { std::slice::from_raw_parts(ptr, len) })
+    // SAFETY: a direct buffer of at least `offset + len` bytes, alive for
+    // the call.
+    Some(unsafe { std::slice::from_raw_parts(ptr.add(offset), len) })
 }
 
 #[no_mangle]
@@ -185,7 +193,9 @@ pub extern "system" fn Java_se_eyevinn_tallycam_core_Hot_tsFree(
 }
 
 /// `parameter_sets`: Annex B (each set after a start code), as MediaCodec's
-/// codec-config buffer is.
+/// codec-config buffer is. `nal_length_size`: the frames' length prefix (1
+/// to 4), or 0 when they are Annex B as MediaCodec writes them (then pass
+/// the encoder's buffer to tsVideoAt as is).
 #[no_mangle]
 pub extern "system" fn Java_se_eyevinn_tallycam_core_Hot_tsSetVideoFormat(
     env: JNIEnv,
@@ -224,7 +234,8 @@ pub extern "system" fn Java_se_eyevinn_tallycam_core_Hot_tsSetAudioFormat(
 }
 
 /// One encoded frame: NAL units each after a big-endian length of the size
-/// given to tsSetVideoFormat. Returns as lc_ts_video.
+/// given to tsSetVideoFormat (or Annex B for size 0), from index 0 of
+/// `data`. Returns as lc_ts_video.
 #[allow(clippy::too_many_arguments)]
 #[no_mangle]
 pub extern "system" fn Java_se_eyevinn_tallycam_core_Hot_tsVideo(
@@ -245,6 +256,72 @@ pub extern "system" fn Java_se_eyevinn_tallycam_core_Hot_tsVideo(
     let Some(data) = direct(&env, &data, len) else {
         return BAD_ARGS;
     };
+    ts_video(
+        mux,
+        data,
+        keyframe,
+        pts_ns,
+        send_capture_ns,
+        sei_capture_ns,
+        sei_flags,
+        sei_frame_counter,
+        sei_uncertainty_us,
+        now_ns,
+    )
+}
+
+/// tsVideo on `len` bytes of `data` from absolute index `offset`: an
+/// encoder output buffer as MediaCodec hands it out (`offset` its
+/// position, `len` its remaining bytes), with nothing copied. With
+/// tsSetVideoFormat's size 0 the frame is muxed from its Annex B as is.
+#[allow(clippy::too_many_arguments)]
+#[no_mangle]
+pub extern "system" fn Java_se_eyevinn_tallycam_core_Hot_tsVideoAt(
+    env: JNIEnv,
+    _class: JClass,
+    mux: jlong,
+    data: JByteBuffer,
+    offset: jint,
+    len: jint,
+    keyframe: jboolean,
+    pts_ns: jlong,
+    send_capture_ns: jlong,
+    sei_capture_ns: jlong,
+    sei_flags: jint,
+    sei_frame_counter: jint,
+    sei_uncertainty_us: jint,
+    now_ns: jlong,
+) -> jint {
+    let Some(data) = direct_at(&env, &data, offset, len) else {
+        return BAD_ARGS;
+    };
+    ts_video(
+        mux,
+        data,
+        keyframe,
+        pts_ns,
+        send_capture_ns,
+        sei_capture_ns,
+        sei_flags,
+        sei_frame_counter,
+        sei_uncertainty_us,
+        now_ns,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn ts_video(
+    mux: jlong,
+    data: &[u8],
+    keyframe: jboolean,
+    pts_ns: jlong,
+    send_capture_ns: jlong,
+    sei_capture_ns: jlong,
+    sei_flags: jint,
+    sei_frame_counter: jint,
+    sei_uncertainty_us: jint,
+    now_ns: jlong,
+) -> jint {
     let frame = LcTsVideoFrame {
         data: data.as_ptr(),
         len: data.len(),

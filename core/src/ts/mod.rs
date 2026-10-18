@@ -9,7 +9,7 @@
 //!   is the time of muxing minus a fixed delay sized to the slowest stream
 //!   (docs/LATENCY.md).
 //! - Video arrives as the encoder emits it (length-prefixed NAL units, as
-//!   from VideoToolbox) and leaves as Annex B with an access unit delimiter,
+//!   from VideoToolbox, or Annex B, as from MediaCodec) and leaves as Annex B with an access unit delimiter,
 //!   the parameter sets on keyframes and the LCP timestamp SEI ([`crate::sei`])
 //!   right before the first slice.
 //! - Opus is carried as GStreamer and FFmpeg carry it (stream_type 0x06,
@@ -99,7 +99,9 @@ pub enum Content {
 #[derive(Debug, Clone, Copy)]
 pub struct VideoFrame<'a> {
     /// NAL units, each preceded by a big-endian length of the size given to
-    /// [`Muxer::set_video_format`] (VideoToolbox's AVCC/HVCC layout).
+    /// [`Muxer::set_video_format`] (VideoToolbox's AVCC/HVCC layout), or
+    /// Annex B (start codes, MediaCodec's layout) when that size is
+    /// [`annexb::ANNEX_B`] (0).
     pub data: &'a [u8],
     pub keyframe: bool,
     /// Capture time on the host clock, ns: the PTS.
@@ -125,7 +127,9 @@ pub enum FormatError {
 impl std::fmt::Display for FormatError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            FormatError::NalLengthSize(n) => write!(f, "NAL length size {n} is not 1 to 4"),
+            FormatError::NalLengthSize(n) => {
+                write!(f, "NAL length size {n} is not 0 (Annex B) or 1 to 4")
+            }
             FormatError::MissingParameterSet(t) => {
                 write!(f, "parameter set of NAL type {t} missing")
             }
@@ -153,7 +157,11 @@ pub struct Muxer {
     /// The parameter sets in Annex B (start codes included), written after
     /// the AUD of every keyframe; empty until the video format is known.
     parameter_sets: Vec<u8>,
+    /// 1 to 4, or [`annexb::ANNEX_B`].
     nal_length_size: usize,
+    /// Annex B frames: the NAL units found by the sizing pass (start and
+    /// end offsets), so the frame is scanned once. Grows and is reused.
+    nal_ranges: Vec<(usize, usize)>,
     /// AAC only.
     aac_frequency_index: u8,
     audio_channels: u8,
@@ -184,6 +192,7 @@ impl Muxer {
             clock: TsClock::new(pcr_delay_ns),
             parameter_sets: Vec::with_capacity(512),
             nal_length_size: 4,
+            nal_ranges: Vec::with_capacity(64),
             aac_frequency_index: 0,
             audio_channels: 1,
             audio_ready: false,
@@ -246,7 +255,8 @@ impl Muxer {
 
     /// The codec's parameter sets (H.264: SPS and PPS; HEVC: VPS, SPS, PPS
     /// and any other the format has), in order, without start codes, and
-    /// the length prefix size of the frames. On error the previous format is
+    /// the length prefix size of the frames: 1 to 4, or
+    /// [`annexb::ANNEX_B`] (0) for frames in Annex B. On error the previous format is
     /// dropped and video frames are not muxed until a valid one arrives.
     pub fn set_video_format<'a>(
         &mut self,
@@ -254,7 +264,7 @@ impl Muxer {
         nal_length_size: usize,
     ) -> Result<(), FormatError> {
         self.parameter_sets.clear();
-        if !(1..=4).contains(&nal_length_size) {
+        if nal_length_size > 4 {
             return Err(FormatError::NalLengthSize(nal_length_size));
         }
         let mut seen = [false; 3];
@@ -365,17 +375,33 @@ impl Muxer {
         }
         let pts = self.clock.pts(frame.pts_ns);
         let parameter_sets = frame.keyframe.then_some(&self.parameter_sets[..]);
-        // Sized first (only the NAL lengths are read), then written straight
-        // into TS packets: the frame is copied once, into `ts`.
+        // Sized first (only the NAL lengths are read; Annex B: scanned once
+        // for its NAL units), then written straight into TS packets: the
+        // frame is copied once, into `ts`.
+        let annex_b = self.nal_length_size == annexb::ANNEX_B;
         let mut size = annexb::ByteCount::default();
-        annexb::append_access_unit(
-            &mut size,
-            self.video,
-            frame.data,
-            self.nal_length_size,
-            parameter_sets,
-            sei_nal,
-        );
+        if annex_b {
+            let data = frame.data;
+            self.nal_ranges.clear();
+            self.nal_ranges
+                .extend(annexb::split_ranges(data).map(|r| (r.start, r.end)));
+            annexb::append_nal_units(
+                &mut size,
+                self.video,
+                self.nal_ranges.iter().map(|&(a, b)| &data[a..b]),
+                parameter_sets,
+                sei_nal,
+            );
+        } else {
+            annexb::append_access_unit(
+                &mut size,
+                self.video,
+                frame.data,
+                self.nal_length_size,
+                parameter_sets,
+                sei_nal,
+            );
+        }
         self.ts.clear();
         let header = packet::pes_header(VIDEO_STREAM_ID, pts, size.0);
         let mut pes = packet::PesWriter::new(
@@ -387,14 +413,25 @@ impl Muxer {
             header.len() + size.0,
         );
         pes.write(&header);
-        annexb::append_access_unit(
-            &mut pes,
-            self.video,
-            frame.data,
-            self.nal_length_size,
-            parameter_sets,
-            sei_nal,
-        );
+        if annex_b {
+            let data = frame.data;
+            annexb::append_nal_units(
+                &mut pes,
+                self.video,
+                self.nal_ranges.iter().map(|&(a, b)| &data[a..b]),
+                parameter_sets,
+                sei_nal,
+            );
+        } else {
+            annexb::append_access_unit(
+                &mut pes,
+                self.video,
+                frame.data,
+                self.nal_length_size,
+                parameter_sets,
+                sei_nal,
+            );
+        }
         debug_assert_eq!(pes.left(), 0);
         out(&self.ts, Content::Video);
         true

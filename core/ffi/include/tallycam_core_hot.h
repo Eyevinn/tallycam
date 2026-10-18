@@ -102,7 +102,8 @@ typedef struct LcTsMux LcTsMux;
 
 typedef struct LcTsVideoFrame {
     /// The encoder's NAL units, each after a big-endian length of the size
-    /// given to lc_ts_set_video_format (VideoToolbox output as is).
+    /// given to lc_ts_set_video_format (VideoToolbox output as is), or in
+    /// Annex B when that size is 0 (MediaCodec output as is).
     const uint8_t *data;
     size_t len;
     bool keyframe;
@@ -140,8 +141,9 @@ LcTsMux *lc_ts_new(uint64_t srt_handle, uint8_t video_codec, uint8_t audio_codec
 void lc_ts_free(LcTsMux *mux);
 void lc_ts_set_output(LcTsMux *mux, LcTsOutput output, void *ctx);
 /// parameter_sets: Annex B, each set after a start code (H.264 SPS and PPS;
-/// HEVC VPS, SPS and PPS). False if one is missing: video waits for a valid
-/// format.
+/// HEVC VPS, SPS and PPS). nal_length_size: 1 to 4 (the frames' AVCC/HVCC
+/// length prefix), or 0 for frames in Annex B. False if a set is missing or
+/// the size is above 4: video waits for a valid format.
 bool lc_ts_set_video_format(LcTsMux *mux, const uint8_t *parameter_sets, size_t len, uint8_t nal_length_size);
 /// False if the codec cannot carry it (Opus: 48 kHz, 1 or 2 channels; AAC:
 /// a rate with an ADTS index).

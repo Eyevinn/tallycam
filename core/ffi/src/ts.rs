@@ -164,8 +164,10 @@ pub unsafe extern "C" fn lc_ts_set_output(
 
 /// The video format: `parameter_sets` in Annex B (each set after a start
 /// code; H.264 SPS and PPS, HEVC VPS, SPS and PPS), and the size of the
-/// length prefix of the frames. Returns false (and drops video until a
-/// valid format arrives) when a set is missing.
+/// length prefix of the frames: 1 to 4 (VideoToolbox's AVCC/HVCC), or 0 for
+/// frames already in Annex B (MediaCodec's output as is). Returns false
+/// (and drops video until a valid format arrives) when a set is missing or
+/// the size is above 4.
 ///
 /// # Safety
 /// `mux` from `lc_ts_new`; `parameter_sets` points to `len` bytes.
@@ -463,6 +465,42 @@ mod ts_ffi_tests {
         drop(caller);
         assert_eq!(unsafe { lc_ts_video(m, &frame, 3) }, -1);
         unsafe { lc_ts_free(m) };
+    }
+
+    /// nal_length_size 0: the same frame in Annex B gives the same TS as
+    /// with 4-byte lengths.
+    #[test]
+    fn annexb_frames_through_the_c_api() {
+        let sets = [0, 0, 0, 1, 0x67, 0x42, 0, 0, 0, 1, 0x68, 0xCE];
+        let run = |nal_length_size: u8, slice: &[u8]| {
+            let m = unsafe { lc_ts_new(0, 0, 0, 0) };
+            let mut out: Vec<(u8, i64, Vec<u8>)> = Vec::new();
+            unsafe { lc_ts_set_output(m, Some(collect), &mut out as *mut _ as *mut _) };
+            assert!(unsafe {
+                lc_ts_set_video_format(m, sets.as_ptr(), sets.len(), nal_length_size)
+            });
+            let frame = LcTsVideoFrame {
+                data: slice.as_ptr(),
+                len: slice.len(),
+                keyframe: true,
+                pts_ns: 1_000_000_000,
+                send_capture_ns: 1_000_000_000,
+                has_sei: true,
+                sei_capture_ns: 42,
+                sei_flags: 0x03,
+                sei_frame_counter: 7,
+                sei_uncertainty_us: 5,
+            };
+            assert_eq!(unsafe { lc_ts_video(m, &frame, 1_030_000_000) }, 2);
+            unsafe { lc_ts_free(m) };
+            out
+        };
+        let m = unsafe { lc_ts_new(0, 0, 0, 0) };
+        assert!(!unsafe { lc_ts_set_video_format(m, sets.as_ptr(), sets.len(), 5) });
+        unsafe { lc_ts_free(m) };
+        let length_prefixed = run(4, &[0, 0, 0, 3, 0x65, 0x88, 0x84]);
+        let annexb = run(0, &[0, 0, 0, 1, 0x65, 0x88, 0x84]);
+        assert_eq!(annexb, length_prefixed);
     }
 
     struct NoListener;

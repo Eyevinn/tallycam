@@ -1007,6 +1007,7 @@ name = "tallycam-core"
 version = "0.2.0"
 dependencies = [
  "base64",
+ "memchr",
  "p256",
  "serde",
  "serde_json",

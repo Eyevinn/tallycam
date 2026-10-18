@@ -1,5 +1,6 @@
-//! Length-prefixed NAL units (as VideoToolbox emits them) to the Annex B
-//! access units MPEG-TS carries.
+//! Length-prefixed NAL units (as VideoToolbox emits them) or Annex B NAL
+//! units (as MediaCodec emits them) to the Annex B access units MPEG-TS
+//! carries.
 //!
 //! Each access unit starts with an access unit delimiter (H.222.0 requires
 //! one in every HEVC access unit; H.264 receivers find frame boundaries with
@@ -75,16 +76,46 @@ impl ByteSink for ByteCount {
     }
 }
 
+/// `length_size` meaning "the frame is already Annex B" (NAL units after
+/// 3- or 4-byte start codes, as MediaCodec writes them).
+pub const ANNEX_B: usize = 0;
+
 /// Appends one access unit to `out`: AUD, `parameter_sets` (Annex B, start
 /// codes included; `Some` on keyframes), the encoder's NAL units from
-/// `length_prefixed` (each after a big-endian length of `length_size`
-/// bytes) with start codes, and `sei` (one NAL unit without start code)
-/// before the first slice. A truncated or zero length ends the frame.
+/// `frame` with start codes, and `sei` (one NAL unit without start code)
+/// before the first slice.
+///
+/// `length_size` 1 to 4: each NAL unit of `frame` after a big-endian length
+/// of that many bytes; a truncated or zero length ends the frame.
+/// [`ANNEX_B`] (0): `frame` is Annex B ([`split`]); bytes before the first
+/// start code and empty NAL units are skipped.
 pub fn append_access_unit(
     out: &mut impl ByteSink,
     codec: VideoCodec,
-    length_prefixed: &[u8],
+    frame: &[u8],
     length_size: usize,
+    parameter_sets: Option<&[u8]>,
+    sei: Option<&[u8]>,
+) {
+    if length_size == ANNEX_B {
+        append_nal_units(out, codec, split(frame), parameter_sets, sei);
+    } else {
+        append_nal_units(
+            out,
+            codec,
+            length_prefixed(frame, length_size),
+            parameter_sets,
+            sei,
+        );
+    }
+}
+
+/// [`append_access_unit`] for NAL units already split (no start codes or
+/// lengths; empty ones are skipped).
+pub fn append_nal_units<'a>(
+    out: &mut impl ByteSink,
+    codec: VideoCodec,
+    nal_units: impl Iterator<Item = &'a [u8]>,
     parameter_sets: Option<&[u8]>,
     sei: Option<&[u8]>,
 ) {
@@ -100,19 +131,11 @@ pub fn append_access_unit(
         out.put(sets);
     }
     let mut pending_sei = sei;
-    let bytes = length_prefixed;
-    let mut offset = 0;
-    while offset + length_size <= bytes.len() {
-        let length = bytes[offset..offset + length_size]
-            .iter()
-            .fold(0usize, |n, &b| n << 8 | usize::from(b));
-        offset += length_size;
-        if length == 0 || offset + length > bytes.len() {
-            break;
-        }
-        let nal = &bytes[offset..offset + length];
-        offset += length;
-        let t = nal_type(codec, nal[0]);
+    for nal in nal_units {
+        let Some(&first) = nal.first() else {
+            continue;
+        };
+        let t = nal_type(codec, first);
         if is_parameter_set_or_aud(codec, t) {
             continue;
         }
@@ -127,33 +150,63 @@ pub fn append_access_unit(
     }
 }
 
-/// The NAL units of an Annex B byte stream (3- or 4-byte start codes),
-/// without start codes.
-pub fn split(bytes: &[u8]) -> impl Iterator<Item = &[u8]> {
-    let mut i = 0;
+/// The NAL units of `bytes`, each after a big-endian length of
+/// `length_size` (1 to 4) bytes. A truncated or zero length ends them.
+pub fn length_prefixed(bytes: &[u8], length_size: usize) -> impl Iterator<Item = &[u8]> {
+    let mut offset = 0;
     std::iter::from_fn(move || {
-        // Find the next start code.
-        let start = loop {
-            if i + 3 > bytes.len() {
-                return None;
-            }
-            if bytes[i] == 0 && bytes[i + 1] == 0 && bytes[i + 2] == 1 {
-                break i + 3;
-            }
-            i += 1;
+        if length_size == 0 || offset + length_size > bytes.len() {
+            return None;
+        }
+        let length = bytes[offset..offset + length_size]
+            .iter()
+            .fold(0usize, |n, &b| n << 8 | usize::from(b));
+        offset += length_size;
+        if length == 0 || length > bytes.len() - offset {
+            offset = bytes.len();
+            return None;
+        }
+        let nal = &bytes[offset..offset + length];
+        offset += length;
+        Some(nal)
+    })
+}
+
+/// Index of the first `00 00 01` at or after `from`, or None. memchr finds
+/// the candidate `01` bytes (rare in coded data), then the two zeros before
+/// it are checked.
+#[inline]
+fn find_start_code(bytes: &[u8], from: usize) -> Option<usize> {
+    let mut i = from + 2;
+    while i < bytes.len() {
+        let k = i + memchr::memchr(1, &bytes[i..])?;
+        if bytes[k - 1] == 0 && bytes[k - 2] == 0 {
+            return Some(k - 2);
+        }
+        i = k + 1;
+    }
+    None
+}
+
+/// The NAL units of an Annex B byte stream (3- or 4-byte start codes),
+/// without start codes. A NAL unit ends where the next start code begins
+/// (the leading zero of a 4-byte one not included); one can be empty.
+pub fn split(bytes: &[u8]) -> impl Iterator<Item = &[u8]> {
+    split_ranges(bytes).map(move |r| &bytes[r])
+}
+
+/// [`split`] as offsets into `bytes`.
+pub fn split_ranges(bytes: &[u8]) -> impl Iterator<Item = std::ops::Range<usize>> + '_ {
+    let mut next = find_start_code(bytes, 0);
+    std::iter::from_fn(move || {
+        let start = next? + 3;
+        next = find_start_code(bytes, start);
+        let end = match next {
+            Some(j) if j > start && bytes[j - 1] == 0 => j - 1,
+            Some(j) => j,
+            None => bytes.len(),
         };
-        let mut j = start;
-        let end = loop {
-            if j + 3 > bytes.len() {
-                break bytes.len();
-            }
-            if bytes[j] == 0 && bytes[j + 1] == 0 && bytes[j + 2] == 1 {
-                break if bytes[j - 1] == 0 { j - 1 } else { j };
-            }
-            j += 1;
-        };
-        i = j;
-        Some(&bytes[start..end])
+        Some(start..end)
     })
 }
 
@@ -341,6 +394,116 @@ mod tests {
         out.clear();
         append_access_unit(&mut out, VideoCodec::H264, &input, 2, None, None);
         assert_eq!(split(&out).last().unwrap(), slice);
+    }
+
+    /// The same NAL units after start codes (alternating 4- and 3-byte).
+    fn annexb_frame(nals: &[&[u8]]) -> Vec<u8> {
+        let mut out = Vec::new();
+        for (i, n) in nals.iter().enumerate() {
+            out.extend_from_slice(if i % 2 == 0 { &S[..] } else { &S[1..] });
+            out.extend_from_slice(n);
+        }
+        out
+    }
+
+    #[test]
+    fn annexb_input_gives_the_same_access_unit_as_length_prefixed() {
+        let h264: &[&[u8]] = &[
+            &[0x09, 0xF0],
+            &[0x67, 0x64, 0x00, 0x28, 0xAC],
+            &[0x68, 0xEE, 0x3C, 0x80],
+            &[0x06, 0x06, 0x01, 0xC4, 0x80],
+            &[0x65, 0x88, 0x84, 0x00, 0x33, 0x00, 0x00, 0x03, 0x01],
+            &[0x65, 0x00, 0x11],
+        ];
+        let hevc: &[&[u8]] = &[
+            &[0x46, 0x01, 0x50],
+            &[0x40, 0x01, 0x0C, 0x01, 0xFF],
+            &[0x4E, 0x01, 0x06, 0x01, 0xC4, 0x80],
+            &[0x26, 0x01, 0xAF, 0x00, 0x33],
+            &[0x50, 0x01, 0x84, 0x80],
+        ];
+        for (codec, sei_codec, nals) in [
+            (VideoCodec::H264, Codec::H264, h264),
+            (VideoCodec::Hevc, Codec::Hevc, hevc),
+        ] {
+            let sei = sei(sei_codec);
+            let sets = annexb(&nals[1..2]);
+            for (sets, sei) in [
+                (Some(&sets[..]), Some(&sei[..])),
+                (None, Some(&sei[..])),
+                (None, None),
+            ] {
+                let mut expected = Vec::new();
+                append_access_unit(&mut expected, codec, &length_prefixed(nals), 4, sets, sei);
+                let mut out = Vec::new();
+                append_access_unit(&mut out, codec, &annexb_frame(nals), ANNEX_B, sets, sei);
+                assert_eq!(out, expected, "{codec:?}");
+                let mut count = ByteCount::default();
+                append_access_unit(&mut count, codec, &annexb_frame(nals), ANNEX_B, sets, sei);
+                assert_eq!(count.0, expected.len());
+            }
+        }
+    }
+
+    #[test]
+    fn annexb_input_skips_leading_bytes_and_empty_nal_units() {
+        let slice: &[u8] = &[0x41, 0x9A, 0x02];
+        let input = cat(&[&[0xFF, 0x00], &S, &S, &S[1..], slice, &S]);
+        let mut out = Vec::new();
+        append_access_unit(&mut out, VideoCodec::H264, &input, ANNEX_B, None, None);
+        assert_eq!(out, cat(&[&S, &[0x09, 0x30], &S, slice]));
+        // No start code at all: the AUD only.
+        out.clear();
+        append_access_unit(&mut out, VideoCodec::H264, slice, ANNEX_B, None, None);
+        assert_eq!(out, cat(&[&S, &[0x09, 0x30]]));
+    }
+
+    /// The byte-by-byte scan `split` had before it used memchr.
+    fn split_reference(bytes: &[u8]) -> Vec<&[u8]> {
+        let mut nals = Vec::new();
+        let mut i = 0;
+        loop {
+            let start = loop {
+                if i + 3 > bytes.len() {
+                    return nals;
+                }
+                if bytes[i] == 0 && bytes[i + 1] == 0 && bytes[i + 2] == 1 {
+                    break i + 3;
+                }
+                i += 1;
+            };
+            let mut j = start;
+            let end = loop {
+                if j + 3 > bytes.len() {
+                    break bytes.len();
+                }
+                if bytes[j] == 0 && bytes[j + 1] == 0 && bytes[j + 2] == 1 {
+                    break if bytes[j - 1] == 0 { j - 1 } else { j };
+                }
+                j += 1;
+            };
+            i = j;
+            nals.push(&bytes[start..end]);
+        }
+    }
+
+    #[test]
+    fn split_matches_the_byte_by_byte_scan() {
+        // Bytes from {0, 1, 2, 0xAB}, zeros most likely: start codes, runs
+        // of zeros and near misses everywhere.
+        let mut x = 0x2545_F491_4F6C_DD1Du64;
+        for len in 0..400 {
+            let bytes: Vec<u8> = (0..len)
+                .map(|_| {
+                    x ^= x << 13;
+                    x ^= x >> 7;
+                    x ^= x << 17;
+                    [0, 0, 0, 1, 2, 0xAB][(x % 6) as usize]
+                })
+                .collect();
+            assert_eq!(split(&bytes).collect::<Vec<_>>(), split_reference(&bytes));
+        }
     }
 
     #[test]

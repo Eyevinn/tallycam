@@ -1585,6 +1585,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tallycam-core",
+ "tallycam-hub",
  "tokio",
  "tracing",
 ]

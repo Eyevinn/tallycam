@@ -379,18 +379,37 @@ async fn control_ws(
         .into_response()
 }
 
-/// No `Origin` (not a browser), or one whose host is the request's `Host`.
-fn same_origin(headers: &HeaderMap) -> bool {
+/// May this WebSocket upgrade drive the cameras? Yes without an `Origin`
+/// (not a browser), or with one whose host is the request's `Host` or, behind
+/// a proxy that rewrites `Host`, its `X-Forwarded-Host`. Browsers send no
+/// CORS check for WebSockets, so a page on another site (or another port of
+/// the same host, where cookies still go) would otherwise reach the hub
+/// through the operator's browser. An embedding server applies it to its
+/// own controller route.
+pub fn same_origin(headers: &HeaderMap) -> bool {
     let Some(origin) = headers.get(header::ORIGIN) else {
         return true;
     };
-    let host = headers.get(header::HOST).and_then(|h| h.to_str().ok());
-    let origin_host = origin
+    let Some(origin_host) = origin
         .to_str()
         .ok()
         .and_then(|o| o.split_once("://"))
-        .map(|(_, rest)| rest.trim_end_matches('/'));
-    matches!((origin_host, host), (Some(o), Some(h)) if o.eq_ignore_ascii_case(h))
+        .map(|(_, rest)| rest.trim_end_matches('/'))
+    else {
+        return false;
+    };
+    let forwarded = headers
+        .get_all("x-forwarded-host")
+        .iter()
+        .filter_map(|h| h.to_str().ok())
+        .flat_map(|h| h.split(','))
+        .map(str::trim);
+    headers
+        .get(header::HOST)
+        .and_then(|h| h.to_str().ok())
+        .into_iter()
+        .chain(forwarded)
+        .any(|h| h.eq_ignore_ascii_case(origin_host))
 }
 
 /// Runs one phone connection until it closes or goes silent, with no invite
@@ -753,6 +772,15 @@ mod tests {
         assert!(same_origin(&headers(&[
             host.clone(),
             (header::ORIGIN, "http://HUB.local:8090")
+        ])));
+        // Behind a proxy that rewrites Host.
+        assert!(same_origin(&headers(&[
+            (header::HOST, "127.0.0.1:8090"),
+            (
+                header::HeaderName::from_static("x-forwarded-host"),
+                "hub.example.com"
+            ),
+            (header::ORIGIN, "https://hub.example.com")
         ])));
         for other in ["http://evil.example", "http://hub.local:8091", "null"] {
             assert!(

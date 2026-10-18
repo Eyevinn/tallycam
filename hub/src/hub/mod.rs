@@ -378,10 +378,6 @@ impl Hub {
         self.next_conn.fetch_add(1, Ordering::Relaxed)
     }
 
-    pub fn controller_count(&self) -> usize {
-        self.lock().controllers
-    }
-
     /// Everything the hub knows, in display order (what `snapshot` carries).
     pub fn devices(&self) -> Vec<DeviceSnapshot> {
         let inner = self.lock();
@@ -417,6 +413,9 @@ impl Hub {
         if inner.forgets(&hello.device.id) != admission.forgets {
             return Err(AdmitError::NoInvite);
         }
+        // Again under this lock: other new devices may have joined since
+        // `admit`.
+        inner.check_room(&hello.device.id)?;
         self.hello_locked(
             &mut inner,
             conn,
@@ -544,14 +543,16 @@ impl Hub {
         let event = match msg {
             DeviceMessage::Hello(_) => return, // handled by device_hello
             DeviceMessage::State { values } => {
-                for (k, v) in &values {
-                    if entry.state.len() < MAX_STATE_KEYS || entry.state.contains_key(k) {
+                let mut kept = Values::new();
+                for (k, v) in values {
+                    if entry.state.len() < MAX_STATE_KEYS || entry.state.contains_key(&k) {
                         entry.state.insert(k.clone(), v.clone());
+                        kept.insert(k, v);
                     }
                 }
                 ControllerEvent::DeviceState {
                     device,
-                    values: redact::for_controllers(&values),
+                    values: redact::for_controllers(&kept),
                 }
             }
             DeviceMessage::Status(status) => {
@@ -693,8 +694,13 @@ impl Hub {
         if entry.tally == state {
             return;
         }
+        // A phone whose queue is full keeps its old tally here too, so the
+        // next tally request sends it again (only changes are sent). An
+        // offline phone gets it when it joins.
+        if !entry.send(ServerToDevice::Tally { state }) && entry.conn.is_some() {
+            return;
+        }
         entry.tally = state;
-        entry.send(ServerToDevice::Tally { state });
         self.emit(ControllerEvent::DeviceTally {
             device: device.to_string(),
             state,

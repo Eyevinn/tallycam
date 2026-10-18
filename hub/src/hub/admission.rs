@@ -238,7 +238,7 @@ pub struct Admission {
 
 impl Inner {
     /// Is there room for `id` in the device list?
-    fn check_room(&self, id: &str) -> Result<(), AdmitError> {
+    pub(super) fn check_room(&self, id: &str) -> Result<(), AdmitError> {
         if self.devices.len() >= MAX_DEVICES && !self.devices.contains_key(id) {
             warn!("Device {id} refused: {MAX_DEVICES} devices listed");
             return Err(AdmitError::TooManyDevices);

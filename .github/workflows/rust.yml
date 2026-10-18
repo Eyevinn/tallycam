@@ -1,0 +1,31 @@
+name: Rust
+
+on:
+  push:
+    branches: [main]
+    paths: ["core/**", "hub/**", "control-hub/**", "tools/**", "Cargo.toml", "Cargo.lock", ".github/workflows/rust.yml"]
+  pull_request:
+    paths: ["core/**", "hub/**", "control-hub/**", "tools/**", "Cargo.toml", "Cargo.lock", ".github/workflows/rust.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+            control-hub/target
+          key: rust-${{ hashFiles('Cargo.lock', 'control-hub/Cargo.lock') }}
+      # The workspace: core, SRT, FFI, the hub library with its routes.
+      - name: Workspace
+        run: cargo test --workspace --locked
+      # The standalone hub (its own lock file): end-to-end over WebSockets.
+      - name: control-hub
+        run: cargo test --manifest-path control-hub/Cargo.toml --locked

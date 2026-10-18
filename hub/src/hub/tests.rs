@@ -1043,3 +1043,45 @@ fn the_device_list_and_each_state_are_bounded() {
     hub.device_message(conn, "cam1", DeviceMessage::State { values });
     assert_eq!(hub.device_state("cam1").len(), MAX_STATE_KEYS);
 }
+
+#[test]
+fn a_tally_that_did_not_fit_the_queue_is_sent_again() {
+    let hub = Hub::new();
+    let (tx, mut phone) = mpsc::channel(1);
+    join(&hub, hub.new_connection_id(), hello("cam1", "Cam 1"), tx);
+    // The join filled the one slot; the phone has not read it.
+    let program = serde_json::json!({ "type": "tally", "device": "cam1", "state": "program" });
+    controller(&hub, program.clone()).unwrap();
+    assert_eq!(
+        hub.devices()[0].tally,
+        TallyState::Off,
+        "not delivered, not recorded"
+    );
+
+    while phone.try_recv().is_ok() {}
+    controller(&hub, program).unwrap();
+    assert!(matches!(
+        phone.try_recv(),
+        Ok(ServerToDevice::Tally {
+            state: TallyState::Program
+        })
+    ));
+    assert_eq!(hub.devices()[0].tally, TallyState::Program);
+}
+
+#[test]
+fn a_state_event_carries_only_the_kept_values() {
+    let hub = Hub::new();
+    let _phone = connect_phone(&hub, "cam1");
+    let conn = CONNS.with(|c| c.borrow()["cam1"]);
+    let mut events = hub.subscribe();
+    let values: Values = (0..MAX_STATE_KEYS + 10)
+        .map(|i| (format!("k{i:04}"), Value::from(i)))
+        .collect();
+    hub.device_message(conn, "cam1", DeviceMessage::State { values });
+    let frame = events.try_recv().unwrap();
+    let ControllerEvent::DeviceState { values, .. } = &*frame.event else {
+        panic!("expected the state event")
+    };
+    assert_eq!(values.len(), MAX_STATE_KEYS);
+}

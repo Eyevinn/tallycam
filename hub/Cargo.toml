@@ -32,3 +32,6 @@ futures-util = { version = "0.3", default-features = false, features = ["sink", 
 
 [dev-dependencies]
 tokio = { version = "1", features = ["sync", "time", "macros", "rt"] }
+# Itself with the routes, so `cargo test` at the workspace root also builds
+# and tests server.rs (no workspace member enables the feature otherwise).
+tallycam-hub = { path = ".", features = ["server"] }

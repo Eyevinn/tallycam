@@ -166,7 +166,7 @@ trusts a claimed device id alone. Code is the source of truth
 
 ```
 phone                                   server
-  │ hello {protocol: 1, device: {id, ...}, public_key, controls, commands}
+  │ hello {protocol: 2, device: {id, ...}, public_key, controls, commands}
   │ ◀─ challenge {server, nonce}
   │ auth {signature}
   │ ◀─ tally, preview          (admitted: the normal flow)
@@ -190,7 +190,9 @@ phone                                   server
   `tally` and `preview` at once); with no `challenge` within 3 s of its
   `hello` it assumes a server without device keys and goes on. Until
   admission the server ignores everything but a newer `hello` (same id and
-  key) and `auth`. No `auth` within 10 s closes the socket.
+  key) and `auth`. No `auth` within 10 s closes the socket, and so does no
+  admission within 20 s of the socket opening (pings do not extend it) or a
+  first message that is not valid JSON.
 - After admission a `hello` may be resent (new name, new controls), with the
   same key: a key is bound only through a challenge, and a resent `hello`
   with another key closes the connection.
@@ -227,7 +229,7 @@ phone                                   server
 ```json
 {
   "type": "hello",
-  "protocol": 1,
+  "protocol": 2,
   "public_key": "BLxFB1xZ...base64 SEC1 P-256...",
   "device": {
     "id": "cbdd2da5173c382db5e77591b8f19052",
@@ -242,7 +244,8 @@ phone                                   server
 }
 ```
 
-`public_key` and `protocol: 1` come from apps with device keys; the id is
+`public_key` comes from apps with device keys (`protocol` 1 and up; 2 adds
+production and image statistics, see docs/SHADING.md); the id is
 then derived from the key (see "Device keys"). `device.name` is the camera's
 display name; the id stays its identity. The iOS app sends the name set with
 `camera_name`, or by default the model and the start of the id
@@ -413,7 +416,7 @@ D13). Earlier protocol 2 builds had ownership (`own`, `release`,
   `white_balance`, `focus`, `image`, `audio`.
 - `enabled_when`: the control is only writable when the other controls have
   these values; a list means any of them (`{"exposure_mode": ["manual",
-  "auto_iso"]}`). The UI greys it out otherwise, but still shows its value.
+  "locked"]}`). The UI greys it out otherwise, but still shows its value.
 - `readonly: true`: shown, never set.
 - `locked_while_live: true`: refused while the stream is live (format and
   codecs).
@@ -445,9 +448,9 @@ D13). Earlier protocol 2 builds had ownership (`own`, `release`,
 | `exposure_mode` | enum | `auto`, `locked`, `manual`. `auto`: the core's auto ISO loop at the production shutter (iOS auto exposure moves the shutter and the frame duration, which genlock owns); under a free shutter the loop shortens the shutter once the ISO is at its minimum. `manual` sets the ISO (and the shutter under a free shutter). `auto_iso` is accepted as `auto` |
 | `iso` | range | manual only |
 | `shutter` | enum | denominator of 1/x seconds, e.g. 50 = 1/50 s. A production setting (`production.shutter`, SHADING.md): `readonly` unless the shutter is free (policy `free`, or `mains` with mains 0), then writable in manual; auto ISO then holds a 180° shutter (half the frame period, 1/60 at 30 fps) and shortens it only at the lowest ISO. A shutter longer than the frame becomes the longest flicker-free one that fits |
-| `ev_bias` | range | exposure compensation in EV, auto and auto_iso |
-| `mains_hz` | enum | `readonly` while a server's `production` applies (which overrides the phone's own setting without overwriting it; forgetting the server returns to it); refused while live. 50, 60, or 0 (off: no mains-lit light in the picture, for example outdoors, so the shutter is free); default from the device region, persisted in the phone's Settings. In auto_iso (and when genlock moves exposure to auto_iso) the shutter is rounded to a whole number of half mains periods that fits the frame (2% room while genlock runs); the ISO compensates. No flicker-free shutter fits above 100 fps at 50 Hz or 120 fps at 60 Hz, and the shutter is then left alone |
-| `genlock` | bool | soft genlock: the frame timing locks to the TAI frame grid (docs/GENLOCK.md). Moves auto exposure to auto_iso; status in `status.genlock` |
+| `ev_bias` | range | exposure compensation in EV, in `auto` |
+| `mains_hz` | enum | `readonly` while a server's `production` applies (which overrides the phone's own setting without overwriting it; forgetting the server returns to it); refused while live. 50, 60, or 0 (off: no mains-lit light in the picture, for example outdoors, so the shutter is free); default from the device region, persisted in the phone's Settings. In `auto` the shutter is rounded to a whole number of half mains periods that fits the frame (2% room while genlock runs); the ISO compensates. No flicker-free shutter fits above 100 fps at 50 Hz or 120 fps at 60 Hz, and the shutter is then left alone |
+| `genlock` | bool | soft genlock: the frame timing locks to the TAI frame grid (docs/GENLOCK.md). Status in `status.genlock` |
 | `genlock_offset_us` | range | where frames land after each grid point, µs (per-model calibration, or measurement sweeps); -50000 to 50000 |
 | `wb_mode` | enum | `auto`, `locked`, `manual` |
 | `wb_temperature` | range | Kelvin, manual only |

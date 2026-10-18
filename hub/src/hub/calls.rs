@@ -66,6 +66,8 @@ impl Hub {
 
     /// Set control values on a phone and wait for its `result`. `Ok` carries
     /// the phone's result (`ok: true`); a refusal is [`CallError::Failed`].
+    /// A phone whose send queue is full (it stopped reading) counts as
+    /// [`CallError::Disconnected`]: its connection is about to close.
     pub async fn set(
         &self,
         device: &str,

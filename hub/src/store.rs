@@ -45,7 +45,9 @@ pub trait DeviceStore: Send + Sync {
     /// again after a restart.
     fn remove(&self, _id: &str) {}
     /// The production settings kept by `save_production`, if any. The
-    /// default keeps none.
+    /// default keeps none: a store that persists should implement both, or
+    /// the production is back to [`crate::hub::default_production`] after a
+    /// restart.
     fn load_production(&self) -> Option<Production> {
         None
     }

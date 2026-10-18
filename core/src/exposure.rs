@@ -281,10 +281,6 @@ impl AutoIso {
         self.free_base_ns = base_ns.filter(|b| b.is_finite() && *b > 0.0);
     }
 
-    pub fn free_shutter(&self) -> Option<f64> {
-        self.free_base_ns
-    }
-
     /// Starts over (auto ISO turned on, or the device changed). Keeps the
     /// learned gain and the bias.
     pub fn reset(&mut self) {

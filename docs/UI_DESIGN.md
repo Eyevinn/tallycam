@@ -65,7 +65,12 @@ images of each other. Tools and the live button: see 6.
    bitrate, yellow while adaptive bitrate holds it down). Centre: the tally
    chip, the camera name in red with "ON AIR", green with "PREVIEW", dark when
    off. Right: hub link dot, clock dot, battery; thermal state when it
-   matters, an orientation-pending icon, the Settings gear.
+   matters, an orientation-pending icon, the Settings gear. Next to the dots
+   a time-of-day timecode, `14:51:46:12` (hours, minutes, seconds, frames at
+   the stream rate), from the phone's disciplined clock in local time, in
+   tabular digits: white while the clock is healthy, orange when degraded,
+   dim with `--` frames when it is not synchronised. The same timecode on
+   every camera, so two phones in shot can be compared at a glance.
 2. **Values row.** `format │ ISO │ shutter │ EV │ WB │ focus`, each a button
    (see "Values").
 3. **Message slot.** Centred under the values row: the yellow banner (8 s)

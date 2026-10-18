@@ -104,6 +104,8 @@ struct ControlDescriptor: Encodable, Equatable {
     var enabledWhen: [String: JSONValue]?
     /// Shown, never set (the shutter outside a free-shutter production).
     var readonly: Bool?
+    /// Why it is read-only, for the UI (`readonly_reason`).
+    var readonlyReason: String?
     /// Refused while the stream is live (format and codecs).
     var lockedWhileLive: Bool?
 
@@ -139,9 +141,11 @@ extension ControlDescriptor {
         return copy
     }
 
-    func readonly(_ readonly: Bool) -> ControlDescriptor {
+    /// This descriptor, read-only for `reason`; nil leaves it settable.
+    func readonly(because reason: String?) -> ControlDescriptor {
         var copy = self
-        copy.readonly = readonly ? true : nil
+        copy.readonly = reason == nil ? nil : true
+        copy.readonlyReason = reason
         return copy
     }
 }

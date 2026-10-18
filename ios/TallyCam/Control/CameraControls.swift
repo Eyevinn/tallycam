@@ -545,13 +545,24 @@ final class CameraControls: @unchecked Sendable {
             control.kind(self).map {
                 ControlDescriptor(id: control.id, label: control.label, group: control.group,
                                   kind: $0, enabledWhen: control.enabledWhen)
-                    // The ISO too on a camera without custom exposure: its
-                    // manual is a lock at the values auto had.
-                    .readonly(control.id == "shutter" && effectiveShutter != .free
-                        || control.id == "iso" && device?.isExposureModeSupported(.custom) == false)
+                    .readonly(because: readonlyReason(control.id))
                     .lockedWhileLive(control.id == "resolution" || control.id == "frame_rate"
                         || control.id == "mains_hz")
             }
+        }
+    }
+
+    /// Why a control is shown but not set, if it is (`readonly_reason`).
+    private func readonlyReason(_ id: String) -> String? {
+        switch id {
+        case "shutter" where effectiveShutter != .free:
+            // The production's (docs/SHADING.md, "Shutter").
+            "set by the production"
+        case "iso" where device?.isExposureModeSupported(.custom) == false:
+            // Manual on such a camera is a lock at the values auto had.
+            "no manual exposure on this camera"
+        default:
+            nil
         }
     }
 

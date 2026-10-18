@@ -52,9 +52,29 @@ struct AdjustControl<Selector: View>: View {
         } value: {
             valueLabel
         } rowSwitch: {
-            tintSwitch
+            if let readonlyReason {
+                // Why the rocker takes no touches, in the K / Tint row.
+                Text(readonlyReason)
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.white)
+                    .shadow(color: .black.opacity(0.5), radius: 2)
+                    .lineLimit(2)
+                    .multilineTextAlignment(side == .left ? .leading : .trailing)
+                    .frame(width: SideMetrics.blockWidth, alignment: side == .left ? .leading : .trailing)
+            } else {
+                tintSwitch
+            }
         }
         .onDisappear { stopRamp() }
+    }
+
+    /// The control the rocker moves is shown but not set (`readonly_reason`):
+    /// the ISO on a camera without manual exposure.
+    private var readonlyReason: String? {
+        guard let ramped, let descriptor = shading.descriptor(ramped.id), descriptor.readonly == true else {
+            return nil
+        }
+        return descriptor.readonlyReason ?? "set elsewhere"
     }
 
     private var rocker: some View {
@@ -69,6 +89,10 @@ struct AdjustControl<Selector: View>: View {
             }
         }
         .accessibilityValue(valueText)
+        .accessibilityHint(readonlyReason ?? "")
+        // Dimmed and still where it cannot set anything.
+        .opacity(readonlyReason == nil ? 1 : 0.4)
+        .allowsHitTesting(readonlyReason == nil)
     }
 
     /// K or Tint for colour's rocker, where the camera has a tint.

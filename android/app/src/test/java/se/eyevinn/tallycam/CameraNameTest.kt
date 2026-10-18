@@ -25,8 +25,8 @@ class CameraNameTest {
 
     @Test
     fun provisioningLink() {
-        val link = ProvisioningLink.from("ws://192.0.2.5:8090/lcp/v0/device", "srt://192.0.2.5:9000?streamid={device}")!!
-        assertEquals("srt://192.0.2.5:9000?streamid=cam-55dd2703",
+        val link = ProvisioningLink.from("ws://192.168.0.5:8090/lcp/v0/device", "srt://192.168.0.5:9000?streamid={device}")!!
+        assertEquals("srt://192.168.0.5:9000?streamid=cam-55dd2703",
                      ProvisioningLink.resolveSrtUrl(link.srtUrl!!, "55DD2703abcdef"))
         assertNull(ProvisioningLink.from("http://x", null))
         assertNull(ProvisioningLink.from("ws://x", "rtmp://y"))

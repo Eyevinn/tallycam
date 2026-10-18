@@ -17,6 +17,9 @@ import java.util.concurrent.TimeUnit
  * keeps the link alive with WebSocket pings. Callbacks run on the main
  * thread.
  */
+/** Longest message accepted from the hub, characters; the largest real ones (a clock log) are well under. */
+private const val MAX_INCOMING_CHARS = 1 shl 20
+
 /** Bytes queued on the socket above which [LcpClient.sendDroppable] drops (about 4 previews). */
 private const val DROPPABLE_QUEUE_BYTES = 256L * 1024
 
@@ -103,7 +106,18 @@ class LcpClient(private val listener: Listener) {
                 listener.onOpen()
             }.let { }
 
-            override fun onMessage(webSocket: WebSocket, text: String) = main.post {
+            override fun onMessage(webSocket: WebSocket, text: String) {
+                // A hub (or a man in the middle) could run the phone out of
+                // memory with one huge frame: close rather than parse it.
+                if (text.length > MAX_INCOMING_CHARS) {
+                    Log.w("LcpClient", "Message of ${text.length} characters, closing")
+                    webSocket.close(1009, "message too big")
+                    return
+                }
+                deliver(text)
+            }
+
+            private fun deliver(text: String) = main.post {
                 if (gen == generation) {
                     runCatching { JSONObject(text) }.getOrNull()?.let(listener::onMessage)
                 }

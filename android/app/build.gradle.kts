@@ -25,7 +25,8 @@ android {
 
     // Release signing from android/keystore.properties (not in git):
     // storeFile, storePassword, keyAlias, keyPassword. Without it a release
-    // build is signed with the debug key, for local testing only.
+    // build is unsigned, or with -PallowDebugSigning signed with the debug
+    // key, for local testing only.
     val keystore = rootProject.file("keystore.properties").takeIf { it.exists() }?.let { file ->
         Properties().apply { file.inputStream().use { load(it) } }
     }
@@ -44,7 +45,12 @@ android {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
+            // Never a silent debug key on a release: whoever holds that
+            // keystore could ship updates to it. -PallowDebugSigning for a
+            // local release build.
+            signingConfig = signingConfigs.findByName("release")
+                ?: if (project.hasProperty("allowDebugSigning")) signingConfigs.getByName("debug")
+                else null
         }
     }
     buildFeatures {

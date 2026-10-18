@@ -64,8 +64,9 @@ clock is `CLOCK_BOOTTIME`, the clock of Camera2 and AudioRecord timestamps.
 On the emulator the hub is `10.0.2.2`; provision with
 `adb shell am start -a android.intent.action.VIEW -d 'tallycam://connect?control=ws%3A%2F%2F10.0.2.2%3A8090%2Flcp%2Fv0%2Fdevice&srt=srt%3A%2F%2F10.0.2.2%3A9000%3Fstreamid%3D%7Bdevice%7D'`.
 
-Measure latency with a release build (`assembleRelease`, signed with the
-debug key unless `android/keystore.properties` names a release key): a
+Measure latency with a release build (`assembleRelease -PallowDebugSigning`,
+signed with the debug key unless `android/keystore.properties` names a
+release key; without either the release APK is left unsigned): a
 debuggable build runs the app's code with little JIT and queues about a
 second of video. On the emulator a release build sends video about 160 ms
 after capture (p50, 720p, software encoder), audio about 150 ms. Without a

@@ -117,7 +117,8 @@ impl Hub {
     }
 
     /// New production settings: sent to every connected protocol 2 camera
-    /// and to every controller (`production`), and kept in the store.
+    /// that has none of its own ([`Self::set_device_production`]) and to
+    /// every controller (`production`), and kept in the store.
     /// Accepted any time: a camera that is live keeps its current settings
     /// and applies these when its stream stops. `mains_hz` is 50, 60 or 0
     /// (no mains-lit light).
@@ -140,10 +141,62 @@ impl Hub {
         );
         inner.production = production.clone();
         self.store.save_production(&production);
-        for entry in inner.devices.values().filter(|e| e.shading()) {
+        for entry in inner
+            .devices
+            .values()
+            .filter(|e| e.shading() && e.production.is_none())
+        {
             entry.send(ServerToDevice::Production(production.clone()));
         }
         self.emit(ControllerEvent::Production(production));
+        Ok(())
+    }
+
+    /// The production settings `device` gets: its own, else the hub's. None
+    /// for an unknown device.
+    pub fn device_production(&self, device: &str) -> Option<Production> {
+        let inner = self.lock();
+        let entry = inner.devices.get(device)?;
+        Some(
+            entry
+                .production
+                .clone()
+                .unwrap_or_else(|| inner.production.clone()),
+        )
+    }
+
+    /// Give one camera its own production settings (an embedding server's
+    /// flow, docs/SHADING.md D6), or with `None` the hub's again. Sent to the
+    /// camera when what it gets changes; controllers get
+    /// `device_production`. Not kept across a restart: the server sets it
+    /// again when the flow starts.
+    pub fn set_device_production(
+        &self,
+        device: &str,
+        production: Option<Production>,
+    ) -> Result<(), String> {
+        if let Some(p) = &production {
+            check_production(p)?;
+        }
+        let mut guard = self.lock();
+        let inner = &mut *guard;
+        let Some(entry) = inner.devices.get_mut(device) else {
+            return Err(format!("unknown device '{device}'"));
+        };
+        if entry.production == production {
+            return Ok(());
+        }
+        let hub = &inner.production;
+        let before = entry.production.clone().unwrap_or_else(|| hub.clone());
+        entry.production = production.clone();
+        let after = entry.production.clone().unwrap_or_else(|| hub.clone());
+        if after != before && entry.shading() {
+            entry.send(ServerToDevice::Production(after));
+        }
+        self.emit(ControllerEvent::DeviceProduction {
+            device: device.to_string(),
+            production,
+        });
         Ok(())
     }
 }

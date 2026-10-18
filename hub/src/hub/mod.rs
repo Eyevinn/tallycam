@@ -121,6 +121,9 @@ struct DeviceEntry {
     commands: Vec<CommandDescriptor>,
     state: Values,
     status: Option<Status>,
+    /// This camera's own production ([`Hub::set_device_production`]); None:
+    /// the hub's. Not stored: the embedding server sets it per flow.
+    production: Option<Production>,
     preview: Option<Preview>,
     tally: TallyState,
     /// `hello.protocol`; 2 and up know production and stats.
@@ -146,6 +149,7 @@ impl DeviceEntry {
             commands: Vec::new(),
             state: Values::new(),
             status: None,
+            production: None,
             preview: None,
             tally: TallyState::Off,
             protocol: 0,
@@ -176,6 +180,7 @@ impl DeviceEntry {
             key_fingerprint: self.key_fingerprint(),
             tags: self.tags.clone(),
             last_seen_s: self.last_seen_s,
+            production: self.production.clone(),
         }
     }
 
@@ -302,6 +307,9 @@ pub struct Hub {
     next_conn: AtomicU64,
     next_call: AtomicU64,
     store: Arc<dyn DeviceStore>,
+    /// Phone sockets open on this hub and not yet admitted (`server.rs`):
+    /// per hub, so one hub's flood does not shut out another's phones.
+    pub(crate) unadmitted: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl Default for Hub {
@@ -382,6 +390,7 @@ impl Hub {
             next_conn: AtomicU64::new(1),
             next_call: AtomicU64::new(1),
             store,
+            unadmitted: Arc::default(),
         }
     }
 
@@ -557,6 +566,7 @@ impl Hub {
             entry.send(ServerToDevice::Tally { state: entry.tally });
             entry.send(entry.preview_command(watched));
             if entry.shading() {
+                let production = entry.production.clone().unwrap_or(production);
                 entry.send(ServerToDevice::Production(production));
                 entry.send_stats(controllers);
             }

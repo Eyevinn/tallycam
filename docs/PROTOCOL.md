@@ -728,7 +728,11 @@ bitstream parser. Byte vectors for both codecs are in
   key; `device_removed` says a device was forgotten; `device_tags`, `order`
   and the `tags` and `last_seen_s` of snapshot entries come with `tags`,
   `arrange` and `watch` (see "Server side (control hub)"). A controller's
-  `production` is accepted any time and kept across restarts; a `holder`
+  `production` is accepted any time and kept across restarts. An embedding
+  server can give one camera its own production (its flow's, SHADING.md
+  D6): the snapshot entry then carries `production`, and
+  `{"type":"device_production","device":"id","production":{...}|null}`
+  says it changed (null: the hub's again). A `holder`
   field from an older controller is ignored (SHADING.md, "Controller ↔
   hub").
 

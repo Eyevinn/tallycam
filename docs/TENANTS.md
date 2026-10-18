@@ -146,7 +146,8 @@ What the TallyCam hub library needs:
 ## Phases
 
 1. **Hub library:** no statics; per-camera production. Small, and it helps
-   single-tenant setups too (D6).
+   single-tenant setups too (D6). **Done** (the unadmitted cap is per hub;
+   `Hub::set_device_production`).
 2. **Strom auth:** tenant keys, `Tenant` on every request, `tenant_id` on
    flows, a scoped port pool, scoped events, namespaced OSC PATs.
 3. **Strom cameras:** a hub per tenant, a device path per tenant, a store per

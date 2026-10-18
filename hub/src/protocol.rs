@@ -162,6 +162,11 @@ pub struct DeviceSnapshot {
     /// absent for a device never seen since this was kept.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_seen_s: Option<u64>,
+    /// This camera's own production settings, when the embedding server set
+    /// them ([`crate::Hub::set_device_production`], e.g. its flow's); absent:
+    /// the hub's `production`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub production: Option<Production>,
 }
 
 /// Hub -> controller. Device messages are forwarded as `device_<type>` with
@@ -215,6 +220,12 @@ pub enum ControllerEvent {
         device: String,
         #[serde(flatten)]
         log: Log,
+    },
+    /// A camera got its own production settings, or (`production` null)
+    /// follows the hub's again.
+    DeviceProduction {
+        device: String,
+        production: Option<Production>,
     },
     /// The device's `image_stats`, forwarded.
     DeviceImageStats {

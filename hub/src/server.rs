@@ -41,8 +41,8 @@ pub const AUTH_TIMEOUT: Duration = Duration::from_secs(10);
 /// A phone socket must be admitted within this of opening, whatever it
 /// sends meanwhile (pings do not extend it).
 pub const ADMIT_TIMEOUT: Duration = Duration::from_secs(20);
-/// Phone sockets not yet admitted, at most, across the process; more are
-/// closed at once.
+/// Phone sockets not yet admitted, at most, per hub; more are closed at
+/// once. An embedding server with several hubs caps the total itself.
 pub const MAX_UNADMITTED: usize = 64;
 /// Longest WebSocket message or frame accepted from a phone or a controller
 /// (axum's default is 64 MiB). An embedding server that upgrades sockets
@@ -53,23 +53,22 @@ pub const MAX_DEVICE_ID_BYTES: usize = 256;
 /// Bad text frames logged per admitted phone socket; the rest at debug.
 const BAD_FRAMES_LOGGED: u32 = 3;
 
-/// Phone sockets open and not yet admitted.
-static UNADMITTED: AtomicUsize = AtomicUsize::new(0);
-
-/// Counts one socket in [`UNADMITTED`] until admitted or dropped.
-struct Unadmitted(bool);
+/// Counts one socket in its hub's unadmitted sockets until admitted or
+/// dropped.
+struct Unadmitted(Option<Arc<AtomicUsize>>);
 
 impl Unadmitted {
-    /// `None` when [`MAX_UNADMITTED`] sockets are already waiting.
-    fn take() -> Option<Self> {
-        let before = UNADMITTED.fetch_add(1, Ordering::Relaxed);
-        let slot = Self(true);
+    /// `None` when [`MAX_UNADMITTED`] sockets already wait on `hub`.
+    fn take(hub: &Hub) -> Option<Self> {
+        let count = hub.unadmitted.clone();
+        let before = count.fetch_add(1, Ordering::Relaxed);
+        let slot = Self(Some(count));
         (before < MAX_UNADMITTED).then_some(slot)
     }
 
     fn admitted(&mut self) {
-        if std::mem::take(&mut self.0) {
-            UNADMITTED.fetch_sub(1, Ordering::Relaxed);
+        if let Some(count) = self.0.take() {
+            count.fetch_sub(1, Ordering::Relaxed);
         }
     }
 }
@@ -452,7 +451,7 @@ pub async fn device_session_for(socket: WebSocket, hub: Arc<Hub>, connection: De
     let DeviceConnection { addr, token, host } = connection;
     let conn = hub.new_connection_id();
     debug!("Device socket {conn} opened from {addr}");
-    let Some(mut unadmitted) = Unadmitted::take() else {
+    let Some(mut unadmitted) = Unadmitted::take(&hub) else {
         debug!("Device socket {conn} from {addr}: {MAX_UNADMITTED} sockets waiting for admission, closing");
         return;
     };
@@ -782,7 +781,10 @@ mod tests {
             h
         };
         let host = (header::HOST, "hub.local:8090");
-        assert!(same_origin(&headers(&[host.clone()])), "not a browser");
+        assert!(
+            same_origin(&headers(std::slice::from_ref(&host))),
+            "not a browser"
+        );
         assert!(same_origin(&headers(&[
             host.clone(),
             (header::ORIGIN, "http://HUB.local:8090")

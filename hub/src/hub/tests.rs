@@ -1431,3 +1431,62 @@ fn last_seen_is_set_on_hello_and_offline() {
     );
     assert_eq!(hub.devices()[0].last_seen_s, *last_seen_s);
 }
+
+#[test]
+fn a_camera_can_have_its_own_production() {
+    let hub = Hub::new();
+    let mut a = connect_phone(&hub, "a");
+    let mut b = connect_phone(&hub, "b");
+    let sixty = Production {
+        mains_hz: 60,
+        shutter: ShutterPolicy::Free,
+        extra: Map::new(),
+    };
+    let productions = |rx: &mut mpsc::Receiver<ServerToDevice>| {
+        let mut out = Vec::new();
+        while let Ok(msg) = rx.try_recv() {
+            if let ServerToDevice::Production(p) = msg {
+                out.push(p);
+            }
+        }
+        out
+    };
+
+    hub.set_device_production("a", Some(sixty.clone())).unwrap();
+    assert_eq!(productions(&mut a), vec![sixty.clone()]);
+    assert!(productions(&mut b).is_empty());
+    assert_eq!(hub.device_production("a"), Some(sixty.clone()));
+    assert_eq!(hub.devices()[0].production, Some(sixty.clone()));
+
+    // The hub's production reaches only cameras without their own.
+    let off = Production {
+        mains_hz: 0,
+        ..default_production()
+    };
+    hub.set_production(off.clone()).unwrap();
+    assert!(productions(&mut a).is_empty());
+    assert_eq!(productions(&mut b), vec![off.clone()]);
+
+    // Back to the hub's, and a reconnect gets what applies.
+    hub.set_device_production("a", None).unwrap();
+    assert_eq!(productions(&mut a), vec![off.clone()]);
+    hub.set_device_production("b", Some(sixty.clone())).unwrap();
+    let mut b = connect_phone_keeping(&hub, "b");
+    assert_eq!(productions(&mut b), vec![sixty]);
+
+    assert!(hub.set_device_production("nobody", None).is_err());
+    let bad = Production {
+        mains_hz: 55,
+        ..default_production()
+    };
+    assert!(hub.set_device_production("a", Some(bad)).is_err());
+}
+
+/// Like [`connect_phone`], but returns what the join sent.
+fn connect_phone_keeping(hub: &Hub, id: &str) -> mpsc::Receiver<ServerToDevice> {
+    let (tx, rx) = mpsc::channel(DEVICE_QUEUE);
+    let conn = hub.new_connection_id();
+    join(hub, conn, hello(id, id), tx);
+    CONNS.with(|c| c.borrow_mut().insert(id.to_string(), conn));
+    rx
+}

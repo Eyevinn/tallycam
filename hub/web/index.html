@@ -907,9 +907,11 @@ function cameraTags(d) {
 // This camera's mains when it differs from the production, or null.
 function mainsNote(d) {
   const hz = d.state.mains_hz;
-  if (typeof hz !== "number" || !production || Number(production.mains_hz) === hz) return null;
+  // A camera's own production (its flow's, set by the embedding server).
+  const p = d.production || production;
+  if (typeof hz !== "number" || !p || Number(p.mains_hz) === hz) return null;
   const own = hz === 0 ? "Mains off" : "Mains " + hz + " Hz";
-  const prod = Number(production.mains_hz) === 0 ? "off" : production.mains_hz + " Hz";
+  const prod = Number(p.mains_hz) === 0 ? "off" : p.mains_hz + " Hz";
   const why = (d.protocol || 0) < SHADE_PROTOCOL
     ? "This older app takes no production settings."
     : "Set for this camera (on the phone or here); the production applies again when it changes" +
@@ -1626,6 +1628,7 @@ function applySnapshotDevice(s) {
   d.imageStats = (s.online && s.image_stats) || null;
   d.tags = Array.isArray(s.tags) ? s.tags : [];
   d.lastSeen = typeof s.last_seen_s === "number" ? s.last_seen_s : null;
+  d.production = s.production || null;
 }
 
 // "3f2a 9c1d 7b0e 44a1": the start of the key fingerprint, to compare with
@@ -1753,6 +1756,13 @@ function onMessage(m) {
       return;
     case "device_removed":
       removeDevice(m.device);
+      return;
+    case "device_production":
+      if (!d) return;
+      d.production = m.production || null;
+      updateCard(d);
+      if (selected === d.id) updatePanel();
+      updateShadeCard(d);
       return;
     case "device_tags":
       if (!d) return;

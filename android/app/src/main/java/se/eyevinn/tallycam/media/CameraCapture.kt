@@ -14,8 +14,10 @@ import android.hardware.camera2.CameraMetadata
 import android.hardware.camera2.CaptureRequest
 import android.hardware.camera2.CaptureResult
 import android.hardware.camera2.TotalCaptureResult
+import android.hardware.camera2.params.ColorSpaceTransform
 import android.hardware.camera2.params.MeteringRectangle
 import android.hardware.camera2.params.OutputConfiguration
+import android.hardware.camera2.params.RggbChannelVector
 import android.hardware.camera2.params.SessionConfiguration
 import android.media.ImageReader
 import android.os.Build
@@ -24,6 +26,7 @@ import android.os.HandlerThread
 import android.os.SystemClock
 import android.util.Log
 import android.util.Range
+import android.util.Rational
 import android.util.Size
 import android.view.Surface
 import se.eyevinn.tallycam.core.Hot
@@ -44,9 +47,14 @@ import kotlin.math.roundToLong
  * touches the device runs on the camera thread.
  */
 class CameraCapture(context: Context) {
-    enum class ExposureMode { AUTO, LOCKED, MANUAL }
-    enum class WhiteBalanceMode { AUTO, LOCKED, MANUAL }
-    enum class FocusMode { AUTO, LOCKED, MANUAL }
+    /**
+     * Two modes per group (docs/SHADING.md, D14). Manual holds the camera's
+     * current values; where the camera cannot set a group's value, manual
+     * locks Camera2's auto instead (AE lock, AWB lock).
+     */
+    enum class ExposureMode { AUTO, MANUAL }
+    enum class WhiteBalanceMode { AUTO, MANUAL }
+    enum class FocusMode { AUTO, MANUAL }
 
     /** The production's shutter (docs/SHADING.md, "Shutter"). */
     sealed interface Shutter {
@@ -62,7 +70,7 @@ class CameraCapture(context: Context) {
      * What the operator set. Copied, changed and applied through [update].
      * With a manual sensor the auto exposure of Camera2 is never used: auto
      * is the core's auto ISO loop at the production shutter, writing [iso]
-     * and [exposureNs], so locked and manual start from what auto had.
+     * and [exposureNs], so manual starts from what auto had.
      */
     data class Settings(
         val exposureMode: ExposureMode = ExposureMode.AUTO,
@@ -70,8 +78,9 @@ class CameraCapture(context: Context) {
         val exposureNs: Long = 1_000_000_000L / 60,
         val evSteps: Int = 0,
         val whiteBalanceMode: WhiteBalanceMode = WhiteBalanceMode.AUTO,
-        /** An AWB preset (CONTROL_AWB_MODE_*), for manual white balance. */
-        val awbPreset: Int = CameraMetadata.CONTROL_AWB_MODE_DAYLIGHT,
+        /** Manual white balance (with [hasManualWhiteBalance]): K and tint. */
+        val wbTemperatureK: Double = 5500.0,
+        val wbTint: Double = 0.0,
         val focusMode: FocusMode = FocusMode.AUTO,
         /** Diopters (0 = infinity), for manual focus. */
         val focusDiopters: Float = 0f,
@@ -236,6 +245,30 @@ class CameraCapture(context: Context) {
     /** Zoom ramp (camera thread): doublings per second, 0 for none. */
     private var zoomRate = 0.0
 
+    /**
+     * White balance as Camera2's own AWB has it (auto, or locked), from the
+     * latest result in that mode: its gains (for K and tint) and its colour
+     * transform, which manual keeps (the core's is less saturated than the
+     * HAL's on a Pixel). Reset with the lens.
+     */
+    @Volatile private var autoGains: RggbChannelVector? = null
+    @Volatile private var autoTransform: ColorSpaceTransform? = null
+
+    /** K and tint of [autoGains], rounded (step 50, 1), at most twice a second; null without a calibration. */
+    @Volatile var measuredWhiteBalance: Pair<Double, Double>? = null
+        private set
+    private var lastWhiteBalanceNs = 0L
+    private val wbGains = DoubleArray(4)
+    private val wbTemperatureTint = DoubleArray(2)
+
+    /** Manual white balance from the core (camera thread), for the key it was computed for. */
+    private val wbOut = DoubleArray(13)
+    private var wbCount = 0
+    private var wbKey: Triple<DoubleArray, Double, Double>? = null
+
+    /** Whether the last request set the manual gains (else manual fell back to AWB lock). */
+    @Volatile private var manualGainsApplied = false
+
     // MARK: Capabilities of the active camera
 
     private fun capabilities(): IntArray =
@@ -243,6 +276,52 @@ class CameraCapture(context: Context) {
 
     val hasManualSensor: Boolean
         get() = CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_SENSOR in capabilities()
+
+    /** Manual white balance: raw gains and a colour transform, which needs a colour calibration. */
+    val hasManualWhiteBalance: Boolean
+        get() = CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_POST_PROCESSING in capabilities() &&
+            colorCalibration != null &&
+            characteristics?.get(CameraCharacteristics.CONTROL_AWB_AVAILABLE_MODES)
+                ?.contains(CameraMetadata.CONTROL_AWB_MODE_OFF) == true
+
+    val hasAeLock: Boolean
+        get() = characteristics?.get(CameraCharacteristics.CONTROL_AE_LOCK_AVAILABLE) == true
+
+    val hasAwbLock: Boolean
+        get() = characteristics?.get(CameraCharacteristics.CONTROL_AWB_LOCK_AVAILABLE) == true
+
+    /** Exposure can be held: sensor values, else the AE lock. */
+    val canHoldExposure: Boolean get() = hasManualSensor || hasAeLock
+
+    /** White balance can be held: manual gains, else the AWB lock. */
+    val canHoldWhiteBalance: Boolean get() = hasManualWhiteBalance || hasAwbLock
+
+    /** The active camera's colour calibration ([ColorCalibration]), cached per camera; null: none. */
+    @Volatile private var cachedCalibration: Pair<String, DoubleArray?>? = null
+
+    val colorCalibration: DoubleArray?
+        get() {
+            val id = cameraId ?: return null
+            cachedCalibration?.let { (cached, cal) -> if (cached == id) return cal }
+            val c = characteristics ?: return null
+            fun matrix(key: CameraCharacteristics.Key<ColorSpaceTransform>): DoubleArray? = c.get(key)?.let { t ->
+                val r = arrayOfNulls<Rational>(9)
+                t.copyElements(r, 0)
+                DoubleArray(9) { r[it]?.toDouble() ?: 0.0 }
+            }
+            val cal = ColorCalibration.pack(
+                c.get(CameraCharacteristics.SENSOR_REFERENCE_ILLUMINANT1),
+                c.get(CameraCharacteristics.SENSOR_REFERENCE_ILLUMINANT2)?.toInt()?.and(0xff),
+                matrix(CameraCharacteristics.SENSOR_COLOR_TRANSFORM1),
+                matrix(CameraCharacteristics.SENSOR_COLOR_TRANSFORM2),
+                matrix(CameraCharacteristics.SENSOR_CALIBRATION_TRANSFORM1),
+                matrix(CameraCharacteristics.SENSOR_CALIBRATION_TRANSFORM2),
+                matrix(CameraCharacteristics.SENSOR_FORWARD_MATRIX1),
+                matrix(CameraCharacteristics.SENSOR_FORWARD_MATRIX2),
+            )
+            cachedCalibration = id to cal
+            return cal
+        }
 
     val hasTorch: Boolean
         get() = characteristics?.get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
@@ -277,10 +356,6 @@ class CameraCapture(context: Context) {
 
     val antibandingModes: List<Int>
         get() = characteristics?.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_ANTIBANDING_MODES)?.toList().orEmpty()
-
-    val awbPresets: List<Int>
-        get() = characteristics?.get(CameraCharacteristics.CONTROL_AWB_AVAILABLE_MODES)?.toList().orEmpty()
-            .filter { it != CameraMetadata.CONTROL_AWB_MODE_AUTO && it != CameraMetadata.CONTROL_AWB_MODE_OFF }
 
     /** Fixed frame rates (AE target ranges with equal ends), lowest first. */
     val frameRates: List<Int>
@@ -408,17 +483,48 @@ class CameraCapture(context: Context) {
         }
     }
 
-    /** Lets auto white balance settle, then locks it. */
+    /** Lets auto white balance settle, then manual at what it measured (K and tint). */
     fun whiteBalanceOnce(done: () -> Unit) {
         handler.post {
             change { it.copy(whiteBalanceMode = WhiteBalanceMode.AUTO) }
             repeat()
             handler.postDelayed({
-                change { it.copy(whiteBalanceMode = WhiteBalanceMode.LOCKED) }
+                val wb = currentWhiteBalance()
+                change { s ->
+                    wb?.let { (k, tint) -> s.copy(whiteBalanceMode = WhiteBalanceMode.MANUAL, wbTemperatureK = k, wbTint = tint) }
+                        ?: s.copy(whiteBalanceMode = WhiteBalanceMode.MANUAL)
+                }
                 repeat()
                 done()
             }, 700)
         }
+    }
+
+    /**
+     * K and tint (rounded, step 50 and 1) of Camera2's own AWB now, from
+     * the latest auto result, unthrottled; null without a calibration or a
+     * result. Any thread (allocates).
+     */
+    fun currentWhiteBalance(): Pair<Double, Double>? {
+        val cal = colorCalibration ?: return null
+        val gains = autoGains ?: return null
+        val out = DoubleArray(2)
+        val input = doubleArrayOf(gains.red.toDouble(), gains.greenEven.toDouble(), gains.greenOdd.toDouble(),
+                                  gains.blue.toDouble())
+        if (!Hot.whiteBalanceTemperatureTint(cal, input, out)) return null
+        return ColorCalibration.roundedKelvin(out[0]) to ColorCalibration.roundedTint(out[1])
+    }
+
+    /**
+     * The white balance to report: the set K and tint while manual gains
+     * apply, else what Camera2's AWB has (auto, or locked).
+     */
+    fun reportedWhiteBalance(): Pair<Double, Double>? {
+        val s = settings
+        if (s.whiteBalanceMode == WhiteBalanceMode.MANUAL && manualGainsApplied) {
+            return ColorCalibration.roundedKelvin(s.wbTemperatureK) to ColorCalibration.roundedTint(s.wbTint)
+        }
+        return measuredWhiteBalance
     }
 
     /** Switches to another back camera (it reopens; settings that the new lens lacks fall back). */
@@ -430,6 +536,12 @@ class CameraCapture(context: Context) {
             device?.close()
             device = null
             cameraId = id
+            // Another camera, another calibration and AWB.
+            autoGains = null
+            autoTransform = null
+            measuredWhiteBalance = null
+            lastWhiteBalanceNs = 0L
+            wbKey = null
             change(refit = true) { it.copy(zoom = 1f, meteringPoint = null) }
             // Also without a preview (streaming in the background).
             if (texture != null || encoderSurface != null) openDevice()
@@ -653,8 +765,8 @@ class CameraCapture(context: Context) {
             val duration = if (s.genlock && genlockDurationNs > 0) genlockDurationNs else 1_000_000_000L / s.frameRate
             set(CaptureRequest.SENSOR_FRAME_DURATION, duration)
         } else when (s.exposureMode) {
-            ExposureMode.MANUAL -> Unit
-            ExposureMode.LOCKED -> {
+            // Held: Camera2's auto exposure locked where it is.
+            ExposureMode.MANUAL -> {
                 set(CaptureRequest.CONTROL_AE_MODE, CameraMetadata.CONTROL_AE_MODE_ON)
                 set(CaptureRequest.CONTROL_AE_LOCK, true)
             }
@@ -665,26 +777,22 @@ class CameraCapture(context: Context) {
                 region?.let { set(CaptureRequest.CONTROL_AE_REGIONS, arrayOf(it)) }
             }
         }
-        // White balance.
-        when (s.whiteBalanceMode) {
-            WhiteBalanceMode.AUTO -> {
-                set(CaptureRequest.CONTROL_AWB_MODE, CameraMetadata.CONTROL_AWB_MODE_AUTO)
-                set(CaptureRequest.CONTROL_AWB_LOCK, false)
-            }
-            WhiteBalanceMode.LOCKED -> {
-                set(CaptureRequest.CONTROL_AWB_MODE, CameraMetadata.CONTROL_AWB_MODE_AUTO)
-                set(CaptureRequest.CONTROL_AWB_LOCK, true)
-            }
-            WhiteBalanceMode.MANUAL -> set(CaptureRequest.CONTROL_AWB_MODE, s.awbPreset)
+        // White balance: manual is the core's gains for K and tint where the
+        // camera takes them, else the AWB lock.
+        val manualGains = s.whiteBalanceMode == WhiteBalanceMode.MANUAL && setManualWhiteBalance(s)
+        manualGainsApplied = manualGains
+        if (!manualGains) {
+            set(CaptureRequest.CONTROL_AWB_MODE, CameraMetadata.CONTROL_AWB_MODE_AUTO)
+            set(CaptureRequest.CONTROL_AWB_LOCK, s.whiteBalanceMode == WhiteBalanceMode.MANUAL)
         }
-        // Focus.
+        // Focus: manual is the lens at a distance (A→M starts where auto focus was).
         when (s.focusMode) {
             FocusMode.AUTO -> {
                 set(CaptureRequest.CONTROL_AF_MODE,
                     if (region != null) CameraMetadata.CONTROL_AF_MODE_AUTO else CameraMetadata.CONTROL_AF_MODE_CONTINUOUS_VIDEO)
                 region?.let { set(CaptureRequest.CONTROL_AF_REGIONS, arrayOf(it)) }
             }
-            FocusMode.LOCKED, FocusMode.MANUAL -> if (minFocusDiopters != null) {
+            FocusMode.MANUAL -> if (minFocusDiopters != null) {
                 set(CaptureRequest.CONTROL_AF_MODE, CameraMetadata.CONTROL_AF_MODE_OFF)
                 set(CaptureRequest.LENS_FOCUS_DISTANCE, s.focusDiopters)
             }
@@ -692,6 +800,55 @@ class CameraCapture(context: Context) {
         if (hasTorch) {
             set(CaptureRequest.FLASH_MODE, if (s.torch) CameraMetadata.FLASH_MODE_TORCH else CameraMetadata.FLASH_MODE_OFF)
         }
+    }
+
+    /**
+     * Camera thread: AWB off, the core's gains for the settings' K and tint,
+     * and the colour transform of the last auto result (the core's only
+     * before there is one). False when it cannot (no manual white balance,
+     * no gains, no transform): the caller locks the AWB instead.
+     */
+    private fun CaptureRequest.Builder.setManualWhiteBalance(s: Settings): Boolean {
+        if (!hasManualWhiteBalance) return false
+        val cal = colorCalibration ?: return false
+        val key = Triple(cal, s.wbTemperatureK, s.wbTint)
+        if (key != wbKey) {
+            wbKey = key
+            wbCount = Hot.whiteBalanceFor(cal, s.wbTemperatureK, s.wbTint, wbOut)
+        }
+        if (wbCount < 4) return false
+        val transform = autoTransform
+            ?: if (wbCount == 13) ColorSpaceTransform(ColorCalibration.transformElements(wbOut, 4)) else return false
+        set(CaptureRequest.CONTROL_AWB_MODE, CameraMetadata.CONTROL_AWB_MODE_OFF)
+        set(CaptureRequest.COLOR_CORRECTION_MODE, CameraMetadata.COLOR_CORRECTION_MODE_TRANSFORM_MATRIX)
+        set(CaptureRequest.COLOR_CORRECTION_GAINS,
+            RggbChannelVector(wbOut[0].toFloat(), wbOut[1].toFloat(), wbOut[2].toFloat(), wbOut[3].toFloat()))
+        set(CaptureRequest.COLOR_CORRECTION_TRANSFORM, transform)
+        return true
+    }
+
+    /**
+     * Camera thread, every fourth result: a result of Camera2's own AWB
+     * (auto or locked, not the manual gains) gives the gains and transform
+     * manual starts from, and twice a second the K and tint auto reports.
+     */
+    private fun sampleWhiteBalance(result: TotalCaptureResult) {
+        if (result.get(CaptureResult.CONTROL_AWB_MODE) != CameraMetadata.CONTROL_AWB_MODE_AUTO) return
+        val gains = result.get(CaptureResult.COLOR_CORRECTION_GAINS) ?: return
+        autoGains = gains
+        result.get(CaptureResult.COLOR_CORRECTION_TRANSFORM)?.let { autoTransform = it }
+        val now = SystemClock.elapsedRealtimeNanos()
+        if (now - lastWhiteBalanceNs < 500_000_000L) return
+        lastWhiteBalanceNs = now
+        val cal = colorCalibration ?: return
+        wbGains[0] = gains.red.toDouble()
+        wbGains[1] = gains.greenEven.toDouble()
+        wbGains[2] = gains.greenOdd.toDouble()
+        wbGains[3] = gains.blue.toDouble()
+        if (!Hot.whiteBalanceTemperatureTint(cal, wbGains, wbTemperatureTint)) return
+        val wb = ColorCalibration.roundedKelvin(wbTemperatureTint[0]) to ColorCalibration.roundedTint(wbTemperatureTint[1])
+        // Only when the rounded values change.
+        if (wb != measuredWhiteBalance) measuredWhiteBalance = wb
     }
 
     /** A metering rectangle of a tenth of the active array around a normalised point. */
@@ -719,6 +876,7 @@ class CameraCapture(context: Context) {
                     result.get(CaptureResult.LENS_FOCUS_DISTANCE),
                     result.get(CaptureResult.SENSOR_FRAME_DURATION),
                 )
+                sampleWhiteBalance(result)
             }
             if (genlockLoop != 0L || settings.genlock) {
                 result.get(CaptureResult.SENSOR_TIMESTAMP)?.let(::genlockFrame)
@@ -922,7 +1080,7 @@ class CameraCapture(context: Context) {
         val iso = autoIsoOutput[0].toInt().coerceIn(isoRange.lower, isoRange.upper)
         val exposure = autoIsoOutput[1].toLong()
         synchronized(this) {
-            // Only while still in auto: the operator may have just locked.
+            // Only while still in auto: the operator may have just gone manual.
             if (settings.exposureMode == ExposureMode.AUTO) settings = settings.copy(iso = iso, exposureNs = exposure)
         }
         awaitFrame(iso, exposure, now)
@@ -1042,6 +1200,42 @@ class CameraCapture(context: Context) {
         }
         private val LENS_LABELS = mapOf("ultra_wide" to "Ultra wide", "wide" to "Wide", "tele" to "Tele")
     }
+}
+
+/**
+ * A camera's colour calibration for the core's white balance
+ * (core/android/src/white_balance.rs): 56 doubles, the reference
+ * illuminants (EXIF LightSource; 0 for none) then six row-major 3x3
+ * matrices, colour transform 1 and 2, calibration transform 1 and 2,
+ * forward matrix 1 and 2, zeros where the camera has none. Pure, unit tested.
+ */
+internal object ColorCalibration {
+    const val LENGTH = 56
+
+    /** The packed calibration, or null without a colour transform 1 (no calibration). */
+    fun pack(illuminant1: Int?, illuminant2: Int?, colorTransform1: DoubleArray?, colorTransform2: DoubleArray?,
+             calibration1: DoubleArray?, calibration2: DoubleArray?, forward1: DoubleArray?,
+             forward2: DoubleArray?): DoubleArray? {
+        if (colorTransform1 == null || colorTransform1.size < 9) return null
+        val v = DoubleArray(LENGTH)
+        v[0] = (illuminant1 ?: 0).toDouble()
+        v[1] = (illuminant2 ?: 0).toDouble()
+        listOf(colorTransform1, colorTransform2, calibration1, calibration2, forward1, forward2).forEachIndexed { i, m ->
+            if (m != null && m.size >= 9) m.copyInto(v, 2 + 9 * i, 0, 9)
+        }
+        return v
+    }
+
+    /** ColorSpaceTransform's int[] (numerator, denominator pairs) for 9 doubles at `offset`. */
+    fun transformElements(m: DoubleArray, offset: Int): IntArray = IntArray(18) {
+        if (it % 2 == 1) DENOMINATOR else Math.round(m[offset + it / 2] * DENOMINATOR).toInt()
+    }
+
+    private const val DENOMINATOR = 10_000
+
+    fun roundedKelvin(k: Double): Double = Math.round(k / 50) * 50.0
+
+    fun roundedTint(tint: Double): Double = Math.round(tint).toDouble()
 }
 
 /** YUV_420_888 to NV21 and JPEG (YuvImage). */

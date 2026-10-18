@@ -87,14 +87,20 @@ class CameraControls(
         if (c.hasTorch) list += Controls.bool("torch", "Torch", "image")
         // Exposure: auto is the core's auto ISO loop at the production
         // shutter where the sensor can be set, else Camera2's auto exposure.
-        val modes = mutableListOf<Pair<Any, String>>("auto" to "Auto", "locked" to "Locked")
-        if (c.hasManualSensor) modes += "manual" to "Manual"
+        // Manual holds the current values (docs/SHADING.md, D14): the sensor
+        // values, else the AE lock with the ISO read-only.
+        val modes = mutableListOf<Pair<Any, String>>("auto" to "Auto")
+        if (c.canHoldExposure) modes += "manual" to "Manual"
         list += enumControl("exposure_mode", "Exposure", "exposure", options(*modes.toTypedArray()))
-        if (c.hasManualSensor) {
+        if (c.canHoldExposure) {
             c.isoRange?.let {
-                list += Controls.range("iso", "ISO", "exposure", it.lower.toDouble(), it.upper.toDouble(), 1.0, "")
+                val iso = Controls.range("iso", "ISO", "exposure", it.lower.toDouble(), it.upper.toDouble(), 1.0, "")
                     .put("scale", "log").put("enabled_when", whenMode("exposure_mode", "manual"))
+                if (!c.hasManualSensor) iso.put("readonly", true).put("readonly_reason", NO_MANUAL_EXPOSURE)
+                list += iso
             }
+        }
+        if (c.hasManualSensor) {
             // Genlock needs Camera2's auto exposure off, which it is with a
             // manual sensor in every mode (docs/GENLOCK.md).
             list += Controls.bool("genlock", "Genlock", "image")
@@ -119,21 +125,27 @@ class CameraControls(
                                    (range.upper * step).toDouble(), step.toDouble(), "EV")
                 .put("enabled_when", whenMode("exposure_mode", "auto"))
         }
-        // White balance.
-        val presets = c.awbPresets.filter { it in CameraMath.PRESET_KELVIN }
-        val wbModes = mutableListOf<Pair<Any, String>>("auto" to "Auto", "locked" to "Locked")
-        if (presets.isNotEmpty()) wbModes += "manual" to "Manual"
+        // White balance: manual is the core's gains for a temperature and
+        // tint, else the AWB lock with both read-only. K and tint need the
+        // camera's colour calibration, to set them or to report them.
+        val wbModes = mutableListOf<Pair<Any, String>>("auto" to "Auto")
+        if (c.canHoldWhiteBalance) wbModes += "manual" to "Manual"
         list += enumControl("wb_mode", "White balance", "white_balance", options(*wbModes.toTypedArray()))
-        if (presets.isNotEmpty()) {
-            val kelvins = presets.map { CameraMath.PRESET_KELVIN.getValue(it) }
-            list += Controls.range("wb_temperature", "Temperature", "white_balance", kelvins.min().toDouble(),
-                                   kelvins.max().toDouble(), 100.0, "K")
+        if (c.canHoldWhiteBalance && c.colorCalibration != null) {
+            val temperature = Controls.range("wb_temperature", "Temperature", "white_balance", MIN_KELVIN, MAX_KELVIN,
+                                             50.0, "K")
                 .put("enabled_when", whenMode("wb_mode", "manual"))
+            val tint = Controls.range("wb_tint", "Tint", "white_balance", -MAX_TINT, MAX_TINT, 1.0, "")
+                .put("enabled_when", whenMode("wb_mode", "manual"))
+            if (!c.hasManualWhiteBalance) {
+                listOf(temperature, tint).forEach { it.put("readonly", true).put("readonly_reason", NO_MANUAL_WHITE_BALANCE) }
+            }
+            list += temperature
+            list += tint
         }
         // Focus.
         if (c.minFocusDiopters != null) {
-            list += enumControl("focus_mode", "Focus", "focus",
-                                options("auto" to "Auto", "locked" to "Locked", "manual" to "Manual"))
+            list += enumControl("focus_mode", "Focus", "focus", options("auto" to "Auto", "manual" to "Manual"))
             list += Controls.range("focus_position", "Focus position", "focus", 0.0, 1.0, 0.01, "")
                 .put("enabled_when", whenMode("focus_mode", "manual"))
         }
@@ -164,6 +176,8 @@ class CameraControls(
         if (c.hasStabilization) v.put("stabilization", if (s.stabilization) "standard" else "off")
         if (c.hasTorch) v.put("torch", s.torch)
         v.put("exposure_mode", s.exposureMode.name.lowercase())
+        // Without a manual sensor, the ISO Camera2's auto exposure uses (or held).
+        if (!c.hasManualSensor && c.canHoldExposure && c.isoRange != null) m.iso?.let { v.put("iso", it) }
         if (c.hasManualSensor) {
             v.put("genlock", s.genlock)
             v.put("genlock_offset_us", s.genlockOffsetNs / 1000.0)
@@ -174,13 +188,12 @@ class CameraControls(
         if (mainsOptions().size > 1) v.put("mains_hz", s.mainsHz)
         c.evRange?.let { (_, step) -> v.put("ev_bias", (s.evSteps * step * 100).roundToInt() / 100.0) }
         v.put("wb_mode", s.whiteBalanceMode.name.lowercase())
-        if (s.whiteBalanceMode == WhiteBalanceMode.MANUAL) {
-            CameraMath.PRESET_KELVIN[s.awbPreset]?.let { v.put("wb_temperature", it) }
-        }
+        // In both modes: the set values in manual, measured otherwise.
+        c.reportedWhiteBalance()?.let { (k, tint) -> v.put("wb_temperature", k).put("wb_tint", tint) }
         c.minFocusDiopters?.let { min ->
             v.put("focus_mode", s.focusMode.name.lowercase())
-            val diopters = if (s.focusMode == FocusMode.AUTO) m.focusDiopters else s.focusDiopters
-            diopters?.let { v.put("focus_position", (CameraMath.focusPosition(it, min) * 100).roundToInt() / 100.0) }
+            val diopters = if (s.focusMode == FocusMode.AUTO) m.focusDiopters ?: s.focusDiopters else s.focusDiopters
+            v.put("focus_position", (CameraMath.focusPosition(diopters, min) * 100).roundToInt() / 100.0)
         }
         return v
     }
@@ -225,19 +238,18 @@ class CameraControls(
             }
             "torch" -> if (value is Boolean) { c.update { it.copy(torch = value) }; null } else "expected a bool"
             "exposure_mode" -> {
-                val mode = when (value) {
-                    // `auto_iso` is what `auto` was called before protocol 2.
-                    "auto", "auto_iso" -> ExposureMode.AUTO
-                    "locked" -> ExposureMode.LOCKED
-                    "manual" -> if (c.hasManualSensor) ExposureMode.MANUAL else return "manual exposure not supported"
-                    else -> return "expected auto, locked or manual"
-                }
-                // Locked and manual start from what auto had: with a manual
-                // sensor the settings already hold it. Auto starts with no bias.
+                // `auto_iso` is what `auto` was called before protocol 2.
+                val manual = manualMode(if (value == "auto_iso") "auto" else value) ?: return EXPECTED_MODE
+                if (manual && !c.canHoldExposure) return "manual exposure not supported"
+                val mode = if (manual) ExposureMode.MANUAL else ExposureMode.AUTO
+                // Manual starts from what auto had: with a manual sensor the
+                // settings already hold it (the auto ISO loop's last values),
+                // else the AE lock holds it. Auto starts with no bias.
                 c.update { if (mode == ExposureMode.AUTO) it.copy(exposureMode = mode, evSteps = 0) else it.copy(exposureMode = mode) }
                 null
             }
             "iso" -> {
+                if (!c.hasManualSensor) return NO_MANUAL_EXPOSURE
                 if (s.exposureMode != ExposureMode.MANUAL) return "requires exposure_mode manual"
                 val range = c.isoRange ?: return "not available"
                 val iso = number() ?: return "expected a number"
@@ -288,37 +300,34 @@ class CameraControls(
                 if (kotlin.math.abs(steps * step - ev) < 1e-6) null else "rounded to ${steps * step}"
             }
             "wb_mode" -> {
-                val mode = when (value) {
-                    "auto" -> WhiteBalanceMode.AUTO
-                    "locked" -> WhiteBalanceMode.LOCKED
-                    "manual" -> if (c.awbPresets.any { it in CameraMath.PRESET_KELVIN }) WhiteBalanceMode.MANUAL
-                                else return "manual white balance not supported"
-                    else -> return "expected auto, locked or manual"
+                val manual = manualMode(value) ?: return EXPECTED_MODE
+                if (manual && !c.canHoldWhiteBalance) return "manual white balance not supported"
+                // A→M starts from what auto white balance has, as K and tint.
+                val wb = if (manual && s.whiteBalanceMode == WhiteBalanceMode.AUTO) c.currentWhiteBalance() else null
+                c.update {
+                    when {
+                        !manual -> it.copy(whiteBalanceMode = WhiteBalanceMode.AUTO)
+                        wb != null -> it.copy(whiteBalanceMode = WhiteBalanceMode.MANUAL, wbTemperatureK = wb.first, wbTint = wb.second)
+                        else -> it.copy(whiteBalanceMode = WhiteBalanceMode.MANUAL)
+                    }
                 }
-                c.update { it.copy(whiteBalanceMode = mode) }
                 null
             }
-            "wb_temperature" -> {
+            "wb_temperature", "wb_tint" -> {
+                if (!c.hasManualWhiteBalance) return NO_MANUAL_WHITE_BALANCE
                 if (s.whiteBalanceMode != WhiteBalanceMode.MANUAL) return "requires wb_mode manual"
-                val k = number() ?: return "expected a number"
-                val preset = CameraMath.nearestPreset(k, c.awbPresets) ?: return "not available"
-                c.update { it.copy(awbPreset = preset) }
-                val applied = CameraMath.PRESET_KELVIN.getValue(preset)
-                // Camera2 offers presets, not any temperature.
-                if (applied.toDouble() == k) null else "nearest preset $applied K"
+                val x = number() ?: return "expected a number"
+                val clamped = if (id == "wb_temperature") x.coerceIn(MIN_KELVIN, MAX_KELVIN) else x.coerceIn(-MAX_TINT, MAX_TINT)
+                c.update { if (id == "wb_temperature") it.copy(wbTemperatureK = clamped) else it.copy(wbTint = clamped) }
+                if (clamped == x) null else "clamped to ${clamped.roundToInt()}"
             }
             "focus_mode" -> {
                 val min = c.minFocusDiopters ?: return "fixed focus"
-                val mode = when (value) {
-                    "auto" -> FocusMode.AUTO
-                    "locked" -> FocusMode.LOCKED
-                    "manual" -> FocusMode.MANUAL
-                    else -> return "expected auto, locked or manual"
-                }
-                // Locked and manual start at the distance auto focus found.
+                val mode = if (manualMode(value) ?: return EXPECTED_MODE) FocusMode.MANUAL else FocusMode.AUTO
+                // Manual starts at the distance auto focus found.
                 val d = c.measured.focusDiopters
                 c.update {
-                    if (mode != FocusMode.AUTO && it.focusMode == FocusMode.AUTO)
+                    if (mode == FocusMode.MANUAL && it.focusMode == FocusMode.AUTO)
                         it.copy(focusMode = mode, focusDiopters = (d ?: it.focusDiopters).coerceIn(0f, min), meteringPoint = null)
                     else it.copy(focusMode = mode, meteringPoint = if (mode == FocusMode.AUTO) it.meteringPoint else null)
                 }
@@ -412,8 +421,28 @@ class CameraControls(
 
     companion object {
         val IDS = setOf("lens", "zoom", "resolution", "frame_rate", "stabilization", "torch", "exposure_mode", "iso",
-                        "shutter", "genlock", "genlock_offset_us", "mains_hz", "ev_bias", "wb_mode", "wb_temperature", "focus_mode", "focus_position")
+                        "shutter", "genlock", "genlock_offset_us", "mains_hz", "ev_bias", "wb_mode", "wb_temperature",
+                        "wb_tint", "focus_mode", "focus_position")
 
         const val NOT_WHILE_LIVE = "not while live: stop the stream to change it"
+        const val NO_MANUAL_EXPOSURE = "no manual exposure on this camera"
+        const val NO_MANUAL_WHITE_BALANCE = "no manual white balance on this camera"
+        private const val EXPECTED_MODE = "expected auto or manual"
+
+        /** The core's white balance range (core/src/white_balance.rs). */
+        const val MIN_KELVIN = 2000.0
+        const val MAX_KELVIN = 15000.0
+        const val MAX_TINT = 150.0
+
+        /**
+         * A group's mode from a `set`: true for manual, false for auto, null
+         * for neither. `locked`, from older servers, is manual at the current
+         * values (docs/PROTOCOL.md, "Modes").
+         */
+        fun manualMode(value: Any?): Boolean? = when (value) {
+            "auto" -> false
+            "manual", "locked" -> true
+            else -> null
+        }
     }
 }

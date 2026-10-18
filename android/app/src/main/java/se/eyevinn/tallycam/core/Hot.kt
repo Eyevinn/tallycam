@@ -105,6 +105,18 @@ object Hot {
 
     /** The longest exposure for a frame period: the format's maximum, the frame, room for genlock. */
     @JvmStatic external fun longestExposureNs(framePeriodNs: Double, formatMaxNs: Double, genlock: Boolean): Double
+
+    /**
+     * Manual white balance (core/src/white_balance.rs). `cal` is the
+     * camera's colour calibration, 56 doubles (core/android/src/white_balance.rs,
+     * [se.eyevinn.tallycam.media.ColorCalibration]). Fills `out` (13): the
+     * gains R, Gr, Gb, B, then the 3x3 COLOR_CORRECTION_TRANSFORM row-major.
+     * Returns 13, 4 (gains only) or 0 (none). Clamps to 2000-15000 K, tint ±150.
+     */
+    @JvmStatic external fun whiteBalanceFor(cal: DoubleArray, temperatureK: Double, tint: Double, out: DoubleArray): Int
+
+    /** `gains` (4): R, Gr, Gb, B of an auto capture result. True: `out` (2) holds K and tint. */
+    @JvmStatic external fun whiteBalanceTemperatureTint(cal: DoubleArray, gains: DoubleArray, out: DoubleArray): Boolean
 }
 
 /** One mapped host instant (lc_clock_map). */

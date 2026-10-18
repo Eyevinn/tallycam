@@ -437,7 +437,7 @@ class AppModel(private val context: Context) : LcpClient.Listener, LiveStream.Li
             Controls.text("stream_url", "Stream URL", "stream"),
             Controls.range("srt_latency_ms", "SRT latency", "stream", SrtUrl.LATENCY_RANGE.first.toDouble(),
                            SrtUrl.LATENCY_RANGE.last.toDouble(), 10.0, "ms"),
-            Controls.range("bitrate_kbps", "Video bitrate", "stream", 500.0, 20000.0, 100.0, "kbit/s"),
+            Controls.range("bitrate_kbps", "Video bitrate", "stream", BITRATE_KBPS.first.toDouble(), BITRATE_KBPS.last.toDouble(), 100.0, "kbit/s"),
             Controls.bool("adaptive_bitrate", "Adaptive bitrate", "stream"),
             enumOf("video_codec", "Video codec", videoCodecs).put("locked_while_live", true),
             enumOf("audio_codec", "Audio codec", listOf("opus" to "Opus", "aac" to "AAC")).put("locked_while_live", true),
@@ -599,7 +599,7 @@ class AppModel(private val context: Context) : LcpClient.Listener, LiveStream.Li
         "bitrate_kbps" -> {
             val wanted = (value as? Number)?.toDouble()
             if (wanted == null || !wanted.isFinite()) "expected a number" else {
-                val kbps = wanted.coerceIn(500.0, 20000.0).toInt()
+                val kbps = wanted.coerceIn(BITRATE_KBPS.first.toDouble(), BITRATE_KBPS.last.toDouble()).toInt()
                 settings.bitrateKbps = kbps
                 stream.setBitrate(kbps)
                 bitrateKbps = kbps
@@ -858,6 +858,8 @@ class AppModel(private val context: Context) : LcpClient.Listener, LiveStream.Li
     companion object {
         private const val TAG = "TallyCam"
         const val DEFAULT_KBPS = 6000
+        /** The `bitrate_kbps` control's range: the descriptor, the clamp and Settings' stepper. */
+        val BITRATE_KBPS = 500..20000
         private val MODE_FIRST = listOf("lens", "resolution", "frame_rate", "exposure_mode", "wb_mode", "focus_mode", "genlock")
     }
 }

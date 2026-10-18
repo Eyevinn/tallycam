@@ -339,16 +339,17 @@ private fun PictureSection(model: AppModel, live: Boolean, width: Modifier) {
             Segmented(model.videoCodecs, model.settings.videoCodec, !live) { model.localSet(JSONObject().put("video_codec", it)) }
             Divider()
         }
-        // Bitrate in 500 kbit/s steps, within the control's range (500 to 20000).
+        // Bitrate in 500 kbit/s steps, within the control's range.
+        val range = AppModel.BITRATE_KBPS
         val kbps = v.optInt("bitrate_kbps", 0)
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("Bitrate", color = Color.White)
             Spacer(Modifier.weight(1f))
-            TextButton(onClick = { model.localSet(JSONObject().put("bitrate_kbps", (kbps - 500).coerceAtLeast(500))) },
-                       enabled = !live && kbps > 500) { Text("−", fontSize = 20.sp) }
+            TextButton(onClick = { model.localSet(JSONObject().put("bitrate_kbps", (kbps - 500).coerceAtLeast(range.first))) },
+                       enabled = !live && kbps > range.first) { Text("−", fontSize = 20.sp) }
             Text("$kbps kbit/s" + if (model.settings.bitrateKbps <= 0) " (auto)" else "", color = Secondary, style = Chrome.tabular)
-            TextButton(onClick = { model.localSet(JSONObject().put("bitrate_kbps", (kbps + 500).coerceAtMost(20000))) },
-                       enabled = !live && kbps < 20000) { Text("+", fontSize = 20.sp) }
+            TextButton(onClick = { model.localSet(JSONObject().put("bitrate_kbps", (kbps + 500).coerceAtMost(range.last))) },
+                       enabled = !live && kbps < range.last) { Text("+", fontSize = 20.sp) }
         }
         Divider()
         Labeled("Picture", model.pictureSummary)

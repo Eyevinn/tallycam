@@ -252,6 +252,8 @@ class CameraCapture(context: Context) {
      * HAL's on a Pixel). Reset with the lens.
      */
     @Volatile private var autoGains: RggbChannelVector? = null
+    /** CONTROL_AWB_STATE of the latest sampled AWB result, for white balance once. */
+    @Volatile private var awbState: Int? = null
     @Volatile private var autoTransform: ColorSpaceTransform? = null
 
     /** K and tint of [autoGains], rounded (step 50, 1), at most twice a second; null without a calibration. */
@@ -488,7 +490,12 @@ class CameraCapture(context: Context) {
         handler.post {
             change { it.copy(whiteBalanceMode = WhiteBalanceMode.AUTO) }
             repeat()
-            handler.postDelayed({
+            awbState = null
+            val start = SystemClock.elapsedRealtime()
+            // As iOS: until auto white balance has converged (after at
+            // least 300 ms, so the state is from the new request), at most
+            // 1.5 s; then manual at what it found.
+            fun finish() {
                 val wb = currentWhiteBalance()
                 change { s ->
                     wb?.let { (k, tint) -> s.copy(whiteBalanceMode = WhiteBalanceMode.MANUAL, wbTemperatureK = k, wbTint = tint) }
@@ -496,7 +503,13 @@ class CameraCapture(context: Context) {
                 }
                 repeat()
                 done()
-            }, 700)
+            }
+            fun poll() {
+                val elapsed = SystemClock.elapsedRealtime() - start
+                val converged = elapsed >= 300 && awbState == CameraMetadata.CONTROL_AWB_STATE_CONVERGED
+                if (converged || elapsed >= 1500) finish() else handler.postDelayed(::poll, 100)
+            }
+            handler.postDelayed(::poll, 100)
         }
     }
 
@@ -834,6 +847,7 @@ class CameraCapture(context: Context) {
      */
     private fun sampleWhiteBalance(result: TotalCaptureResult) {
         if (result.get(CaptureResult.CONTROL_AWB_MODE) != CameraMetadata.CONTROL_AWB_MODE_AUTO) return
+        awbState = result.get(CaptureResult.CONTROL_AWB_STATE)
         val gains = result.get(CaptureResult.COLOR_CORRECTION_GAINS) ?: return
         autoGains = gains
         result.get(CaptureResult.COLOR_CORRECTION_TRANSFORM)?.let { autoTransform = it }

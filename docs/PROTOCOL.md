@@ -473,8 +473,8 @@ does differently is in docs/APPS.md.
 | `genlock` | bool | soft genlock: the frame timing locks to the TAI frame grid (docs/GENLOCK.md). Status in `status.genlock` |
 | `genlock_offset_us` | range | where frames land after each grid point, µs (per-model calibration, or measurement sweeps); -50000 to 50000 |
 | `wb_mode` | enum | `auto`, `manual` |
-| `wb_temperature` | range | Kelvin, manual only |
-| `wb_tint` | range | manual only |
+| `wb_temperature` | range | Kelvin, 2000 to 10000, manual only (reported in auto too) |
+| `wb_tint` | range | -150 to 150 on Adobe's (and AVFoundation's) scale: positive is greener light, so the picture moves towards magenta; manual only (reported in auto too) |
 | `focus_mode` | enum | `auto`, `manual` |
 | `focus_position` | range | 0 (near) to 1 (far), manual only |
 | `orientation` | enum | `auto` (follow the phone), `landscape` (for example 1920x1080), `portrait` (1080x1920, width and height of the resolution swapped); group `image`. While live the stream keeps its geometry, a change applies when it stops |

@@ -2,6 +2,7 @@ package se.eyevinn.tallycam.control
 
 import org.json.JSONArray
 import org.json.JSONObject
+import se.eyevinn.tallycam.core.Hot
 import se.eyevinn.tallycam.media.CameraCapture
 import se.eyevinn.tallycam.media.CameraCapture.ExposureMode
 import se.eyevinn.tallycam.media.CameraCapture.FocusMode
@@ -317,8 +318,15 @@ class CameraControls(
                 if (!c.hasManualWhiteBalance) return NO_MANUAL_WHITE_BALANCE
                 if (s.whiteBalanceMode != WhiteBalanceMode.MANUAL) return "requires wb_mode manual"
                 val x = number() ?: return "expected a number"
-                val clamped = if (id == "wb_temperature") x.coerceIn(MIN_KELVIN, MAX_KELVIN) else x.coerceIn(-MAX_TINT, MAX_TINT)
-                c.update { if (id == "wb_temperature") it.copy(wbTemperatureK = clamped) else it.copy(wbTint = clamped) }
+                // Green tints are limited at low temperatures (the core's
+                // max_tint): what is kept, and reported, is what applies.
+                val clamped = if (id == "wb_temperature") x.coerceIn(MIN_KELVIN, MAX_KELVIN)
+                              else x.coerceIn(-MAX_TINT, Hot.whiteBalanceMaxTint(s.wbTemperatureK))
+                c.update {
+                    if (id == "wb_temperature") {
+                        it.copy(wbTemperatureK = clamped, wbTint = it.wbTint.coerceAtMost(Hot.whiteBalanceMaxTint(clamped)))
+                    } else it.copy(wbTint = clamped)
+                }
                 if (clamped == x) null else "clamped to ${clamped.roundToInt()}"
             }
             "focus_mode" -> {

@@ -127,6 +127,9 @@ object Hot {
 
     /** `gains` (4): R, Gr, Gb, B of an auto capture result. True: `out` (2) holds K and tint. */
     @JvmStatic external fun whiteBalanceTemperatureTint(cal: DoubleArray, gains: DoubleArray, out: DoubleArray): Boolean
+
+    /** The greenest tint the core applies at `temperatureK` (+21 at 2000 K, the full 150 from about 3900 K). */
+    @JvmStatic external fun whiteBalanceMaxTint(temperatureK: Double): Double
 }
 
 /** One mapped host instant (lc_clock_map). */

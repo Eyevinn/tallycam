@@ -104,3 +104,14 @@ pub extern "system" fn Java_se_eyevinn_tallycam_core_Hot_whiteBalanceTemperature
     }
     JNI_TRUE
 }
+
+/// The greenest tint the core applies at `temperature_k`
+/// (`white_balance::max_tint`): less than 150 at low temperatures.
+#[no_mangle]
+pub extern "system" fn Java_se_eyevinn_tallycam_core_Hot_whiteBalanceMaxTint(
+    _env: JNIEnv,
+    _class: JClass,
+    temperature_k: f64,
+) -> f64 {
+    white_balance::max_tint(temperature_k)
+}

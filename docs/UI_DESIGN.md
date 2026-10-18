@@ -81,7 +81,7 @@ all chrome stays inside it and the safe areas.
 
 | Item | Shows | Tap selects |
 |---|---|---|
-| Format | Stream size and frame rate: `1080p30`, `4K30`, `720p60` | Settings |
+| Format | Stream size and frame rate: `1080p30`, `4K30`, `720p60` | Opens Settings at Picture |
 | ISO | `ISO 26`; with a warning word from the image statistics: `CLIP` in red, `DARK` in orange | Exposure |
 | Shutter | `1/100` | Exposure |
 | EV | `+0.3 EV`, only in auto exposure and when not 0 | Exposure |
@@ -215,6 +215,10 @@ the lens buttons, which follow the active lens.
 
 ## Settings
 
+The phone can change every camera setting itself; the hub can too, and the
+last change wins (as for shading). Settings goes through the same control
+table as the hub's sets, so both get the same checks and clamping.
+
 A sheet (iOS page sheet, Android full screen), "Settings" with Done
 (Android's back does the same).
 Sections in this order: who the camera is, where it connects and streams,
@@ -225,9 +229,11 @@ row's footer says why instead of the usual text.
 |---|---|---|
 | **Camera name** | Text field, the default name (model and the start of the id) as placeholder | "How the hub and Strom show this camera. The operator can rename it too; empty uses the model." |
 | **Control hub** | Link dot and state (Connected, Reconnecting, Not set up) with the host; the URL field (`ws://host:8090/lcp/v0/device`), reconnecting when submitted or on Done if changed; "Scan QR code" (disabled while live); "Disconnect and forget server" (only when a hub is set; asks "Forget the control hub?", "The phone disconnects from the hub. Scan its QR code to connect again.", Forget server / Cancel) | Idle: "To connect, scan the QR code in the control hub here or with the Camera app." Live: "Stop the stream to scan here; the Camera app works while live." |
-| **Stream (SRT)** | The URL field (disabled while live); Video: codec and bitrate ("H.264, 6000 kbit/s", "(auto)" when not set); Adaptive bitrate switch; while live: Encoder now (with adaptive bitrate), Round trip, Retransmitted / dropped | Idle: "Set by the QR code. Edit only if you know the address." Live: "Stop the stream to change the address." Then always: "Adaptive bitrate lowers the video bitrate when the network cannot carry it, and raises it again up to the bitrate set." |
+| **Stream (SRT)** | The URL field (disabled while live); Adaptive bitrate switch; while live: Encoder now (with adaptive bitrate), Round trip, Retransmitted / dropped | Idle: "Set by the QR code. Edit only if you know the address." Live: "Stop the stream to change the address." Then always: "Adaptive bitrate lowers the video bitrate when the network cannot carry it, and raises it again up to the bitrate set." |
+| **Picture** | Lens, resolution and frame rate pickers (what the active lens offers: the `resolution` and `frame_rate` controls' lists), video codec, bitrate; all disabled while live | "Stop the stream to change." while live; otherwise none |
+| **Sync** | Genlock switch with its state (Locked, Locking, Off) and the phase error when locked; Stabilization switch | "Genlock aligns frames with other cameras on the same clock. Stabilization off for multi-camera sync tests." |
 | **Exposure** | Mains: 50 Hz / 60 Hz / Off, segmented, showing the mains in use. Disabled only while live; under a hub's production a change holds for this camera until the hub sends a different production (last write wins). Left out when the camera has no mains control | "The shutter follows the mains frequency so mains-lit light does not flicker. Off outdoors, where the shutter is free." Under a hub production: "The control hub sets this for all cameras; a change here applies to this camera until the hub changes it." Live: "Stop the stream to change." |
-| **Orientation** | Auto / Landscape / Portrait, segmented (where the app can stream portrait); Picture: lens, size and frame rate | "Auto follows how the phone is held." While a change waits: "The stream keeps its geometry while live; the new setting applies when it stops." |
+| **Orientation** | Auto / Landscape / Portrait, segmented (where the app can stream portrait) | "Auto follows how the phone is held." While a change waits: "The stream keeps its geometry while live; the new setting applies when it stops." |
 | **Clock** | Health (dot and word), Synchronised, Estimated error, Maximum error, Reference ("name (address)"), Stratum, Sources reachable ("3 of 4"), then the findings as small text; "Clock not running" without a clock | "The phone's own NTP-disciplined clock, used to timestamp frames." |
 | **About** | App version ("0.2.0 (12)"), Camera name, Model, the OS and its version ("iOS", "Android"), Stream id, Device key (first 16 hex characters in groups of 4, monospaced; the hub's camera page shows the same) | None |
 

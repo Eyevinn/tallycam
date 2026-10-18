@@ -26,7 +26,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
@@ -47,8 +46,8 @@ private val HUB_CYAN = Color(0xFF64D2FF)
  * focus. It is also where the operator goes to change them: ISO, shutter
  * and EV open exposure, the white balance colour, AF or F focus, the format
  * Settings (docs/UI_DESIGN.md, "Values"). A value whose group is locked or
- * manual is yellow, auto is white; the group the adjust control has is
- * underlined. An exposure warning colours ISO and follows it ("ISO 100
+ * manual is yellow, auto is white; the groups the side controls run are
+ * underlined in their colours. An exposure warning colours ISO and follows it ("ISO 100
  * DARK", "CLIP"). Follows
  * the values the hub sets too, and a value the hub just changed flashes
  * cyan for a second. On a narrow screen focus goes first, then
@@ -58,7 +57,7 @@ private val HUB_CYAN = Color(0xFF64D2FF)
  * what auto found: "AWB" unless a temperature is set.
  */
 @Composable
-fun CameraValuesRow(model: AppModel, selection: String?, onSelect: (String) -> Unit, onFormat: () -> Unit,
+fun CameraValuesRow(model: AppModel, onSides: Collection<String>, onSelect: (String) -> Unit, onFormat: () -> Unit,
                     modifier: Modifier = Modifier) {
     val items = items(model)
     val descriptors = model.shading.descriptors
@@ -80,7 +79,7 @@ fun CameraValuesRow(model: AppModel, selection: String?, onSelect: (String) -> U
         DroppingRow(drop) {
             items.forEachIndexed { index, item ->
                 val enabled = item.group == null || modeKey(item.group) in descriptors
-                ValueButton(item, separator = index > 0, selected = item.group != null && item.group == selection,
+                ValueButton(item, separator = index > 0, selected = item.group != null && item.group in onSides,
                             enabled = enabled, flash = item.ids.any { it in flashing }) {
                     if (item.group == null) onFormat() else onSelect(item.group)
                 }
@@ -108,7 +107,7 @@ private fun ValueButton(item: Item, separator: Boolean, selected: Boolean, enabl
             contentAlignment = Alignment.Center,
         ) {
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(item.text, color = tone, fontSize = 14.sp, fontFamily = FontFamily.Monospace,
+                Text(item.text, color = tone, fontSize = 14.sp, style = Chrome.tabular,
                      fontWeight = FontWeight.SemiBold, maxLines = 1, softWrap = false)
                 item.flag?.let {
                     Text(it, color = tone, fontSize = 14.sp, fontWeight = FontWeight.Black, maxLines = 1, softWrap = false)
@@ -116,7 +115,7 @@ private fun ValueButton(item: Item, separator: Boolean, selected: Boolean, enabl
             }
             if (selected) {
                 Box(Modifier.align(Alignment.BottomCenter).padding(bottom = 4.dp).width(24.dp).height(2.dp)
-                        .background(Color.White, CircleShape))
+                        .background(Chrome.groupColor(item.group ?: ""), CircleShape))
             }
         }
     }

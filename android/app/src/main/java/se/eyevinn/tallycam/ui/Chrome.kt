@@ -13,6 +13,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -42,9 +43,27 @@ object Chrome {
     val rocker = 180.dp
     /** The live button. */
     val liveButton = 76.dp
+    /** The value label under the adjust rocker. */
+    val valueHeight = 28.dp
+    /** A rocker touch that moves less than this is a tap (as iOS's 8 pt). */
+    val tapSlop = 8.dp
 
     /** Padding inside the safe area so chrome clears the tally border on edges without an inset. */
     fun edge(inset: Dp): Dp = maxOf(minEdge, tallyClearance - inset)
+
+    /** Values: tabular digits in the default face (iOS `monospacedDigit`). */
+    val tabular = TextStyle(fontFeatureSettings = "tnum")
+
+    /**
+     * A side-control group's colour: the rocker's outline and knob ring, the
+     * chosen selector segment, the underline of its values; never value text.
+     */
+    fun groupColor(group: String): Color = when (group) {
+        "zoom" -> Color(0xFF3B82F6)
+        "exposure" -> Color(0xFFEF4444)
+        "white_balance" -> Color(0xFFA855F7)
+        else -> Color(0xFF22C55E)
+    }
 
     val yellow = Color(0xFFFFD60A)
     val orange = Color(0xFFFF9F0A)

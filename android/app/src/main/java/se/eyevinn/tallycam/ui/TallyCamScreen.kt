@@ -9,7 +9,6 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -29,6 +28,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -64,7 +64,6 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -76,9 +75,14 @@ import androidx.compose.ui.viewinterop.AndroidView
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.foundation.layout.offset
+import kotlin.math.roundToInt
 import se.eyevinn.tallycam.AppModel
 import se.eyevinn.tallycam.control.ProvisioningLink
-import se.eyevinn.tallycam.control.Shading
 import se.eyevinn.tallycam.media.LiveStream
 
 /**
@@ -124,17 +128,32 @@ private fun BoxScope.ShootingScreen(model: AppModel, onScan: () -> Unit) {
     var connectCardDismissed by remember { mutableStateOf(false) }
     // Touches blocked except the slide to unlock; not persisted.
     var screenLocked by remember { mutableStateOf(false) }
-    // The group the adjust control at the right edge has: exposure until
-    // another is picked, remembered across launches.
+    // What each side control runs (docs/UI_DESIGN.md, "Side control"):
+    // zoom on the left and exposure on the right until changed, each side
+    // remembered across launches.
     val prefs = remember { context.getSharedPreferences("chrome", android.content.Context.MODE_PRIVATE) }
-    var chosenGroup by remember { mutableStateOf(prefs.getString("group", null) ?: "exposure") }
-    fun choose(group: String) {
-        chosenGroup = group
-        prefs.edit().putString("group", group).apply()
+    var leftChoice by remember { mutableStateOf(prefs.getString("left", null) ?: "zoom") }
+    var rightChoice by remember { mutableStateOf(prefs.getString("right", null) ?: "exposure") }
+    // The groups this camera has, in the selector's order.
+    val groups = SIDE_GROUPS.filter {
+        if (it == "zoom") model.camera.zoomRange != null || model.camera.lenses.size > 1 else modeKey(it) in model.shading.descriptors
     }
-    // The chosen one where the camera has it, else the first it has.
-    val openGroup = Shading.MODE_CONTROLS.map { it.first }.filter { modeKey(it) in model.shading.descriptors }
-        .let { groups -> chosenGroup.takeIf { it in groups } ?: groups.firstOrNull() }
+    // The choice where the camera has it, else the first it has that the other side does not run.
+    val right = rightChoice.takeIf { it in groups } ?: groups.firstOrNull { it != leftChoice }
+    val left = leftChoice.takeIf { it in groups && it != right } ?: groups.firstOrNull { it != right }
+    fun place(leftGroup: String?, rightGroup: String?) {
+        leftGroup?.let { leftChoice = it }
+        rightGroup?.let { rightChoice = it }
+        prefs.edit().putString("left", leftChoice).putString("right", rightChoice).apply()
+    }
+    /** A selector tap on one side: the other side's group swaps over. */
+    fun choose(leftSide: Boolean, group: String) {
+        if (leftSide) place(group, if (group == right) left else null) else place(if (group == left) right else null, group)
+    }
+    /** A tap in the values row: the group goes to the right unless a side runs it already. */
+    fun chooseFromValues(group: String) {
+        if (group != left && group != right) place(null, group)
+    }
     var toast by remember { mutableStateOf<String?>(null) }
     var toastSerial by remember { mutableIntStateOf(0) }
     fun showToast(text: String) {
@@ -192,20 +211,19 @@ private fun BoxScope.ShootingScreen(model: AppModel, onScan: () -> Unit) {
         val nameInline = maxWidth >= 560.dp
         val rows = if (nameInline) 2 else 3
         val top = Chrome.rowHeight * rows + Chrome.rowGap * (rows - 1)
-        // The rockers' length: the full one, or what a landscape phone has
-        // between the top rows and the bottom row (both the same).
-        val rocker = if (!landscape) Chrome.rocker
-                     else (maxHeight - top - Chrome.zoneGap * 2 - Chrome.liveButton).coerceIn(100.dp, Chrome.rocker)
-        // The height the adjust control has for its parts stacked over the rocker.
-        val edgeHeight = maxHeight - top - Chrome.zoneGap * 2 - Chrome.liveButton -
-            (if (landscape) 0.dp else Chrome.control + Chrome.zoneGap * 2)
-
+        // Both side controls the same size: segments 30 dp where the screen
+        // allows; on a landscape phone what is left between the top rows and
+        // the bottom row, less the value label under the rocker.
+        val lenses = model.camera.lenses.size.takeIf { it > 1 } ?: 0
+        val sideHeight = if (!landscape) 400.dp
+                         else maxHeight - top - Chrome.zoneGap * 2 - Chrome.liveButton - Chrome.gap - Chrome.valueHeight
+        val metrics = SideMetrics.fitting(sideHeight, lenses)
         val nameChip = @Composable { TallyChip(model.tally, model.displayName) }
-        val zoom = @Composable {
-            ZoomColumn(model, rocker, edgeHeight, screenLocked, Modifier.touchable(screenLocked))
-        }
-        val adjust = @Composable {
-            openGroup?.let { AdjustControl(model, it, rocker, edgeHeight, screenLocked, Modifier.touchable(screenLocked)) }
+        val side = @Composable { leftSide: Boolean ->
+            (if (leftSide) left else right)?.let { group ->
+                SideControl(model, group, groups, leading = leftSide, metrics = metrics, locked = screenLocked,
+                            onSelect = { choose(leftSide, it) }, modifier = Modifier.touchable(screenLocked))
+            }
         }
         val messages = @Composable { MessageSlot(model.banner, toast) }
         val unlock = @Composable { if (screenLocked) SlideToUnlock({ screenLocked = false }) }
@@ -215,7 +233,7 @@ private fun BoxScope.ShootingScreen(model: AppModel, onScan: () -> Unit) {
                    verticalArrangement = Arrangement.spacedBy(Chrome.rowGap)) {
                 StatusStrip(model, if (nameInline) nameChip else null) { showSettings = true }
                 if (!nameInline) nameChip()
-                CameraValuesRow(model, openGroup, ::choose, onFormat = { showSettings = true })
+                CameraValuesRow(model, listOfNotNull(left, right), ::chooseFromValues, onFormat = { showSettings = true })
             }
             if (landscape) {
                 // Left: zoom over the tools. Centre: messages, the slide to
@@ -224,7 +242,7 @@ private fun BoxScope.ShootingScreen(model: AppModel, onScan: () -> Unit) {
                 // edge columns centre on the same line.
                 Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(Chrome.gap)) {
                     Column(Modifier.fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(Chrome.zoneGap)) {
-                        Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) { zoom() }
+                        Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) { side(true) }
                         Box(Modifier.height(Chrome.liveButton).touchable(screenLocked), contentAlignment = Alignment.BottomStart) {
                             tools()
                         }
@@ -240,15 +258,15 @@ private fun BoxScope.ShootingScreen(model: AppModel, onScan: () -> Unit) {
                     Column(Modifier.fillMaxHeight(), horizontalAlignment = Alignment.End,
                            verticalArrangement = Arrangement.spacedBy(Chrome.zoneGap)) {
                         // Keeps the live button in the corner while nothing is being adjusted.
-                        Box(Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) { adjust() }
+                        Box(Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) { side(false) }
                         Box(Modifier.touchable(screenLocked)) { liveButton(true) }
                     }
                 }
             } else {
                 // Mirror images, the two rockers level; messages between them.
                 Box(Modifier.weight(1f).fillMaxWidth()) {
-                    Box(Modifier.align(Alignment.CenterStart)) { zoom() }
-                    Box(Modifier.align(Alignment.CenterEnd)) { adjust() }
+                    Box(Modifier.align(Alignment.CenterStart)) { side(true) }
+                    Box(Modifier.align(Alignment.CenterEnd)) { side(false) }
                     Box(Modifier.align(Alignment.TopCenter).padding(horizontal = Chrome.control + Chrome.gap)) { messages() }
                 }
                 Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) { unlock() }
@@ -266,30 +284,6 @@ private fun BoxScope.ShootingScreen(model: AppModel, onScan: () -> Unit) {
                     Modifier.align(Alignment.Center).padding(24.dp))
     }
     if (showSettings) SettingsScreen(model, onScan = { showSettings = false; onScan() }) { showSettings = false }
-}
-
-/**
- * Lens buttons above the zoom rocker; beside it, on the inner side, where
- * the screen is too low for both. The rocker hides while the screen is locked.
- */
-@Composable
-private fun ZoomColumn(model: AppModel, rocker: Dp, height: Dp, locked: Boolean, modifier: Modifier) {
-    val lenses = model.camera.lenses.size.takeIf { it > 1 } ?: 0
-    // Hidden while the screen is locked.
-    val hasZoom = model.camera.zoomRange != null && !locked
-    val lensHeight = Chrome.control * lenses + 6.dp * (lenses - 1).coerceAtLeast(0)
-    val rockerView = @Composable { if (hasZoom) ZoomRocker(model, rocker) }
-    if (lenses == 0 || lensHeight + Chrome.gap + rocker <= height) {
-        Column(modifier, verticalArrangement = Arrangement.spacedBy(Chrome.gap)) {
-            LensButtons(model)
-            rockerView()
-        }
-    } else {
-        Row(modifier, horizontalArrangement = Arrangement.spacedBy(Chrome.gap), verticalAlignment = Alignment.CenterVertically) {
-            rockerView()
-            LensButtons(model)
-        }
-    }
 }
 
 /** Operator messages and toasts, centred under the values row, over the picture only. */
@@ -312,28 +306,102 @@ private fun MessageSlot(banner: String?, toast: String?) {
 
 @Composable
 private fun Preview(model: AppModel, aids: Aids, modifier: Modifier) {
+    // Where the last tap or hold was, for the focus square (as iOS).
+    var mark by remember { mutableStateOf<FocusMark?>(null) }
     Box(modifier, contentAlignment = Alignment.Center) {
         Box(Modifier.fillMaxSize().aspectRatio(16f / 9f, matchHeightConstraintsFirst = true)) {
-            PreviewView(model, Modifier.fillMaxSize())
+            PreviewView(model, Modifier.fillMaxSize()) { mark = it }
             // Over the preview only, never in the stream.
             if (aids.peaking) PeakingOverlay(model)
             FrameGuides(aids)
             if (aids.horizon) HorizonLevel()
+            mark?.let { FocusSquare(it) { if (mark === it) mark = null } }
         }
     }
 }
 
+/** A tap (focus there) or a hold (AE/AF lock there) on the picture, in pixels of the preview. */
+private class FocusMark(val at: Offset, val lock: String?)
+
+/**
+ * The yellow square where the picture was touched: 72 dp, springing in
+ * from 1.35×, gone after 1.2 s; a hold labels it "AE/AF LOCK" (or "AF LOCK"
+ * where exposure is not held), as on iOS.
+ */
 @Composable
-private fun PreviewView(model: AppModel, modifier: Modifier) {
+private fun FocusSquare(mark: FocusMark, onDone: () -> Unit) {
+    val scale = remember(mark) { Animatable(1.35f) }
+    LaunchedEffect(mark) {
+        scale.animateTo(1f, androidx.compose.animation.core.spring(dampingRatio = 0.6f))
+        delay(1200)
+        onDone()
+    }
+    val side = 72.dp
+    Box(Modifier.layout { measurable, constraints ->
+        val p = measurable.measure(Constraints.fixed(side.roundToPx(), side.roundToPx()))
+        layout(constraints.maxWidth, constraints.maxHeight) {
+            p.place((mark.at.x - p.width / 2).roundToInt(), (mark.at.y - p.height / 2).roundToInt())
+        }
+    }) {
+        Box(Modifier.fillMaxSize().graphicsLayer { scaleX = scale.value; scaleY = scale.value }
+                .border(1.5.dp, Chrome.yellow, RoundedCornerShape(2.dp)))
+        mark.lock?.let {
+            Text(it, color = Color.Black, fontSize = 10.sp, fontWeight = FontWeight.Bold, softWrap = false,
+                 modifier = Modifier.align(Alignment.TopCenter).offset(y = (-20).dp)
+                     .background(Chrome.yellow, RoundedCornerShape(3.dp)).padding(horizontal = 4.dp, vertical = 1.dp))
+        }
+    }
+}
+
+/**
+ * The camera's picture and its gestures, as on iOS: a tap focuses and
+ * exposes there (and releases an AE/AF lock); a touch held 0.55 s locks
+ * focus and exposure there; a pinch zooms from where it started.
+ */
+@Composable
+private fun PreviewView(model: AppModel, modifier: Modifier, onMark: (FocusMark) -> Unit) {
+    val haptics = rememberHaptics()
+    val currentModel by androidx.compose.runtime.rememberUpdatedState(model)
     AndroidView(
-        // Tap to focus and expose there, as on iOS (the `focus_at` command).
         modifier = modifier
             .pointerInput(Unit) {
-                detectTapGestures(
-                    onTap = { p -> model.focusAt(p.x / size.width, p.y / size.height) },
-                    // Touch and hold: AE/AF lock there; a tap releases it (docs/UI_DESIGN.md).
-                    onLongPress = { p -> model.focusLockAt(p.x / size.width, p.y / size.height) },
-                )
+                val slop = 12.dp.toPx()
+                awaitEachGesture {
+                    val down = awaitFirstDown()
+                    // What the touch turns into before the hold time is up.
+                    var outcome = "hold"
+                    withTimeoutOrNull(HOLD_MS) {
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            if (event.changes.count { it.pressed } >= 2) { outcome = "pinch"; break }
+                            val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                            if (!change.pressed) { outcome = "tap"; break }
+                            if ((change.position - down.position).getDistance() > slop) { outcome = "move"; break }
+                        }
+                    }
+                    val m = currentModel
+                    val x = down.position.x / size.width
+                    val y = down.position.y / size.height
+                    when (outcome) {
+                        "tap" -> {
+                            m.focusAt(x, y)
+                            onMark(FocusMark(down.position, null))
+                        }
+                        "hold" -> {
+                            val exposure = m.shading.descriptors.containsKey("exposure_mode") &&
+                                m.shading.values.optString("exposure_mode") == "auto"
+                            m.focusLockAt(x, y)
+                            haptics.step()
+                            onMark(FocusMark(down.position, if (exposure) "AE/AF LOCK" else "AF LOCK"))
+                        }
+                        "pinch" -> pinchZoom(m)
+                    }
+                    // The rest of the gesture is spent.
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        if (event.changes.none { it.pressed }) break
+                    }
+                }
             },
         factory = { context ->
             TextureView(context).apply {
@@ -415,7 +483,7 @@ private fun StatusStrip(model: AppModel, nameChip: (@Composable () -> Unit)?, on
     val dim = Color.White.copy(alpha = 0.85f)
     @Composable
     fun label(text: String, color: Color = dim, weight: FontWeight = FontWeight.Medium) =
-        Text(text, color = color, fontSize = 12.sp, fontFamily = FontFamily.Monospace, fontWeight = weight, maxLines = 1,
+        Text(text, color = color, fontSize = 12.sp, style = Chrome.tabular, fontWeight = weight, maxLines = 1,
              softWrap = false)
 
     Row(
@@ -575,6 +643,34 @@ private fun LiveButton(state: LiveStream.State, hintAbove: Boolean, onStart: () 
 }
 
 private const val HOLD_TO_STOP_MS = 600L
+/** A touch on the picture held this long is an AE/AF lock (as iOS). */
+private const val HOLD_MS = 550L
+
+/**
+ * A pinch on the picture: the zoom at its start times the spread, sent at
+ * most every 50 ms and rounded to 0.01 (as iOS).
+ */
+private suspend fun androidx.compose.ui.input.pointer.AwaitPointerEventScope.pinchZoom(model: AppModel) {
+    val d = model.shading.descriptors["zoom"] ?: return
+    val low = d.optDouble("min", 1.0)
+    val high = d.optDouble("max", 1.0)
+    val start = model.shading.values.optDouble("zoom", 1.0)
+    var startSpan = 0f
+    var sentAt = 0L
+    while (true) {
+        val event = awaitPointerEvent()
+        val pressed = event.changes.filter { it.pressed }
+        if (pressed.size < 2) break
+        val span = (pressed[0].position - pressed[1].position).getDistance()
+        if (startSpan == 0f) { startSpan = span; continue }
+        pressed.forEach { it.consume() }
+        val now = event.changes.first().uptimeMillis
+        if (now - sentAt < 50) continue
+        sentAt = now
+        val zoom = (Math.round(start * span / startSpan * 100) / 100.0).coerceIn(low, high)
+        model.localSet(org.json.JSONObject().put("zoom", zoom), quiet = true)
+    }
+}
 
 /** Shown while no control hub is set up, until dismissed; the same instructions stay in Settings. */
 @Composable

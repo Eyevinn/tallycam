@@ -174,8 +174,10 @@ final class TorchProbe: @unchecked Sendable {
         if c.stabilization != .off {
             warnings.append("stabilization is on and moves lines in time; turn it off")
         }
-        // Auto ISO would chase the torch.
+        // Auto ISO would chase the torch. Given back at the end only if
+        // nobody chose an exposure mode (or another lens) meanwhile.
         let autoIso = c.autoIso
+        let modeChanges = c.exposureModeChanges
         c.autoIso = false
         let context = [
             "model=\(CaptureCalibration.model)",
@@ -240,7 +242,9 @@ final class TorchProbe: @unchecked Sendable {
         }
         let end = start + Double(settings.cycles) * period + 1.0
         c.queue.asyncAfter(deadline: end) { [self] in
-            c.autoIso = autoIso
+            if c.exposureModeChanges == modeChanges, c.device === device {
+                c.autoIso = autoIso
+            }
             let (recorded, times) = lock.withLock {
                 recording = false
                 defer {

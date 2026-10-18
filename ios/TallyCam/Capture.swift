@@ -1,5 +1,6 @@
 @preconcurrency import AVFoundation
 import os
+import UIKit
 
 private let log = Logger(subsystem: "se.eyevinn.tallycam", category: "capture")
 
@@ -138,10 +139,14 @@ final class Capture: ObservableObject {
 
     /// Fixes the capture resolution for a stream (a `resolution` change
     /// waits until `unlockFormat`) and returns the active format. Waits for
-    /// the session queue, so the size is the one frames arrive in.
-    func lockFormat() -> CaptureFormat {
+    /// the session queue (without blocking the main thread), so the size is
+    /// the one frames arrive in.
+    func lockFormat() async -> CaptureFormat {
         let controls = controls
-        let locked = sessionQueue.sync { controls.lockFormat() }
+        let queue = sessionQueue
+        let locked = await withCheckedContinuation { continuation in
+            queue.async { continuation.resume(returning: controls.lockFormat()) }
+        }
         if let locked, locked != format {
             format = locked
             updateStatus()
@@ -275,6 +280,24 @@ final class Capture: ObservableObject {
                 log.info("Camera interruption ended")
                 self?.updateStatus()
             }
+        })
+        // No frames, so no polling, while interrupted or in the background.
+        let controls = controls
+        observers.append(center.addObserver(forName: AVCaptureSession.wasInterruptedNotification,
+                                            object: session, queue: nil) { _ in
+            controls.pausePolling("interrupted", true)
+        })
+        observers.append(center.addObserver(forName: AVCaptureSession.interruptionEndedNotification,
+                                            object: session, queue: nil) { _ in
+            controls.pausePolling("interrupted", false)
+        })
+        observers.append(center.addObserver(forName: UIApplication.didEnterBackgroundNotification,
+                                            object: nil, queue: nil) { _ in
+            controls.pausePolling("background", true)
+        })
+        observers.append(center.addObserver(forName: UIApplication.willEnterForegroundNotification,
+                                            object: nil, queue: nil) { _ in
+            controls.pausePolling("background", false)
         })
         observers.append(center.addObserver(forName: AVCaptureSession.runtimeErrorNotification,
                                             object: session, queue: .main)

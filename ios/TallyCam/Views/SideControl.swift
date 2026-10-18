@@ -89,8 +89,20 @@ struct SideControl: View {
         return max(0, min(wanted, zone.height - height))
     }
 
+    /// The groups the camera has (from its descriptors; they rarely change,
+    /// so they are followed apart from the 4 Hz values). Empty before the
+    /// camera reports.
+    @State private var available: [SideGroup] = []
+
+    /// The choices as shown: a group the camera lacks gives way to one it
+    /// has (`Sides.resolved`); the stored choice is kept for a camera that
+    /// has it.
+    private var shown: Sides {
+        available.isEmpty ? sides : sides.resolved(available: available)
+    }
+
     private var group: SideGroup {
-        sides.group(side) ?? (side == .left ? .zoom : .exposure)
+        shown.group(side) ?? (side == .left ? .zoom : .exposure)
     }
 
     var body: some View {
@@ -116,6 +128,13 @@ struct SideControl: View {
         .offset(y: top)
         .frame(maxHeight: .infinity, alignment: .top)
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { zone = $0 }
+        .onReceive(shading.$descriptors) { descriptors in
+            let ids = Set(descriptors.map(\.id))
+            let next = SideGroup.allCases.filter { ids.contains($0.shading?.modeKey ?? "zoom") }
+            if next != available {
+                available = next
+            }
+        }
     }
 
     /// Hidden: the control keeps its place (nothing moves) but is not
@@ -169,10 +188,11 @@ struct SideControl: View {
 
     private var selector: some View {
         CellGrid(cells: SideGroup.allCases.map {
-            .init(title: $0.caption, on: $0 == group, fill: $0.color, text: .white)
+            .init(title: $0.caption, on: $0 == group, fill: $0.color, text: .white,
+                  enabled: available.isEmpty || available.contains($0), accessibilityTitle: $0.title)
         }, columns: 2, fontSize: 13)
         { index in
-            sides = sides.choose(side, SideGroup.allCases[index])
+            sides = shown.choose(side, SideGroup.allCases[index])
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(side == .left ? "Left" : "Right") control: \(group.title)")
@@ -278,6 +298,10 @@ struct CellGrid: View {
         /// The current cell's fill and text.
         var fill: Color = .white
         var text: Color = .black
+        /// Dimmed and still where false (a group the camera lacks).
+        var enabled = true
+        /// For VoiceOver, when the title is an abbreviation.
+        var accessibilityTitle: String?
     }
 
     let cells: [Cell]
@@ -292,7 +316,11 @@ struct CellGrid: View {
                 HStack(spacing: SideMetrics.cellGap) {
                     ForEach(row, id: \.self) { index in
                         cell(cells[index])
-                            .onTapGesture { onTap(index) }
+                            .onTapGesture {
+                                if cells[index].enabled {
+                                    onTap(index)
+                                }
+                            }
                     }
                 }
             }
@@ -311,9 +339,11 @@ struct CellGrid: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(cell.on ? cell.fill.opacity(0.7) : .clear, in: RoundedRectangle(cornerRadius: 8))
             .contentShape(RoundedRectangle(cornerRadius: 8))
+            .opacity(cell.enabled ? 1 : 0.35)
             .accessibilityElement()
-            .accessibilityLabel(cell.title)
+            .accessibilityLabel(cell.accessibilityTitle ?? cell.title)
             .accessibilityAddTraits(cell.on ? [.isButton, .isSelected] : .isButton)
+            .accessibilityRemoveTraits(cell.enabled ? [] : .isButton)
     }
 }
 

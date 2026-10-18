@@ -177,7 +177,10 @@ extension CameraControls {
                 }
                 try c.setGenlock(on)
                 return nil
-            }
+            },
+            // Headroom may pick another format: ISO, zoom and stabilization
+            // ranges can change.
+            reshapes: true
         ),
         CameraControl(
             // Calibration: where this model's frames should land after each
@@ -284,6 +287,7 @@ extension CameraControls {
                 } else if id == "locked" {
                     id = "manual"
                 }
+                c.noteExposureModeChange()
                 return try c.configure { device in
                     switch id {
                     case "auto":
@@ -423,17 +427,13 @@ extension CameraControls {
                 guard hz == 50 || hz == 60 || hz == 0 else {
                     throw ControlError("expected 50, 60 or 0 (off)")
                 }
-                guard Int(hz) != c.mainsHz else {
-                    return nil
-                }
-                guard !c.formatLocked else {
+                guard Int(hz) == c.mainsHz || !c.formatLocked else {
                     throw ControlError("not while live: stop the stream to change it")
                 }
                 // Never locked by the hub: the last write wins, until the
-                // hub's production changes (then its mains applies again).
-                c.mainsOverride = Int(hz)
-                c.localMainsHz = Int(hz)
-                c.applyProductionShutter()
+                // hub's production changes. Recorded even when it equals
+                // what applies (see `Mains`).
+                c.setMains(Int(hz))
                 return nil
             }
         ),

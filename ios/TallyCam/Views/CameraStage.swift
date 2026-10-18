@@ -12,6 +12,9 @@ struct CameraStage: View {
     /// Not observed: the preview must not rebuild with every camera value;
     /// it follows only the focus mode (below).
     let shading: Shading
+    /// Settings or the screen lock covers the picture: the horizon level
+    /// (Core Motion) stops.
+    var motionPaused = false
 
     private static let longPress: TimeInterval = 0.55
     /// A touch that moves further than this is not a tap or a long press.
@@ -114,7 +117,7 @@ struct CameraStage: View {
         if grid || safeAreas || centreCuts {
             FrameGuides(rect: rect, grid: grid, safeAreas: safeAreas, centreCuts: centreCuts)
         }
-        if horizon {
+        if horizon, !motionPaused {
             HorizonLevel(rect: rect)
         }
     }

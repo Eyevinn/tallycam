@@ -87,15 +87,12 @@ final class CameraControls: @unchecked Sendable {
     var autoIsoBias: Float = 0 {
         didSet { autoIsoLoop.setBias(ev: Double(autoIsoBias)) }
     }
-    /// The phone's own mains frequency (50 or 60 Hz, 0 for none), from
-    /// Settings: its own production while no hub sends one.
-    var localMainsHz: Int {
-        didSet { UserDefaults.standard.set(localMainsHz, forKey: Self.mainsKey) }
-    }
-    /// Mains set on the phone (Settings or `mains_hz`) since the hub's last
-    /// production change: the last write wins, and a new production clears
-    /// it. Never saved.
-    var mainsOverride: Int?
+    /// The mains frequency in effect and where it comes from (`Mains`):
+    /// the phone's own (saved), the hub production's, a change since.
+    private(set) var mains: Mains
+    /// The `apply` being run came from the hub (`mains_hz` from the hub is
+    /// not saved as the phone's own).
+    private var applyingFromHub = false
     /// The hub's production (docs/SHADING.md, "Shutter"); nil without a hub,
     /// when the phone is its own production: one mains period, or free when
     /// its mains is off. Never saved.
@@ -129,6 +126,18 @@ final class CameraControls: @unchecked Sendable {
     private var exposureSerial = 0
     private var descriptors: [ControlDescriptor] = []
     private var pollTimer: DispatchSourceTimer?
+    /// Bumped on every `exposure_mode` set and lens switch: the torch probe
+    /// gives auto ISO back only if nobody changed the mode meanwhile.
+    private(set) var exposureModeChanges = 0
+
+    func noteExposureModeChange() {
+        exposureModeChanges += 1
+    }
+    /// `formatInfos` of the device it was built for.
+    private var formatInfoCache: (device: AVCaptureDevice, infos: [CameraFormatInfo])?
+    /// Why the poll is paused (`pausePolling`), and whether its timer is.
+    private var pollPauses: Set<String> = []
+    private var pollSuspended = false
     /// `CameraButtonControls` (iOS 18), the Camera Control button's sliders.
     private var cameraButton: AnyObject?
     /// The operator's resolution; the lens may not have it (`attach`,
@@ -149,7 +158,7 @@ final class CameraControls: @unchecked Sendable {
         let storedMains = UserDefaults.standard.object(forKey: Self.mainsKey) as? Int
         let mains = storedMains.flatMap { [0, 50, 60].contains($0) ? $0 : nil }
             ?? Int(mainsHzForRegion(region: Locale.current.region?.identifier ?? ""))
-        localMainsHz = mains
+        self.mains = Mains(own: mains)
         autoIsoLoop = AutoIsoLoop(mainsHz: mains)
         genlock.apply = { [weak self] durationNs, serial in
             guard let self else {
@@ -291,7 +300,30 @@ final class CameraControls: @unchecked Sendable {
     /// set on the phone since the production last changed, else the hub's
     /// production's while one applies, else the phone's own.
     var mainsHz: Int {
-        mainsOverride ?? serverProduction?.mainsHz ?? localMainsHz
+        mains.effective
+    }
+
+    /// A `mains_hz` set (`Mains.set`): saves the phone's own value for a
+    /// change made on the phone; moves the shutter if what applies changed.
+    func setMains(_ hz: Int) {
+        let before = mainsHz
+        if mains.set(hz, fromHub: applyingFromHub) {
+            UserDefaults.standard.set(hz, forKey: Self.mainsKey)
+        }
+        if mainsHz != before {
+            applyProductionShutter()
+        }
+    }
+
+    /// No hub any more: the phone's own mains applies again.
+    func leaveHub() {
+        queue.async { [self] in
+            let before = mainsHz
+            mains.leaveHub()
+            if mainsHz != before {
+                applyProductionShutter()
+            }
+        }
     }
 
     /// What the shutter follows now: free when the production says so, or
@@ -369,10 +401,8 @@ final class CameraControls: @unchecked Sendable {
         }
         pendingProduction = nil
         let before = (effectiveShutter, mainsHz)
-        if next != serverProduction {
-            // A new production: its mains applies again.
-            mainsOverride = nil
-        }
+        // A new production's mains applies again over a change held since.
+        mains.production(next?.mainsHz, changed: next != serverProduction)
         serverProduction = next
         guard (effectiveShutter, mainsHz) != before else {
             // Every reconnect sends the production again: no exposure jump
@@ -399,7 +429,21 @@ final class CameraControls: @unchecked Sendable {
     /// exposure overrides the frame duration, so genlock moves it to auto ISO
     /// at the shutter auto exposure had chosen.
     func setGenlock(_ on: Bool) throws {
+        let was = genlock.isEnabled
+        guard on != was else {
+            return
+        }
+        // Format selection reads the switch (headroom), so it is set first;
+        // a format that cannot be applied turns it back, all or nothing.
         genlock.setEnabled(on)
+        do {
+            try applyGenlockFormat()
+        } catch {
+            genlock.setEnabled(was)
+            try? applyGenlockFormat()
+            configureGenlock()
+            throw error
+        }
         if on, let device, device.exposureMode == .continuousAutoExposure || device.exposureMode == .autoExpose {
             try configure { enterAutoIso($0) }
             onUpdate?(.log(level: "info", message: String(
@@ -409,13 +453,18 @@ final class CameraControls: @unchecked Sendable {
                 mainsHz == 0 ? "" : ", rounded flicker-free for \(mainsHz) Hz mains"
             )))
         }
-        if let frameRate = currentFrameRate {
-            session.beginConfiguration()
-            defer { session.commitConfiguration() }
-            try configure { try self.applyFrameRate(frameRate, on: $0) }
-            revalidateStabilization()
-        }
         configureGenlock()
+    }
+
+    /// The format for the frame rate with or without headroom.
+    private func applyGenlockFormat() throws {
+        guard let frameRate = currentFrameRate else {
+            return
+        }
+        session.beginConfiguration()
+        defer { session.commitConfiguration() }
+        try configure { try self.applyFrameRate(frameRate, on: $0) }
+        revalidateStabilization()
     }
 
     #if DEBUG
@@ -520,7 +569,34 @@ final class CameraControls: @unchecked Sendable {
             }
         }
         pollTimer = timer
-        timer.resume()
+        if pollPauses.isEmpty {
+            timer.resume()
+        } else {
+            pollSuspended = true
+        }
+    }
+
+    /// Pauses the 8 Hz poll (auto ISO and the values) while the camera
+    /// delivers nothing: an interruption or the app in the background.
+    /// Resumed when no reason is left.
+    func pausePolling(_ reason: String, _ paused: Bool) {
+        queue.async { [self] in
+            if paused {
+                pollPauses.insert(reason)
+            } else {
+                pollPauses.remove(reason)
+            }
+            guard let pollTimer else {
+                return
+            }
+            if !pollPauses.isEmpty, !pollSuspended {
+                pollTimer.suspend()
+                pollSuspended = true
+            } else if pollPauses.isEmpty, pollSuspended {
+                pollTimer.resume()
+                pollSuspended = false
+            }
+        }
     }
 
     func values() -> [String: JSONValue] {
@@ -591,8 +667,18 @@ final class CameraControls: @unchecked Sendable {
     }
 
     /// The formats of the active lens, as format selection sees them.
+    /// Built once per device (its format list does not change): `values()`
+    /// reads it several times a poll.
     var formatInfos: [CameraFormatInfo] {
-        device.map { $0.formats.map(Self.info) } ?? []
+        guard let device else {
+            return []
+        }
+        if let cached = formatInfoCache, cached.device === device {
+            return cached.infos
+        }
+        let infos = device.formats.map(Self.info)
+        formatInfoCache = (device, infos)
+        return infos
     }
 
     var availableResolutions: [VideoResolution] {
@@ -740,6 +826,7 @@ final class CameraControls: @unchecked Sendable {
         autoIsoInFlight = false
         exposureInFlight = nil
         exposureSerial += 1
+        exposureModeChanges += 1
         genlock.restart()
         var warning: String?
         do {
@@ -831,8 +918,12 @@ final class CameraControls: @unchecked Sendable {
     /// them) and completes with one error message per failed or clamped value.
     /// Sets controls; `completion` gets the errors and warnings, and the ids
     /// that took effect (clamped included, refused not).
-    func apply(_ values: [String: JSONValue], completion: @escaping @Sendable ([String], Set<String>) -> Void) {
+    func apply(_ values: [String: JSONValue], fromHub: Bool = false,
+               completion: @escaping @Sendable ([String], Set<String>) -> Void)
+    {
         queue.async { [self] in
+            applyingFromHub = fromHub
+            defer { applyingFromHub = false }
             var errors: [String] = []
             var applied: Set<String> = []
             var reshaped = false

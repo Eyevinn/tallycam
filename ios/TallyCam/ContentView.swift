@@ -51,7 +51,8 @@ struct ContentView: View {
             let landscape = geometry.size.width > geometry.size.height
             let insets = geometry.safeAreaInsets
             ZStack {
-                CameraStage(capture: capture, remote: remote, shading: remote.shading)
+                CameraStage(capture: capture, remote: remote, shading: remote.shading,
+                            motionPaused: showSettings || screenLocked)
                 #if DEBUG
                     if previewBackdrop {
                         // A stand-in picture, so the translucent chrome shows.
@@ -542,6 +543,8 @@ struct ContentView: View {
                                   kind: modes(["auto", "manual"])),
                 ControlDescriptor(id: "focus_position", label: "Focus", group: "focus",
                                   kind: .range(min: 0, max: 1, step: 0.01)),
+                ControlDescriptor(id: "zoom", label: "Zoom", group: "lens",
+                                  kind: .range(min: 1, max: 10, step: 0.01, scale: "log", unit: "x")),
                 ControlDescriptor(id: "lens", label: "Lens", group: "lens",
                                   kind: .enumeration([ControlOption(value: .string("ultra_wide"), label: "Ultra wide 0.5×"),
                                                       ControlOption(value: .string("wide"), label: "Wide 1×"),

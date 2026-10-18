@@ -499,7 +499,7 @@ final class RemoteControl: ObservableObject {
             publishState()
             return
         }
-        capture.controls.apply(cameraSet) { [weak self] cameraErrors, applied in
+        capture.controls.apply(cameraSet, fromHub: true) { [weak self] cameraErrors, applied in
             Task { @MainActor in
                 // Only what took effect flashes in the values row.
                 self?.shading.hubSet(applied)
@@ -691,6 +691,7 @@ final class RemoteControl: ObservableObject {
     private func newProduction() {
         production = nil
         applyProduction()
+        capture?.controls.leaveHub()
     }
 
     /// Applies `production` to the camera (kept until the stream stops if

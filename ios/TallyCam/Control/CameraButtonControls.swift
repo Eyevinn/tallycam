@@ -16,6 +16,9 @@ final class CameraButtonControls: NSObject, AVCaptureSessionControlsDelegate, @u
     /// The button's overlay is up: the operator drives the sliders, so
     /// their values are not refreshed from the camera.
     private var active = false
+    /// The latest slider value not yet applied (`coalesce`).
+    private var pending: [String: JSONValue]?
+    private static let coalesceInterval = 0.06
 
     init(session: AVCaptureSession, queue: DispatchQueue, controls: CameraControls) {
         self.session = session
@@ -87,8 +90,8 @@ final class CameraButtonControls: NSObject, AVCaptureSessionControlsDelegate, @u
             }
             let slider = AVCaptureSlider("Exposure", symbolName: "plusminus.circle", in: low ... high, step: 0.1)
             slider.localizedValueFormat = "%@ EV"
-            slider.setActionQueue(queue) { value in
-                controls?.apply(["ev_bias": .number((Double(value) * 10).rounded() / 10)]) { _, _ in }
+            slider.setActionQueue(queue) { [weak self] value in
+                self?.coalesce(["ev_bias": .number((Double(value) * 10).rounded() / 10)], to: controls)
             }
             return (slider, low ... high)
         }
@@ -106,9 +109,26 @@ final class CameraButtonControls: NSObject, AVCaptureSessionControlsDelegate, @u
             if self?.exposureMode != "manual" {
                 values["exposure_mode"] = .string("manual")
             }
-            controls?.apply(values) { _, _ in }
+            self?.coalesce(values, to: controls)
         }
         return (slider, low ... high)
+    }
+
+    /// A turn of the Camera Control sends many values a second: the latest
+    /// goes out at most every `coalesceInterval` (session queue only).
+    private func coalesce(_ values: [String: JSONValue], to controls: CameraControls?) {
+        let scheduled = pending != nil
+        pending = values
+        guard !scheduled else {
+            return
+        }
+        queue.asyncAfter(deadline: .now() + Self.coalesceInterval) { [weak self] in
+            guard let self, let values = pending else {
+                return
+            }
+            pending = nil
+            controls?.apply(values) { _, _ in }
+        }
     }
 
     // MARK: AVCaptureSessionControlsDelegate

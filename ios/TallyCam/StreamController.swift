@@ -242,10 +242,22 @@ final class StreamController: ObservableObject {
         liveStats.stats = nil
         state = .connecting
         let id = UUID()
+        streamId = id
         // The frame size is fixed for the whole stream.
         capture.lockStreamOrientation()
-        let format = capture.lockFormat()
         liveCapture = capture
+        Task { @MainActor in
+            let format = await capture.lockFormat()
+            // Stopped (or started again) while the format was being locked.
+            guard streamId == id, state == .connecting, stream == nil else {
+                return
+            }
+            start(srtUrl, capture: capture, format: format, id: id)
+        }
+    }
+
+    /// The rest of `goLive`, once the capture format is fixed.
+    private func start(_ srtUrl: SrtUrl, capture: Capture, format: CaptureFormat, id: UUID) {
         setCaptureFormat(format)
         liveVideoCodec = videoCodec
         let size = capture.streamSize
@@ -268,14 +280,29 @@ final class StreamController: ObservableObject {
             }
         }
         self.stream = stream
-        streamId = id
         stream.start()
     }
 
     func stop() {
         resumeCapture = nil
         restartCapture = nil
-        stream?.stop()
+        guard let stream else {
+            // Stopped before the stream existed (its format still locking).
+            if state == .connecting {
+                cancelStart()
+            }
+            return
+        }
+        stream.stop()
+    }
+
+    /// A start stopped while the capture format was being locked.
+    private func cancelStart() {
+        streamId = nil
+        state = .idle
+        liveCapture?.unlockFormat()
+        liveCapture?.unlockStreamOrientation()
+        liveCapture = nil
     }
 
     /// iOS stops the camera in the background, so a live stream stops here
@@ -286,7 +313,11 @@ final class StreamController: ObservableObject {
         }
         resumeCapture = capture
         restartCapture = nil
-        stream?.stop(reason: "App went to the background (iOS stops the camera)")
+        guard let stream else {
+            cancelStart()
+            return
+        }
+        stream.stop(reason: "App went to the background (iOS stops the camera)")
     }
 
     /// Goes live again if the stream was live when the app left.

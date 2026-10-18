@@ -117,6 +117,7 @@ targets:
       # The shooting screen's rules and the shared UI vectors
       # (docs/UI_DESIGN.md), read by UiVectorTests as Android reads them.
       - TallyCam/Views/UiRules.swift
+      - TallyCam/Control/Mains.swift
       - path: ../core/tests/vectors/ui_values.json
         buildPhase: resources
     preBuildScripts:

@@ -86,7 +86,7 @@ struct CameraStage: View {
         }
         .onDisappear { peaking.stop() }
         .onChange(of: shading.mode(.focus)) { _, mode in
-            if mode != "locked" {
+            if mode == "auto" {
                 withAnimation(.easeIn(duration: 0.3)) { lockPoint = nil }
             }
         }
@@ -240,9 +240,10 @@ struct CameraStage: View {
         }
         // Exposure held at the values it had, where it was auto.
         var exposureMode: String?
-        if shading.mode(.exposure) == "auto" {
-            let options = shading.descriptor("exposure_mode")?.options?.compactMap(\.value.string) ?? []
-            exposureMode = options.contains("manual") ? "manual" : options.contains("locked") ? "locked" : nil
+        if shading.mode(.exposure) == "auto",
+           shading.descriptor("exposure_mode")?.options?.contains(where: { $0.value == .string("manual") }) == true
+        {
+            exposureMode = "manual"
         }
         exposureLocked = exposureLocked || exposureMode != nil
         remote.localAeAfLock(at: point, exposureMode: exposureMode)
@@ -252,11 +253,19 @@ struct CameraStage: View {
             focusPoint = nil
             lockPoint = location
         }
+        // A short badge: the values row shows the held values as numbers.
+        focusTask = Task {
+            try? await Task.sleep(for: .seconds(2))
+            guard !Task.isCancelled else {
+                return
+            }
+            withAnimation(.easeIn(duration: 0.3)) { lockPoint = nil }
+        }
     }
 }
 
 /// The yellow square where the user focused: brief after a tap, with
-/// `AF LOCK` beneath it while focus is locked there.
+/// `AE/AF LOCK` (or `AF LOCK`) beneath it for a moment after a hold.
 private struct FocusSquare: View {
     var label: String?
 

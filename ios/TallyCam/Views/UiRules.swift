@@ -145,7 +145,8 @@ enum UiRules {
     /// The values row (docs/UI_DESIGN.md, "Values"): format, ISO (with CLIP
     /// or DARK from the image statistics' `warning`), shutter, EV (auto and
     /// not 0), white balance (K with the tint when not 0, or AWB without a
-    /// temperature) and focus (AF, AF-L, F 0.42, MF).
+    /// temperature) and focus (AF, F 0.42, MF). Only auto and manual: any
+    /// other mode (an old hub's `locked`) shows as manual.
     static func valueItems(_ values: [String: JSONValue], format: String, warning: String?) -> [ValueItem] {
         let exposureHeld = values["exposure_mode"]?.string.map { $0 != "auto" } ?? false
         let held: Tone = exposureHeld ? .held : .auto
@@ -192,8 +193,6 @@ enum UiRules {
             switch mode {
             case "auto":
                 list.append(ValueItem(text: "AF", group: .focus, ids: ids))
-            case "locked":
-                list.append(ValueItem(text: "AF-L", tone: .held, group: .focus, ids: ids))
             default:
                 let text = values["focus_position"]?.double.map { fmt("F %.2f", $0) } ?? "MF"
                 list.append(ValueItem(text: text, tone: .held, group: .focus, ids: ids))

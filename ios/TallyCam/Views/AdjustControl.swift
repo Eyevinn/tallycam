@@ -126,11 +126,6 @@ struct AdjustControl<Selector: View>: View {
         mode == "auto"
     }
 
-    /// Manual where the camera has it, else locked.
-    private var heldMode: String {
-        let options = shading.descriptor(group.modeKey)?.options?.compactMap(\.value.string) ?? []
-        return options.contains("manual") ? "manual" : "locked"
-    }
 
     /// A | M: the filled cell is the mode; a tap on the other switches,
     /// keeping the values. M for any held mode: locked and manual both keep
@@ -159,7 +154,7 @@ struct AdjustControl<Selector: View>: View {
         .accessibilityElement()
         .accessibilityAddTraits(.isButton)
         .accessibilityLabel("\(group.title) \(isAuto ? "auto" : mode)")
-        .accessibilityHint(isAuto ? "Switches to \(heldMode)" : "Switches to auto")
+        .accessibilityHint(isAuto ? "Switches to manual" : "Switches to auto")
         .accessibilityAction { toggleMode() }
         .accessibilityActions {
             if group == .whiteBalance {
@@ -169,7 +164,7 @@ struct AdjustControl<Selector: View>: View {
     }
 
     private func toggleMode() {
-        remote.localSet([group.modeKey: .string(isAuto ? heldMode : "auto")])
+        remote.localSet([group.modeKey: .string(isAuto ? "manual" : "auto")])
     }
 
     // MARK: Ramp

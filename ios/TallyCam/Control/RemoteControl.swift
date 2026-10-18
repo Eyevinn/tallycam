@@ -773,13 +773,13 @@ final class RemoteControl: ObservableObject {
     }
 
     /// Touch and hold: AE/AF lock (docs/UI_DESIGN.md, "Picture"). Focuses
-    /// at a point, then locks focus there and, with `exposureMode`, holds
-    /// the exposure at the values it had (manual, or locked without manual).
+    /// at a point, then holds focus there (manual at its lens position) and,
+    /// with `exposureMode`, the exposure at the values it had.
     func localAeAfLock(at point: CGPoint, exposureMode: String?) {
         capture?.focus(atStreamPoint: point)
         Task { @MainActor [weak self] in
             try? await Task.sleep(for: .milliseconds(700))
-            var values: [String: JSONValue] = ["focus_mode": .string("locked")]
+            var values: [String: JSONValue] = ["focus_mode": .string("manual")]
             if let exposureMode {
                 values["exposure_mode"] = .string(exposureMode)
             }

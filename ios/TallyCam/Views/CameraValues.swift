@@ -5,8 +5,8 @@ import SwiftUI
 /// 0), white balance (with the tint when not 0) and focus. It is also where
 /// the operator goes to change them, as on the Blackmagic app
 /// (docs/CAMERA_READOUTS.md): ISO, shutter and EV open exposure, K white
-/// balance, AF, AF-L or F focus, the format Settings (`UiRules.valueItems`).
-/// A value whose group is locked or manual is yellow, auto is white; the
+/// balance, AF or F focus, the format Settings (`UiRules.valueItems`).
+/// A value whose group is manual is yellow, auto is white; the
 /// groups on the side controls are underlined in their colour. The exposure warning from the image statistics colours ISO
 /// and follows it ("ISO 26 DARK"). Follows the values the hub sets too, a
 /// value it just set flashing cyan for a second. On

@@ -119,10 +119,6 @@ final class CameraControls: @unchecked Sendable {
     private(set) var lenses: [Lens] = []
     private(set) var rotationAngle: CGFloat = 0
     var stabilization: AVCaptureVideoStabilizationMode = .off
-    /// AVFoundation reports both "locked" and "manual" white balance and focus
-    /// as `.locked`; these remember which one we chose.
-    var whiteBalanceManual = false
-    var focusManual = false
     /// Last requested manual white balance, so setting temperature keeps tint.
     var manualWhiteBalance = AVCaptureDevice.WhiteBalanceTemperatureAndTintValues(temperature: 5000, tint: 0)
     /// ISO and shutter asked for in the `apply` being run; committed at its end.
@@ -549,7 +545,10 @@ final class CameraControls: @unchecked Sendable {
             control.kind(self).map {
                 ControlDescriptor(id: control.id, label: control.label, group: control.group,
                                   kind: $0, enabledWhen: control.enabledWhen)
-                    .readonly(control.id == "shutter" && effectiveShutter != .free)
+                    // The ISO too on a camera without custom exposure: its
+                    // manual is a lock at the values auto had.
+                    .readonly(control.id == "shutter" && effectiveShutter != .free
+                        || control.id == "iso" && device?.isExposureModeSupported(.custom) == false)
                     .lockedWhileLive(control.id == "resolution" || control.id == "frame_rate"
                         || control.id == "mains_hz")
             }
@@ -722,8 +721,6 @@ final class CameraControls: @unchecked Sendable {
         session.addInput(newInput)
         device = newDevice
         input = newInput
-        whiteBalanceManual = false
-        focusManual = false
         var warning: String?
         do {
             let applied = try configure {

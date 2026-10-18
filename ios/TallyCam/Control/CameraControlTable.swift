@@ -75,6 +75,30 @@ private func lockWhiteBalance(_ values: AVCaptureDevice.WhiteBalanceTemperatureA
     device.setWhiteBalanceModeLocked(with: clampedGains(device.deviceWhiteBalanceGains(for: values), device))
 }
 
+/// Manual white balance at the current gains (from auto: what it
+/// measured), as K and tint; a camera without custom gains locks.
+private func holdWhiteBalance(_ c: CameraControls, _ device: AVCaptureDevice) throws {
+    guard device.isLockingWhiteBalanceWithCustomDeviceGainsSupported else {
+        guard device.isWhiteBalanceModeSupported(.locked) else {
+            throw ControlError("manual white balance not supported")
+        }
+        device.whiteBalanceMode = .locked
+        return
+    }
+    let current = measuredWhiteBalance(device)
+    c.manualWhiteBalance = .init(temperature: min(max(current.temperature, temperatureRange.lowerBound),
+                                                  temperatureRange.upperBound),
+                                 tint: min(max(current.tint, tintRange.lowerBound), tintRange.upperBound))
+    lockWhiteBalance(c.manualWhiteBalance, device)
+}
+
+/// K and tint are set only in manual white balance with custom gains.
+private func requireManualWhiteBalance(_ device: AVCaptureDevice) throws {
+    guard device.whiteBalanceMode == .locked, device.isLockingWhiteBalanceWithCustomDeviceGainsSupported else {
+        throw ControlError("requires wb_mode manual")
+    }
+}
+
 extension CameraControls {
     static let table: [CameraControl] = [
         // MARK: Lens
@@ -227,16 +251,15 @@ extension CameraControls {
                 }
                 // Auto is the core's auto ISO loop at the production shutter
                 // (iOS auto exposure only on a camera without custom
-                // exposure).
+                // exposure). Manual holds the current values as numbers; a
+                // camera without custom exposure locks instead, still
+                // reported as manual (its ISO read-only).
                 let custom = device.isExposureModeSupported(.custom)
                 var options: [ControlOption] = []
                 if custom || device.isExposureModeSupported(.continuousAutoExposure) {
                     options.append(ControlOption(value: .string("auto"), label: "Auto"))
                 }
-                if device.isExposureModeSupported(.locked) {
-                    options.append(ControlOption(value: .string("locked"), label: "Locked"))
-                }
-                if custom {
+                if custom || device.isExposureModeSupported(.locked) {
                     options.append(ControlOption(value: .string("manual"), label: "Manual"))
                 }
                 return .enumeration(options)
@@ -244,16 +267,19 @@ extension CameraControls {
             get: { c in
                 switch c.device?.exposureMode {
                 case .custom: .string(c.autoIso ? "auto" : "manual")
-                case .locked: .string("locked")
+                case .locked: .string("manual")
                 case nil: nil
                 default: .string("auto")
                 }
             },
             set: { c, value in
-                // `auto_iso` is what `auto` was called before protocol 2.
+                // `auto_iso` is what `auto` was called before protocol 2;
+                // `locked` (gone as a mode) is manual from the current values.
                 var id = try choice(value, ["auto", "auto_iso", "locked", "manual"])
                 if id == "auto_iso" {
                     id = "auto"
+                } else if id == "locked" {
+                    id = "manual"
                 }
                 return try c.configure { device in
                     switch id {
@@ -265,17 +291,19 @@ extension CameraControls {
                             c.autoIso = false
                             device.exposureMode = .continuousAutoExposure
                         }
-                    case "locked":
-                        c.autoIso = false
-                        device.exposureMode = .locked
                     default:
-                        guard device.isExposureModeSupported(.custom) else {
-                            throw ControlError("manual exposure not supported")
-                        }
                         c.autoIso = false
-                        // At the production shutter, from the ISO auto
-                        // exposure reports (not `currentISO`, which darkens
-                        // the picture).
+                        guard device.isExposureModeSupported(.custom) else {
+                            // Held where the camera has no manual exposure.
+                            guard device.isExposureModeSupported(.locked) else {
+                                throw ControlError("manual exposure not supported")
+                            }
+                            device.exposureMode = .locked
+                            return nil
+                        }
+                        // From the current ISO and shutter, at the production
+                        // shutter (not `currentISO`, which darkens the
+                        // picture).
                         c.enterCustom(device)
                     }
                     return nil
@@ -415,44 +443,34 @@ extension CameraControls {
                 guard let device = c.device else {
                     return nil
                 }
+                // Manual holds the current gains, reported as K and tint.
                 var options: [ControlOption] = []
                 if device.isWhiteBalanceModeSupported(.continuousAutoWhiteBalance) {
                     options.append(ControlOption(value: .string("auto"), label: "Auto"))
                 }
-                if device.isWhiteBalanceModeSupported(.locked) {
-                    options.append(ControlOption(value: .string("locked"), label: "Locked"))
-                }
-                if device.isLockingWhiteBalanceWithCustomDeviceGainsSupported {
+                if device.isLockingWhiteBalanceWithCustomDeviceGainsSupported
+                    || device.isWhiteBalanceModeSupported(.locked)
+                {
                     options.append(ControlOption(value: .string("manual"), label: "Manual"))
                 }
                 return .enumeration(options)
             },
             get: { c in
                 switch c.device?.whiteBalanceMode {
-                case .locked: .string(c.whiteBalanceManual ? "manual" : "locked")
+                case .locked: .string("manual")
                 case nil: nil
                 default: .string("auto")
                 }
             },
             set: { c, value in
+                // `locked` (gone as a mode) is manual from the current gains.
                 let id = try choice(value, ["auto", "locked", "manual"])
                 return try c.configure { device in
-                    switch id {
-                    case "auto":
+                    if id == "auto" {
                         device.whiteBalanceMode = .continuousAutoWhiteBalance
-                    case "locked":
-                        device.whiteBalanceMode = .locked
-                    default:
-                        guard device.isLockingWhiteBalanceWithCustomDeviceGainsSupported else {
-                            throw ControlError("manual white balance not supported")
-                        }
-                        let current = measuredWhiteBalance(device)
-                        c.manualWhiteBalance = .init(temperature: min(max(current.temperature, temperatureRange.lowerBound),
-                                                                      temperatureRange.upperBound),
-                                                     tint: min(max(current.tint, tintRange.lowerBound), tintRange.upperBound))
-                        lockWhiteBalance(c.manualWhiteBalance, device)
+                    } else {
+                        try holdWhiteBalance(c, device)
                     }
-                    c.whiteBalanceManual = id == "manual"
                     return nil
                 }
             }
@@ -467,9 +485,7 @@ extension CameraControls {
             set: { c, value in
                 let temperature = try Float(number(value))
                 return try c.configure { device in
-                    guard c.whiteBalanceManual, device.whiteBalanceMode == .locked else {
-                        throw ControlError("requires wb_mode manual")
-                    }
+                    try requireManualWhiteBalance(device)
                     var warning: String?
                     c.manualWhiteBalance.temperature = clamp(temperature, temperatureRange, &warning)
                     lockWhiteBalance(c.manualWhiteBalance, device)
@@ -486,9 +502,7 @@ extension CameraControls {
             set: { c, value in
                 let tint = try Float(number(value))
                 return try c.configure { device in
-                    guard c.whiteBalanceManual, device.whiteBalanceMode == .locked else {
-                        throw ControlError("requires wb_mode manual")
-                    }
+                    try requireManualWhiteBalance(device)
                     var warning: String?
                     c.manualWhiteBalance.tint = clamp(tint, tintRange, &warning)
                     lockWhiteBalance(c.manualWhiteBalance, device)
@@ -505,43 +519,40 @@ extension CameraControls {
                 guard let device = c.device else {
                     return nil
                 }
+                // Manual holds the current lens position, reported as
+                // `focus_position`.
                 var options: [ControlOption] = []
                 if device.isFocusModeSupported(.continuousAutoFocus) {
                     options.append(ControlOption(value: .string("auto"), label: "Auto"))
                 }
-                if device.isFocusModeSupported(.locked) {
-                    options.append(ControlOption(value: .string("locked"), label: "Locked"))
-                }
-                if device.isLockingFocusWithCustomLensPositionSupported {
+                if device.isLockingFocusWithCustomLensPositionSupported || device.isFocusModeSupported(.locked) {
                     options.append(ControlOption(value: .string("manual"), label: "Manual"))
                 }
                 return options.isEmpty ? nil : .enumeration(options)
             },
             get: { c in
                 switch c.device?.focusMode {
-                case .locked: .string(c.focusManual ? "manual" : "locked")
+                case .locked: .string("manual")
                 case nil: nil
                 default: .string("auto")
                 }
             },
             set: { c, value in
+                // `locked` (gone as a mode) is manual at the current position.
                 let id = try choice(value, ["auto", "locked", "manual"])
                 return try c.configure { device in
-                    switch id {
-                    case "auto":
+                    if id == "auto" {
                         guard device.isFocusModeSupported(.continuousAutoFocus) else {
                             throw ControlError("auto focus not supported")
                         }
                         device.focusMode = .continuousAutoFocus
-                    case "locked":
-                        device.focusMode = .locked
-                    default:
-                        guard device.isLockingFocusWithCustomLensPositionSupported else {
-                            throw ControlError("manual focus not supported")
-                        }
+                    } else if device.isLockingFocusWithCustomLensPositionSupported {
                         device.setFocusModeLocked(lensPosition: device.lensPosition)
+                    } else if device.isFocusModeSupported(.locked) {
+                        device.focusMode = .locked
+                    } else {
+                        throw ControlError("manual focus not supported")
                     }
-                    c.focusManual = id == "manual"
                     return nil
                 }
             }
@@ -555,7 +566,7 @@ extension CameraControls {
             set: { c, value in
                 let position = try Float(number(value))
                 return try c.configure { device in
-                    guard c.focusManual, device.focusMode == .locked else {
+                    guard device.focusMode == .locked else {
                         throw ControlError("requires focus_mode manual")
                     }
                     var warning: String?
@@ -617,7 +628,6 @@ extension CameraControls {
                         if device.isFocusPointOfInterestSupported, device.isFocusModeSupported(.continuousAutoFocus) {
                             device.focusPointOfInterest = point
                             device.focusMode = .continuousAutoFocus
-                            c.focusManual = false
                         }
                         // The metering point follows only iOS auto exposure; a
                         // tap never changes the exposure mode
@@ -639,7 +649,6 @@ extension CameraControls {
                             throw ControlError("auto white balance not supported")
                         }
                         device.whiteBalanceMode = .continuousAutoWhiteBalance
-                        c.whiteBalanceManual = false
                     }
                 } catch {
                     done(error)
@@ -654,7 +663,8 @@ extension CameraControls {
                             poll()
                             return
                         }
-                        done(Result { try c.configure { $0.whiteBalanceMode = .locked } }.error)
+                        // Then manual at what it measured, as K and tint.
+                        done(Result { try c.configure { try holdWhiteBalance(c, $0) } }.error)
                     }
                 }
                 poll()

@@ -39,10 +39,21 @@ object Chrome {
     val rowGap = 6.dp
     /** Between the zones (top, middle, bottom). */
     val zoneGap = 10.dp
-    /** The zoom and adjust rockers' length, where the screen is tall enough. */
-    val rocker = 180.dp
     /** The live button. */
     val liveButton = 76.dp
+    /** A side control's cells: easy to hit without looking (docs/UI_DESIGN.md, "Sizes", "Shape"). */
+    val cell = 48.dp
+    val cellGap = 4.dp
+    val cellRadius = 8.dp
+    /** The selector and the mode row: two cells wide. */
+    val blockWidth = cell * 2 + cellGap
+    /** The rockers: as big as the screen allows (docs/UI_DESIGN.md, "Sizes"). */
+    val rockerWidth = 56.dp
+    /** The rocker track's and knob's corners. */
+    val rockerRadius = 10.dp
+    val knobRadius = 8.dp
+    /** The readout's slot when it sits beside the block. */
+    val readoutWidth = 84.dp
     /** The value label under a side control's rocker, and the K / Tint row under it. */
     val valueHeight = 28.dp
     val tintHeight = 24.dp

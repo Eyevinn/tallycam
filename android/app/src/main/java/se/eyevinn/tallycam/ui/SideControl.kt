@@ -206,54 +206,71 @@ fun SideControl(model: AppModel, group: String, groups: List<String>, leading: B
                  fontWeight = FontWeight.SemiBold, maxLines = 1, softWrap = false)
         }
     }
-    val inner = @Composable {
-        Column(Modifier.height(metrics.rocker), verticalArrangement = Arrangement.SpaceBetween) {
-            GroupSelector(groups, group, metrics.segment, onSelect)
+    val block = @Composable {
+        // The 2 x 2 selector over the mode row (or zoom's lenses), beside the rocker.
+        Column(Modifier.width(Chrome.blockWidth).height(SideMetrics.BLOCK), verticalArrangement = Arrangement.SpaceBetween) {
+            GroupSelector(groups, group, onSelect)
             when {
-                zoom -> LensSwitch(model, metrics.segment)
-                modeKey(group) in descriptors -> ModeSwitch(model, group, mode, metrics.segment)
+                zoom -> LensRow(model)
+                modeKey(group) in descriptors -> ModeRow(model, group, mode)
+                else -> Box(Modifier.height(Chrome.cell))
             }
         }
     }
-    // The same size whatever the group (docs/UI_DESIGN.md, "Sizes"): the
-    // rocker and the inner column wide, the K / Tint row always reserved.
-    Column(modifier.width(Chrome.control * 2 + Chrome.gap), horizontalAlignment = if (leading) Alignment.Start else Alignment.End,
-           verticalArrangement = Arrangement.spacedBy(Chrome.gap)) {
-        Row(horizontalArrangement = Arrangement.spacedBy(Chrome.gap)) {
-            // The rocker at the screen edge; hidden while the screen is locked, its place kept.
-            val edge = @Composable { if (locked) Box(Modifier.width(Chrome.control).height(metrics.rocker)) else rocker() }
-            if (leading) { edge(); inner() } else { inner(); edge() }
-        }
-        // The value under the rocker (a long one may reach past the side's
-        // width) and the K / Tint row under it, reserved on every group.
-        Layout({ value(); if (hasTint) TintSwitch(tint) { tint = it; rate = 0.0 } }) { measurables, constraints ->
-            val loose = Constraints()
-            val placeables = measurables.map { it.measure(loose) }
-            val width = constraints.maxWidth
+    // The value (a long one may reach past its slot) and the K / Tint row
+    // under it, reserved on every group.
+    val readout = @Composable { width: Dp, align: Alignment.Horizontal ->
+        Layout({ value(); if (hasTint) TintSwitch(tint) { tint = it; rate = 0.0 } },
+               Modifier.width(width)) { measurables, constraints ->
+            val placeables = measurables.map { it.measure(Constraints()) }
+            val w = constraints.maxWidth
+            fun x(pw: Int) = align.align(pw, w, layoutDirection)
             val first = placeables.first()
-            fun x(w: Int) = if (leading) 0 else width - w
-            layout(width, (Chrome.valueHeight + Chrome.gap + Chrome.tintHeight).roundToPx()) {
+            layout(w, (Chrome.valueHeight + Chrome.gap + Chrome.tintHeight).roundToPx()) {
                 first.place(x(first.width), 0)
                 placeables.getOrNull(1)?.let { it.place(x(it.width), first.height + Chrome.gap.roundToPx()) }
             }
         }
     }
+    // The rocker at the screen edge; hidden while the screen is locked, its place kept.
+    val edge = @Composable { if (locked) Box(Modifier.width(Chrome.rockerWidth).height(metrics.rocker)) else rocker() }
+    // The same size whatever the group (docs/UI_DESIGN.md, "Sizes").
+    if (!metrics.readoutBeside) {
+        val width = Chrome.blockWidth + Chrome.gap + Chrome.rockerWidth
+        Column(modifier.width(width), verticalArrangement = Arrangement.spacedBy(Chrome.gap)) {
+            // The block centred beside the rocker.
+            Row(horizontalArrangement = Arrangement.spacedBy(Chrome.gap), verticalAlignment = Alignment.CenterVertically) {
+                if (leading) { edge(); block() } else { block(); edge() }
+            }
+            readout(width, if (leading) Alignment.Start else Alignment.End)
+        }
+    } else {
+        // Too low for the readout under the rocker (a landscape phone): beside the block, on the inner side.
+        Row(modifier, horizontalArrangement = Arrangement.spacedBy(Chrome.gap), verticalAlignment = Alignment.CenterVertically) {
+            val side = @Composable { readout(Chrome.readoutWidth, Alignment.CenterHorizontally) }
+            if (leading) { edge(); block(); side() } else { side(); block(); edge() }
+        }
+    }
 }
 
-/** The side controls' sizes, the same on both sides: segment height and rocker length. */
-class SideMetrics(val segment: Dp, val rocker: Dp) {
+/**
+ * How the side controls sit, the same on both sides and for every group,
+ * worked out from the screen once (docs/UI_DESIGN.md, "Sizes"): the rocker
+ * as tall as the space between the top rows and the bottom row allows,
+ * less the value and K / Tint rows under it; where that leaves less than
+ * the selector and the mode row, those rows go beside the block and the
+ * rocker takes the full height.
+ */
+class SideMetrics(val rocker: Dp, val readoutBeside: Boolean) {
     companion object {
-        /**
-         * Segments 30 dp where [height] allows (smaller on a landscape phone);
-         * the rocker as long as the selector (4 segments) and what is under it
-         * ([under] segments: 2 for A / M, or the lenses).
-         */
-        fun fitting(height: Dp, under: Int): SideMetrics {
-            val k = maxOf(2, under)
-            // Paddings (3 + 3 per switch), 2 between segments, the gap between the switches.
-            val fixed = 12.dp + 2.dp * (4 - 1 + k - 1) + Chrome.gap
-            val segment = ((height - fixed) / (4 + k)).coerceIn(20.dp, 30.dp)
-            return SideMetrics(segment, segment * (4 + k) + fixed)
+        /** The selector (2 x 2) and the mode row: the shortest the rocker gets. */
+        val BLOCK = Chrome.cell * 3 + Chrome.cellGap + Chrome.gap
+        private val READOUT = Chrome.gap * 2 + Chrome.valueHeight + Chrome.tintHeight
+
+        fun fitting(height: Dp): SideMetrics {
+            val under = height - READOUT
+            return if (under >= BLOCK) SideMetrics(under, readoutBeside = false)
+                   else SideMetrics(maxOf(height, BLOCK), readoutBeside = true)
         }
     }
 }
@@ -265,45 +282,22 @@ internal fun zoomFactorText(model: AppModel): String {
 }
 
 /**
- * The group's mode as a vertical two-way switch, [A] over [M]: both always
- * shown, the one in use lit (white for auto, yellow for held), a tap on the
+ * The group's mode as two cells side by side, A and M: both always shown,
+ * the one in use filled (white for auto, yellow for held), a tap on the
  * other switches to it, keeping the values. M is any held mode: manual,
  * locked (by the hub, or focus locked on the picture), or the lock a camera
  * uses where it has no manual (Android's white balance). A long press on
  * colour's is "white balance once".
  */
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun ModeSwitch(model: AppModel, group: String, mode: String, segment: Dp) {
+private fun ModeRow(model: AppModel, group: String, mode: String) {
     val auto = mode == "auto"
     val held = if (mode == "locked") "locked" else heldMode(model, group)
     val wbOnce: (() -> Unit)? = if (group == "white_balance") ({ model.localWhiteBalanceOnce() }) else null
-    Column(
-        Modifier.width(Chrome.control).background(Color.Black.copy(alpha = 0.35f), RoundedCornerShape(Chrome.control / 2))
-            .border(1.dp, Color.White.copy(alpha = 0.25f), RoundedCornerShape(Chrome.control / 2)).padding(3.dp),
-        verticalArrangement = Arrangement.spacedBy(2.dp),
-    ) {
-        for ((value, label) in listOf("auto" to "A", held to "M")) {
-            val on = (value == "auto") == auto
-            Box(
-                Modifier.fillMaxWidth().height(segment)
-                    .background(if (!on) Color.Transparent else if (auto) Color.White else Chrome.yellow, CircleShape)
-                    .combinedClickable(
-                        onClick = { if (!on) model.localSet(JSONObject().put(modeKey(group), value)) },
-                        onLongClick = wbOnce,
-                        onLongClickLabel = wbOnce?.let { "White balance once" },
-                    )
-                    .semantics {
-                        contentDescription = "${title(group)} ${if (value == "auto") "auto" else value}"
-                        selected = on
-                    },
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(label, color = if (on) Color.Black else Color.White.copy(alpha = 0.7f), fontSize = 17.sp,
-                     fontWeight = FontWeight.Bold)
-            }
-        }
-    }
+    Cells(listOf(listOf(
+        Cell("A", on = auto, fill = Color.White, description = "${title(group)} auto", longPress = wbOnce),
+        Cell("M", on = !auto, fill = Chrome.yellow, description = "${title(group)} $held", longPress = wbOnce),
+    )), fontSize = 17.sp) { _, column -> model.localSet(JSONObject().put(modeKey(group), if (column == 0) "auto" else held)) }
 }
 
 /** K or Tint for colour's rocker. */
@@ -332,55 +326,68 @@ private fun heldMode(model: AppModel, group: String): String {
 }
 
 /**
- * ZOOM / EXP / WB / FOC beside the upper half of the rocker, the same look
- * as the mode switch: the chosen group filled in its colour; a tap puts that group
- * on this side (docs/UI_DESIGN.md, "Side control").
+ * ZOOM EXP over WB FOC beside the upper half of the rocker: the chosen
+ * group filled in its colour with white text; a tap puts that group on
+ * this side (docs/UI_DESIGN.md, "Side control").
  */
 @Composable
-private fun GroupSelector(groups: List<String>, selected: String, segment: Dp, onSelect: (String) -> Unit) {
-    Segments(SIDE_GROUPS.map { Segment(shortName(it), on = it == selected, enabled = it in groups, description = title(it)) },
-             segment, fill = Chrome.groupColor(selected), onText = Color.White, onTap = { onSelect(SIDE_GROUPS[it]) })
+private fun GroupSelector(groups: List<String>, selected: String, onSelect: (String) -> Unit) {
+    val cells = SIDE_GROUPS.map {
+        Cell(shortName(it), on = it == selected, enabled = it in groups, fill = Chrome.groupColor(it), onText = Color.White,
+             description = title(it))
+    }
+    Cells(cells.chunked(2)) { row, column -> onSelect(SIDE_GROUPS[row * 2 + column]) }
 }
 
-/** The lens buttons under the zoom selector, longest on top, the active one filled. */
+/** The lens buttons in the mode row on zoom, shortest left, the active one filled. */
 @Composable
-private fun LensSwitch(model: AppModel, segment: Dp) {
+private fun LensRow(model: AppModel) {
     val lenses = model.camera.lenses
-    if (lenses.size < 2) return
+    if (lenses.size < 2) {
+        Box(Modifier.height(Chrome.cell))
+        return
+    }
     val current = model.shading.values.optString("lens")
-    val ordered = lenses.sortedByDescending { it.focalLength }
-    Segments(ordered.map { Segment(lensLabel(model, it), on = it.key == current, description = it.label) }, segment,
-             onTap = { model.selectLens(ordered[it].key) })
+    val ordered = lenses.sortedBy { it.focalLength }
+    Cells(listOf(ordered.map { Cell(lensLabel(model, it), on = it.key == current, description = it.label) })) { _, column ->
+        model.selectLens(ordered[column].key)
+    }
 }
 
-/** One segment of a vertical switch. */
-private class Segment(val label: String, val on: Boolean, val enabled: Boolean = true, val description: String = label)
+/** One cell of the selector, the mode row or the lens row. */
+private class Cell(val label: String, val on: Boolean, val enabled: Boolean = true, val fill: Color = Color.White,
+                   val onText: Color = Color.Black, val description: String = label, val longPress: (() -> Unit)? = null)
 
 /**
- * A vertical switch of [segments], 46 dp wide, the look of the mode switch:
- * the one that is on filled ([fill], the selector's in its group colour); a
- * tap on another calls [onTap].
+ * A grid of [rows] of cells, at least 48 dp square-ish, an 8 dp corner
+ * radius (docs/UI_DESIGN.md, "Shape"): off cells dark with a thin outline,
+ * the one that is on filled. A tap on another calls [onTap] (row, column).
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun Segments(segments: List<Segment>, segment: Dp, fill: Color = Color.White, onText: Color = Color.Black,
-                     onTap: (Int) -> Unit) {
-    Column(
-        Modifier.width(Chrome.control).background(Color.Black.copy(alpha = 0.35f), RoundedCornerShape(Chrome.control / 2))
-            .border(1.dp, Color.White.copy(alpha = 0.25f), RoundedCornerShape(Chrome.control / 2)).padding(3.dp),
-        verticalArrangement = Arrangement.spacedBy(2.dp),
-    ) {
-        segments.forEachIndexed { index, item ->
-            Box(
-                Modifier.fillMaxWidth().height(segment).background(if (item.on) fill else Color.Transparent, CircleShape)
-                    .clickable(enabled = item.enabled && !item.on) { onTap(index) }
-                    .semantics {
-                        contentDescription = item.description
-                        selected = item.on
-                    },
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(item.label, color = if (item.on) onText else Color.White.copy(alpha = if (item.enabled) 0.75f else 0.3f),
-                     fontSize = if (segment < 26.dp) 10.sp else 11.sp, fontWeight = FontWeight.Bold, maxLines = 1, softWrap = false)
+private fun Cells(rows: List<List<Cell>>, fontSize: androidx.compose.ui.unit.TextUnit = 12.sp, onTap: (Int, Int) -> Unit) {
+    val shape = RoundedCornerShape(Chrome.cellRadius)
+    Column(Modifier.width(Chrome.blockWidth), verticalArrangement = Arrangement.spacedBy(Chrome.cellGap)) {
+        rows.forEachIndexed { r, row ->
+            Row(horizontalArrangement = Arrangement.spacedBy(Chrome.cellGap)) {
+                row.forEachIndexed { c, cell ->
+                    Box(
+                        Modifier.weight(1f).height(Chrome.cell)
+                            .background(if (cell.on) cell.fill else Color.Black.copy(alpha = 0.35f), shape)
+                            .border(1.dp, if (cell.on) Color.Transparent else Color.White.copy(alpha = 0.25f), shape)
+                            .combinedClickable(enabled = cell.enabled, onClick = { if (!cell.on) onTap(r, c) },
+                                               onLongClick = cell.longPress,
+                                               onLongClickLabel = cell.longPress?.let { "White balance once" })
+                            .semantics {
+                                contentDescription = cell.description
+                                selected = cell.on
+                            },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(cell.label, color = if (cell.on) cell.onText else Color.White.copy(alpha = if (cell.enabled) 0.8f else 0.3f),
+                             fontSize = fontSize, fontWeight = FontWeight.Bold, maxLines = 1, softWrap = false)
+                    }
+                }
             }
         }
     }

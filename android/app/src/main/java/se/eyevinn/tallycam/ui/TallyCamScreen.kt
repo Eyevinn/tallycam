@@ -208,11 +208,11 @@ private fun BoxScope.ShootingScreen(model: AppModel, onScan: () -> Unit) {
         // allows; on a landscape phone what is left between the top rows and
         // the bottom row, less the value and K / Tint rows under the rocker;
         // never from the group shown.
-        val lenses = model.camera.lenses.size.takeIf { it > 1 } ?: 0
-        val sideHeight = if (!landscape) 400.dp
-                         else maxHeight - top - Chrome.zoneGap * 2 - Chrome.liveButton - Chrome.gap * 2 - Chrome.valueHeight -
-                             Chrome.tintHeight
-        val metrics = SideMetrics.fitting(sideHeight, lenses)
+        // Between the top rows and the bottom row (portrait: the tools row and
+        // the live button under it).
+        val sideHeight = if (landscape) maxHeight - top - Chrome.zoneGap * 2 - Chrome.liveButton
+                         else maxHeight - top - Chrome.zoneGap * 3 - Chrome.control - Chrome.liveButton
+        val metrics = SideMetrics.fitting(sideHeight)
         val nameChip = @Composable { TallyChip(model.tally, model.displayName) }
         val side = @Composable { leftSide: Boolean ->
             (if (leftSide) left else right)?.let { group ->

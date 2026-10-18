@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import android.view.HapticFeedbackConstants
 import androidx.compose.runtime.Composable
@@ -55,9 +56,9 @@ import kotlin.math.roundToInt
  * [accent] is the group's colour: the outline and the knob's ring.
  */
 @Composable
-fun Rocker(high: String, low: String, label: String, length: Dp = Chrome.rocker, accent: Color = Color.White.copy(alpha = 0.25f),
+fun Rocker(high: String, low: String, label: String, length: Dp, accent: Color = Color.White.copy(alpha = 0.25f),
            onStep: (Int) -> Unit = {}, onReset: () -> Unit = {}, onRate: (Double) -> Unit) {
-    val travel = (length - Chrome.control - 10.dp) / 2
+    val travel = (length - KNOB - 20.dp) / 2
     var deflection by remember { mutableFloatStateOf(0f) }
     var sentStep by remember { mutableIntStateOf(0) }
     val shown by animateFloatAsState(deflection, label = "rocker")
@@ -65,7 +66,7 @@ fun Rocker(high: String, low: String, label: String, length: Dp = Chrome.rocker,
     val step by rememberUpdatedState(onStep)
     val reset by rememberUpdatedState(onReset)
     Box(
-        Modifier.width(Chrome.control).height(length)
+        Modifier.width(Chrome.rockerWidth).height(length)
             .semantics {
                 contentDescription = label
                 customActions = listOf(CustomAccessibilityAction(high) { step(1); true },
@@ -74,7 +75,7 @@ fun Rocker(high: String, low: String, label: String, length: Dp = Chrome.rocker,
             .pointerInput(length) {
                 val travelPx = travel.toPx()
                 // The knob and 4 dp round it, as iOS.
-                val knobZone = 19.dp.toPx()
+                val knobZone = (KNOB / 2 + 4.dp).toPx()
                 val slop = Chrome.tapSlop.toPx()
                 var lastKnobTap = 0L
                 fun move(d: Float) {
@@ -113,7 +114,8 @@ fun Rocker(high: String, low: String, label: String, length: Dp = Chrome.rocker,
             },
         contentAlignment = Alignment.Center,
     ) {
-        Box(Modifier.matchParentSize().background(Color.Black.copy(alpha = 0.35f), CircleShape).border(1.5.dp, accent, CircleShape))
+        val track = RoundedCornerShape(Chrome.rockerRadius)
+        Box(Modifier.matchParentSize().background(Color.Black.copy(alpha = 0.35f), track).border(1.5.dp, accent, track))
         Column(Modifier.fillMaxSize().padding(vertical = 8.dp), horizontalAlignment = Alignment.CenterHorizontally,
                verticalArrangement = Arrangement.SpaceBetween) {
             // Smaller for words (Far, Near) than for signs.
@@ -121,9 +123,9 @@ fun Rocker(high: String, low: String, label: String, length: Dp = Chrome.rocker,
             Text(high, color = Color.White.copy(alpha = 0.6f), fontSize = size, fontWeight = FontWeight.SemiBold, maxLines = 1)
             Text(low, color = Color.White.copy(alpha = 0.6f), fontSize = size, fontWeight = FontWeight.SemiBold, maxLines = 1)
         }
-        Box(Modifier.offset { IntOffset(0, (-shown * travel.toPx()).roundToInt()) }.size(30.dp)
-                .background(Color.White.copy(alpha = if (sentStep == 0) 0.7f else 0.95f), CircleShape)
-                .border(2.dp, accent, CircleShape))
+        Box(Modifier.offset { IntOffset(0, (-shown * travel.toPx()).roundToInt()) }.size(KNOB)
+                .background(Color.White.copy(alpha = if (sentStep == 0) 0.7f else 0.95f), RoundedCornerShape(Chrome.knobRadius))
+                .border(2.dp, accent, RoundedCornerShape(Chrome.knobRadius)))
     }
 }
 
@@ -141,6 +143,8 @@ fun rememberHaptics(): Haptics {
 }
 
 private const val ROCKER_STEPS = 10
+/** The rocker's knob: a rounded square. */
+private val KNOB = 38.dp
 private const val DOUBLE_TAP_MS = 350L
 
 /** A lens's factor against the wide lens, from the focal lengths (1 without a wide lens). */

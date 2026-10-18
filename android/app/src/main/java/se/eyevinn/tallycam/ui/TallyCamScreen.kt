@@ -170,9 +170,9 @@ private fun BoxScope.ShootingScreen(model: AppModel, onScan: () -> Unit) {
     LaunchedEffect(model.streamMessage) { model.streamMessage?.let { showToast(it) } }
 
     val idle = model.streamState == LiveStream.State.IDLE
-    val tools = @Composable {
+    val tools = @Composable { vertical: Boolean ->
         // Aids and screen lock; the QR scanner too while no hub is connected and not live.
-        Row(horizontalArrangement = Arrangement.spacedBy(Chrome.gap)) {
+        val buttons = @Composable {
             AidsMenu(aids, model)
             if (model.link != AppModel.Link.CONNECTED && idle) {
                 Box(Modifier.semantics { contentDescription = "Scan QR code" }) { ChromeButton("⌗", onClick = onScan) }
@@ -181,6 +181,8 @@ private fun BoxScope.ShootingScreen(model: AppModel, onScan: () -> Unit) {
                 ChromeButton("🔒") { screenLocked = true }
             }
         }
+        if (vertical) Column(verticalArrangement = Arrangement.spacedBy(Chrome.rowGap)) { buttons() }
+        else Row(horizontalArrangement = Arrangement.spacedBy(Chrome.gap)) { buttons() }
     }
     val liveButton = @Composable { hintAbove: Boolean ->
         LiveButton(model.streamState, hintAbove, onStart = {
@@ -208,6 +210,8 @@ private fun BoxScope.ShootingScreen(model: AppModel, onScan: () -> Unit) {
         bottom = inside(insets.calculateBottomPadding()),
     )) {
         val landscape = maxWidth > maxHeight
+        // A phone: the side controls in the bottom corners (a tablet keeps the bottom row).
+        val phone = androidx.compose.ui.platform.LocalConfiguration.current.smallestScreenWidthDp < 600
         // Narrower than this (portrait), the camera's name gets a row of its own.
         // Landscape: one top bar (status, name and values); portrait: the
         // status row over the values, the name on its own row when narrow.
@@ -221,7 +225,7 @@ private fun BoxScope.ShootingScreen(model: AppModel, onScan: () -> Unit) {
                     // Folded into a tab at the edge; a tap brings it back.
                     EdgeTab(group, leftSide, Modifier.touchable(screenLocked)) { place(shown.show(leftSide)) }
                 } else {
-                    SideControl(model, group, groups, leading = leftSide, locked = screenLocked,
+                    SideControl(model, group, groups, leading = leftSide, readoutAbove = phone && !landscape, locked = screenLocked,
                                 onSelect = { place(shown.choose(leftSide, it)) }, modifier = Modifier.touchable(screenLocked))
                 }
             }
@@ -249,7 +253,30 @@ private fun BoxScope.ShootingScreen(model: AppModel, onScan: () -> Unit) {
                     values(0, false)
                 }
             }
-            if (landscape) {
+            if (phone) {
+                // A phone (docs/UI_DESIGN.md, zones 4 to 6): the side controls
+                // in the bottom corners against the bottom edge, the tools in
+                // the upper-left corner under the top rows (a column in
+                // landscape, a row in portrait), the live button in the
+                // upper-right corner with the meter beside it; messages and the
+                // slide to unlock in the middle.
+                Box(Modifier.weight(1f).fillMaxWidth()) {
+                    Box(Modifier.align(Alignment.TopStart).touchable(screenLocked)) { tools(landscape) }
+                    Row(Modifier.align(Alignment.TopEnd), horizontalArrangement = Arrangement.spacedBy(Chrome.gap),
+                        verticalAlignment = Alignment.CenterVertically) {
+                        AudioMeter()
+                        Box(Modifier.touchable(screenLocked)) { liveButton(false) }
+                    }
+                    Box(Modifier.align(Alignment.TopCenter).padding(horizontal = Chrome.liveButton + Chrome.gap)) { messages() }
+                    Box(Modifier.align(Alignment.BottomStart)) { side(true) }
+                    Box(Modifier.align(Alignment.BottomEnd)) { side(false) }
+                    // The slide to unlock (only while locked) at the bottom edge between
+                    // the side controls; a portrait phone has no room there, so above them.
+                    Box(Modifier.align(Alignment.BottomCenter).padding(bottom = if (landscape) 0.dp else SIDE_HEIGHT + Chrome.zoneGap)) {
+                        unlock()
+                    }
+                }
+            } else if (landscape) {
                 // Left: zoom over the tools. Centre: messages, the slide to
                 // unlock, the meter. Right: the adjust control over the live
                 // button. The bottom row is the live button's height, so both
@@ -258,7 +285,7 @@ private fun BoxScope.ShootingScreen(model: AppModel, onScan: () -> Unit) {
                     Column(Modifier.fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(Chrome.zoneGap)) {
                         SideSlot(leading = true, Modifier.weight(1f)) { side(true) }
                         Box(Modifier.height(Chrome.liveButton).touchable(screenLocked), contentAlignment = Alignment.BottomStart) {
-                            tools()
+                            tools(false)
                         }
                     }
                     Column(Modifier.weight(1f).fillMaxHeight(), horizontalAlignment = Alignment.CenterHorizontally,
@@ -285,7 +312,7 @@ private fun BoxScope.ShootingScreen(model: AppModel, onScan: () -> Unit) {
                 }
                 Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) { unlock() }
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom) {
-                    Box(Modifier.touchable(screenLocked)) { tools() }
+                    Box(Modifier.touchable(screenLocked)) { tools(false) }
                     Spacer(Modifier.weight(1f))
                     AudioMeter()
                 }

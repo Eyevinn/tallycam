@@ -78,7 +78,7 @@ import kotlin.math.roundToLong
  * camera has no manual sensor.
  */
 @Composable
-fun SideControl(model: AppModel, group: String, groups: List<String>, leading: Boolean,
+fun SideControl(model: AppModel, group: String, groups: List<String>, leading: Boolean, readoutAbove: Boolean = false,
                 locked: Boolean, onSelect: (String) -> Unit, modifier: Modifier = Modifier) {
     val zoom = group == "zoom"
     val descriptors = model.shading.descriptors
@@ -224,19 +224,36 @@ fun SideControl(model: AppModel, group: String, groups: List<String>, leading: B
     val edge = @Composable { if (locked) Box(Modifier.width(Chrome.rockerWidth).height(SIDE_HEIGHT)) else rocker() }
     // The value and K / Tint beside the block on its inner side, level with
     // the mode row (docs/UI_DESIGN.md, "Sizes"); the same size whatever the group.
-    Row(modifier.height(SIDE_HEIGHT), horizontalArrangement = Arrangement.spacedBy(Chrome.gap)) {
-        // The value centred on the mode row, K / Tint above it; the slot is
-        // there for every group.
-        val side = @Composable {
-            Column(Modifier.width(Chrome.readoutWidth).fillMaxHeight()
-                       .padding(bottom = (Chrome.cell - Chrome.valueHeight) / 2),
-                   horizontalAlignment = Alignment.CenterHorizontally,
-                   verticalArrangement = Arrangement.spacedBy(Chrome.gap, Alignment.Bottom)) {
-                if (hasTint) TintSwitch(tint) { tint = it; rate = 0.0 }
-                Box(Modifier.wrapContentWidth(unbounded = true)) { value() }
+    if (!readoutAbove) {
+        Row(modifier.height(SIDE_HEIGHT), horizontalArrangement = Arrangement.spacedBy(Chrome.gap)) {
+            // The value centred on the mode row, K / Tint above it; the slot is
+            // there for every group.
+            val side = @Composable {
+                Column(Modifier.width(Chrome.readoutWidth).fillMaxHeight()
+                           .padding(bottom = (Chrome.cell - Chrome.valueHeight) / 2),
+                       horizontalAlignment = Alignment.CenterHorizontally,
+                       verticalArrangement = Arrangement.spacedBy(Chrome.gap, Alignment.Bottom)) {
+                    if (hasTint) TintSwitch(tint) { tint = it; rate = 0.0 }
+                    Box(Modifier.wrapContentWidth(unbounded = true)) { value() }
+                }
+            }
+            if (leading) { edge(); block(); side() } else { side(); block(); edge() }
+        }
+    } else {
+        // Too narrow for the value beside the block (a phone in portrait):
+        // the value and K / Tint above it, the row kept for every group.
+        Column(modifier.width(Chrome.blockWidth + Chrome.gap + Chrome.rockerWidth), verticalArrangement = Arrangement.spacedBy(Chrome.gap)) {
+            Row(Modifier.fillMaxWidth().height(Chrome.valueHeight),
+                horizontalArrangement = Arrangement.spacedBy(Chrome.gap, if (leading) Alignment.Start else Alignment.End),
+                verticalAlignment = Alignment.CenterVertically) {
+                val v = @Composable { Box(Modifier.wrapContentWidth(unbounded = true)) { value() } }
+                val t = @Composable { if (hasTint) TintSwitch(tint) { tint = it; rate = 0.0 } }
+                if (leading) { v(); t() } else { t(); v() }
+            }
+            Row(Modifier.height(SIDE_HEIGHT), horizontalArrangement = Arrangement.spacedBy(Chrome.gap)) {
+                if (leading) { edge(); block() } else { block(); edge() }
             }
         }
-        if (leading) { edge(); block(); side() } else { side(); block(); edge() }
     }
 }
 

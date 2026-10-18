@@ -26,7 +26,7 @@ Background: [CAMERA_READOUTS](CAMERA_READOUTS.md).
   zones and the rows sit there, so the picture stays clear.
 - **Nothing covers a control.** Messages have their own slot; every element
   has a fixed place on one grid.
-- **Manual stands out.** A value set by hand (manual or locked) is yellow, an
+- **Manual stands out.** A value set by hand (manual) is yellow, an
   automatic one white. Warnings are orange or red.
 - **The phone and the hub are equals.** Either can change any value at any
   time; the last change wins, and both show it at once. A value the hub just
@@ -114,7 +114,7 @@ all chrome stays inside it and the safe areas.
 | Shutter | `1/100` | Exposure |
 | EV | `+0.3 EV`, only in auto exposure and when not 0 | Exposure |
 | WB | `5200 K`, tint after it when not 0: `5200 K +4` (+ magenta, − green) | White balance |
-| Focus | `AF` in auto, `AF-L` when locked, `F 0.42` in manual | Focus |
+| Focus | `AF` in auto, `F 0.42` in manual | Focus |
 
 The values of the groups on the side controls are underlined. A tap on a
 value puts its group on the right side control, unless one of the sides
@@ -154,11 +154,10 @@ Right side shown; the left one is its mirror image.
 - **Mode switch.** Two cells side by side, `A` and `M`, under the selector,
   the same size and look. It shows the state, not an action: the filled cell
   is the current mode (white auto, yellow held). Tap the other cell to
-  switch; the values are kept. `M` stands for any held mode: a group the
-  hub locked, focus locked by a long press on the picture, and a camera
-  without a manual mode for the group (it locks instead) all show `M`. The
-  difference does not matter to the operator; the rocker turns locked into
-  manual anyway. Moving the rocker in auto switches white balance and focus
+  switch; the values are kept. There are only two modes: `A` (auto) and `M`
+  (manual). Going to `M` from auto (the switch, a long press on the picture,
+  white balance once) holds the camera's current values as numbers, which
+  the rocker then changes. Moving the rocker in auto switches white balance and focus
   to manual; exposure stays in auto and changes the compensation. For zoom
   the lens buttons take this row (only on a camera with more than one lens).
   For white balance a third cell, `◎`, sits beside `A` and `M`: a tap sets
@@ -211,7 +210,7 @@ Right side shown; the left one is its mirror image.
 | Exposure, auto | `+` / `−` | `ev_bias` 2 EV/s | 0.3 EV | EV 0 |
 | Exposure, manual | `+` / `−` | `iso` 2 stops/s (log) | 1/3 stop | back to auto |
 | White balance, K | `K+` / `K−` | `wb_temperature` 1500 K/s | 100 K | white balance once |
-| White balance, Tint | `M` / `G` (magenta, green) | `wb_tint` 60/s | 1 | tint 0, in manual white balance (nothing in auto or locked) |
+| White balance, Tint | `M` / `G` (magenta, green) | `wb_tint` 60/s | 1 | tint 0, in manual white balance (nothing in auto) |
 | Focus | `Far` / `Near` | `focus_position` 0.4/s | 0.02 | back to auto |
 | Zoom | `T` / `W` | 2 doublings/s | 1/4 doubling | the lens's own 1× (no digital zoom) |
 
@@ -226,9 +225,10 @@ the lens buttons, which follow the active lens.
 ## Picture
 
 - Tap: focus and expose at that point (and release an AE/AF lock).
-- Touch and hold: lock focus and exposure there (AE/AF lock, as in Apple's
-  camera apps): focus shows `AF-L`, exposure goes to `M` at the values it
-  had. A tap anywhere releases both back to auto.
+- Touch and hold: hold focus and exposure there (AE/AF lock, as in Apple's
+  camera apps): both go to `M` at the values they had, shown as numbers
+  (`F 0.42`, the ISO), with a short "AE/AF LOCK" badge. A tap anywhere
+  returns both to auto.
 - iPhone 16 and later: the Camera Control button offers zoom and exposure
   (EV in auto, ISO in manual) as app controls; the same values as the
   rockers.
@@ -294,7 +294,7 @@ row's footer says why instead of the usual text.
 - Rows: 34 pt high, dark capsules, tabular digits, white text.
 - Group colours (controls only): zoom blue `#3B82F6`, exposure red
   `#EF4444`, white balance violet `#A855F7`, focus green `#22C55E`.
-- Colours: yellow manual or locked, red program and clipping, green preview,
+- Colours: yellow manual, red program and clipping, green preview,
   orange warnings and connecting, cyan a change from the hub (a 1 s flash).
 - Spacing from one set of constants (iOS `Chrome`, Android the same names):
   tally clearance 22, minimum edge 8, gap 10, row gap 6, zone gap 10.

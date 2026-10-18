@@ -24,6 +24,15 @@ into `build/core/` at the repository root (also not committed).
 `scripts/build-core-apple.sh xcframework` builds
 `build/core/TallyCamCore.xcframework` for other consumers.
 
+The unit tests (Swift-side logic: the core's hot path, SEI, the muxer,
+messages, provisioning links) run with the scheme `TallyCamTests`, not
+hosted in the app:
+
+```sh
+xcodebuild test -project TallyCam.xcodeproj -scheme TallyCamTests \
+  -destination 'platform=iOS Simulator,name=iPhone 16'
+```
+
 For latency comparisons, the launch argument `-videoLowLatency NO` turns
 VideoToolbox's low-latency rate control off.
 
@@ -34,9 +43,12 @@ lists what it needs. The build number is the number of commits on HEAD.
 ## The Android app
 
 Requires a JDK 17, the Android SDK with platform 35 and an NDK, Rust with
-`aarch64-linux-android`, and `cargo-ndk` (`cargo install cargo-ndk`):
+`aarch64-linux-android`, and `cargo-ndk` (`cargo install cargo-ndk`). On a
+Mac without a system JDK, point Gradle at Homebrew's
+(`brew install openjdk@17`):
 
 ```sh
+export JAVA_HOME=/opt/homebrew/opt/openjdk@17
 cd android
 echo "sdk.dir=$HOME/Library/Android/sdk" > local.properties
 ./gradlew assembleDebug testDebugUnitTest      # builds the core first (scripts/build-core-android.sh)
@@ -91,9 +103,12 @@ cargo run --release -- --state-file devices.json              # keep known devic
 cargo run --release -- --preview-fps 5                        # preview images per second (default 2)
 cargo run --release -- --invites                              # invite-only; logs the operator link with its token
 cargo run --release -- --operator-token SECRET                # the page, invites and forgetting need the token
+cargo run --release -- --mains-hz 60 --shutter mains          # replace the stored production at startup
 ```
 
-`--help` lists every flag and its environment variable. Append
+`--help` lists every flag and its environment variable. The production
+(mains and shutter) is otherwise set on the page, and kept with
+`--state-file` (docs/SHADING.md, "Shutter"). Append
 `#<device id>` to the page URL to open a camera's panel. `/clapper` on the hub
 is a full-screen flash and beep on every whole second, for A/V sync tests.
 

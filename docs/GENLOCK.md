@@ -228,8 +228,9 @@ Open:
 
 ## Auto ISO
 
-Genlock needs the frame duration, so it cannot run with iOS auto exposure;
-turning it on moves auto exposure to auto ISO. The loop is in the core
+Genlock needs the frame duration, which iOS auto exposure moves, so exposure
+`auto` is the core's auto ISO loop at a fixed shutter (SHADING.md,
+"Shutter"), with or without genlock. The loop is in the core
 (`exposure` module, `lc_auto_iso_*`); the app samples `exposureTargetOffset`,
 the ISO and the shutter at 8 Hz and applies what the loop returns.
 
@@ -242,13 +243,15 @@ the ISO and the shutter at 8 Hz and applies what the loop returns.
 - **Flashes are ignored.** Scene changes count once they fill half of a
   1.2 s median window, so spikes up to about half a second (a flashing
   screen in shot) leave the ISO alone. Bias changes act at once.
-- **Mains flicker.** The control `mains_hz` (50, 60, or 0 for off; default
-  from the device region) rounds the shutter to whole light pulses: 1/100, 1/50, 30 ms
-  at 50 Hz; 1/120, 1/60, 1/40, 1/30 at 60 Hz, within the frame (with 2% room
-  while genlock may shorten frames). The ISO compensates the rounding. At
-  frame rates above twice the mains frequency no flicker-free shutter fits and
-  the shutter is left alone. Off (0) leaves any shutter, for scenes without
-  mains-lit light, such as outdoors.
+- **Mains flicker.** The mains frequency (50, 60, or 0 for off; the hub's
+  production, else the phone's own setting) rounds the shutter to whole
+  light pulses: 1/100, 1/50, 30 ms at 50 Hz; 1/120, 1/60, 1/40, 1/30 at
+  60 Hz, within the frame (with 2% room while genlock may shorten frames).
+  The ISO compensates the rounding; at the lowest ISO the loop shortens the
+  shutter to fewer pulses (1/100 from 1/50) before it reports too bright. At
+  frame rates above twice the mains frequency no flicker-free shutter fits
+  and the shutter is left alone. Off (0) leaves any shutter, for scenes
+  without mains-lit light, such as outdoors.
 - Simulated (camera model with the measured gain 3): a +1 EV bias step
   settles in about 0.25 s with no overshoot; across gains 0.7 to 4 and
   metering lags up to 0.5 s, within 2.2 s without overshoot (two steps while

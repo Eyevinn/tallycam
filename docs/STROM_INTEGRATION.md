@@ -86,7 +86,12 @@ All REST endpoints get `#[utoipa::path]` and `openapi.rs` registration; the
 snapshot is updated on purpose.
 
 Typed hub calls (set, command with a result to await, message, tally) are
-added to `tallycam-hub` first, so Strom does not build protocol JSON.
+in `tallycam-hub` (`Hub::set`, `command`, `message`, `set_tally`), so Strom
+does not build protocol JSON.
+
+Strom upgrades the WebSockets in its own routes, so it applies the hub's
+limits itself: `limit_upgrade` (the message size cap) on both sockets and
+`same_origin` on the control socket (docs/PROTOCOL.md, "Server side").
 
 ### 3. Binding a phone to a flow
 
@@ -107,7 +112,7 @@ This keeps one SRT input block instead of a near-duplicate.
 (Not chosen: a new `builtin.phone_camera` block wrapping the SRT input, a
 second block doing the same media work.)
 
-One listener per bound camera (option A or B) is the simple first step.
+One listener per bound camera is the simple first step.
 Many phones on one port by `streamid` (crowd pools) needs caller handling the
 SRT input does not have yet, and comes later.
 

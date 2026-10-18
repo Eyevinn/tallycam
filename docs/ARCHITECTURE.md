@@ -15,7 +15,7 @@ Desktops, small capture boxes and browsers can take the same role.
 The range of use goes from crowd contribution (anyone scans a QR code and
 sends a stream) to a studio of phones on tripods, logged in, time synced and
 controlled from one place. The phone always gives its consent to a level of
-control, and always shows who controls it.
+control, and shows when the production changes a value.
 
 ## Layers
 
@@ -26,7 +26,7 @@ control, and always shows who controls it.
                 └──────────────┬──────────────────────────────┘
        ┌───────────────┬───────┴────────┬──────────────────┬──────────────┐
    iOS (Swift)    Android (Kotlin)   Desktop          Capture box       Browser
-   AVFoundation   CameraX            Strom edge       GStreamer         WASM core
+   AVFoundation   Camera2            Strom edge       GStreamer         WASM core
    VideoToolbox   MediaCodec         (GStreamer)      (e.g. HDMI in)    + WHIP
 ```
 
@@ -34,7 +34,7 @@ The media path splits into three layers:
 
 | Layer | Phones | Desktop / box |
 |---|---|---|
-| 1. Capture and encode, camera control | Native (AVFoundation + VideoToolbox, CameraX + MediaCodec) | GStreamer |
+| 1. Capture and encode, camera control | Native (AVFoundation + VideoToolbox, Camera2 + MediaCodec) | GStreamer |
 | 2. Packaging and transport (MPEG-TS, SRT, SRTLA, WHIP) | Rust core | GStreamer elements or the Rust core |
 | 3. Device role (provisioning, control, clock, SEI) | Rust core | Rust core |
 

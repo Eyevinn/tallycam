@@ -46,18 +46,18 @@ From a review of a feature wish list, October 2026. In order:
 1. **Adaptive bitrate.** Needed on real Wi-Fi and for the 5G story. Favour
    low latency over picture quality, since genlock depends on it. Done: the
    loop runs on the core's SRT thread (core/src/bitrate/adaptive.rs), driven
-   by the send buffer, RTT, loss and drops; iOS uses it, Android can through
-   the same calls. Not yet tested on a throttled network.
+   by the send buffer, RTT, loss and drops; both apps use it. Not yet tested
+   on a throttled network.
 2. **Torch tally and operator aids.** Cheap, and they make the app feel
    professional.
    - Torch tally: the torch is white and lights the subject, so it shows in
      the picture and shifts exposure. Run it at a low level and make it
      opt-in. It is on the wrong side for the front camera, and it must not
      clash with the torch probe (GENLOCK.md).
-   - Operator aids (PROTOCOL.md, "Candidates for later"): focus peaking and
-     zebra as Metal shaders on the preview, a histogram, and a horizon line
-     from Core Motion (the same data as gyro per frame,
-     DEVICE_CAPABILITIES.md).
+   - Operator aids: done on both apps (grid, horizon level, safe areas,
+     centre cuts, focus peaking, microphone meter, screen lock;
+     docs/UI_DESIGN.md). Zebra and a histogram on the phone are still open
+     (PROTOCOL.md, "Candidates for later").
 3. **Local ISO recording with timecode** (DEVICE_CAPABILITIES.md). A
    full-quality backup that survives the network, aligned with the
    programme by its TAI stamps. Heat from encoding twice is the main risk.
@@ -103,6 +103,6 @@ Cheaper, but fragmented. Many budget phones expose Camera2 only at
 `LEGACY`/`LIMITED` (no real manual ISO or shutter), and MediaCodec encoders
 vary in rate control and latency. Strengths: kiosk mode (device owner),
 foreground services, USB-C Ethernet on every model. The phone describes its
-own controls (`CameraControlTable.swift`), so a weak phone advertises fewer
-of them and still works. Keep a list of tested models (Pixel, Samsung S/A)
+own controls (`CameraControls.kt`), so a weak phone advertises fewer of
+them and still works. Keep a list of tested models (Pixel, Samsung S/A)
 and degrade at runtime.

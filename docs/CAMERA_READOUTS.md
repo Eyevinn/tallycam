@@ -29,16 +29,14 @@ name, and the value itself is where you go to change it.
 ## What TallyCam shows
 
 **Phone.** One row under the status line, always shown:
-`1080p30 │ ISO 26 │ 1/100 │ +0.3 EV │ 5200 K +4 │ AF`. Each value is a
-button: tapping it chooses what the adjust control at the right edge changes
-(the format opens Settings). A value in a manual or locked group is yellow;
-the exposure warning colours ISO ("ISO 26 CLIP"); a value the hub just set
-flashes cyan. EV only when not 0, the bitrate stays in the status line. On
-a narrow screen focus goes first, then white balance. Battery, thermal state
-and tally are in the status line and the name chip (docs/UI_DESIGN.md).
+`1080p30 │ ISO 26 │ 1/100 │ +0.3 EV │ 5200 K +4 │ AF`. Each value is the way
+in to adjust it; manual or locked values are yellow, a value the hub just
+set flashes cyan. Battery, thermal state and tally are in the status row and
+the name chip. The design: docs/UI_DESIGN.md.
 
-**Hub.** The same line on every camera card and shade card, with a badge
-when auto ISO is at a limit (too bright, too dark).
+**Hub.** The same values on one line on every camera card and shade card
+(without the tint; manual focus as `MF 0.42`), with a badge when auto ISO is
+at a limit (too bright, too dark) or the picture clips or is too dark.
 
 ## Not yet
 

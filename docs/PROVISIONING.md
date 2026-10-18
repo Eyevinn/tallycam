@@ -3,8 +3,9 @@
 Status: design sketch. What the prototype does today is provisioning v0 (a
 `tallycam://` deep link carrying the control and SRT URLs, with a one-time
 invite token in the control URL where the server requires invites) plus the
-**device key**: the phone proves a Secure Enclave key on every connection,
-and an invite binds that key. See `PROTOCOL.md`, "Provisioning v0" and
+**device key**: the phone proves a hardware key (Secure Enclave, Android
+Keystore) on every connection, and an invite binds that key. A link for a
+new hub asks "Join <hub>?" first. See `PROTOCOL.md`, "Provisioning v0" and
 "Device keys". The join API, session tokens, trust levels and per-device
 media credentials below are not implemented.
 

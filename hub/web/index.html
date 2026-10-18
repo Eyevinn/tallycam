@@ -58,14 +58,49 @@ header .seg { flex-wrap: nowrap; flex: none; }
 .dot.on { background: var(--ok); }
 .dot.bad { background: var(--pgm); }
 main { flex: 1; display: flex; min-height: 0; }
-#grid {
-  flex: 1; overflow: auto; padding: 16px;
+#grid { flex: 1; overflow: auto; padding: 16px; min-width: 0; }
+/* One grid of cards per section (all cameras, a tag, old offline ones). */
+.cgrid {
   display: grid; gap: 12px; align-content: start;
   grid-template-columns: repeat(auto-fill, minmax(270px, 1fr));
   /* Rows as tall as their cards: never squeezed to fit the window. */
   grid-auto-rows: max-content;
 }
-#empty { padding: 24px 0; grid-column: 1 / -1; display: flex; justify-content: center; }
+.cgrid.compact { grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 8px; }
+.cgrid.compact .readout, .cgrid.compact .stats, .cgrid.compact .card-actions { display: none; }
+#empty { padding: 24px 0; display: flex; justify-content: center; }
+.sec + .sec { margin-top: 16px; }
+.sec-head {
+  display: flex; align-items: center; gap: 8px; margin: 0 0 8px;
+  font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .08em;
+}
+.sec-head:empty { display: none; }
+button.sec-head {
+  width: 100%; background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 8px 12px; cursor: pointer; text-align: left; font-size: 12px; color: var(--text);
+}
+button.sec-head:hover { background: var(--raised); }
+.sec .none { color: var(--muted); padding: 8px 0; }
+
+/* Toolbar of the Cameras view: search, filters, sort, density. */
+#tools {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  padding: 8px 16px; border-bottom: 1px solid var(--line); background: var(--panel); flex: none;
+}
+#tools[hidden] { display: none; }
+#tools input[type=search], #tools select {
+  background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 4px 8px; min-height: 28px;
+}
+#tools input[type=search] { flex: 1 1 180px; min-width: 120px; max-width: 320px; }
+#tools select { max-width: 160px; }
+#tools .seg button .n { color: var(--muted); margin-left: 5px; font-variant-numeric: tabular-nums; }
+#tools .seg button.active .n { color: inherit; opacity: .8; }
+.btn.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn.on:hover:not(:disabled) { background: var(--accent); filter: brightness(1.15); }
+@media (max-width: 820px) {
+  #tools { padding: 8px 12px; }
+  #tools input[type=search] { max-width: none; flex-basis: 100%; }
+}
 
 /* Add a camera (empty state and modal) */
 .add {
@@ -104,6 +139,57 @@ main { flex: 1; display: flex; min-height: 0; }
   transition: border-color .1s;
 }
 .card.selected { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* Hidden on this screen, shown again with "Hidden (n)". */
+.card.is-hidden, .dlist tr.is-hidden { opacity: .45; }
+.card.dragging { opacity: .5; }
+.card.drop-before { box-shadow: -5px 0 0 0 var(--accent); }
+.card.drop-after { box-shadow: 5px 0 0 0 var(--accent); }
+/* Reorder handle, only while the order is the custom one. */
+.drag { display: none; color: var(--faint); cursor: grab; padding: 0 2px; touch-action: none; user-select: none; -webkit-user-select: none; flex: none; }
+.cgrid.reorder .drag { display: inline; }
+.mini {
+  background: none; border: 1px solid transparent; border-radius: 3px; color: var(--faint);
+  font-size: 11px; padding: 0 4px; cursor: pointer; flex: none; line-height: 1.5;
+}
+.mini:hover { color: var(--text); border-color: var(--line); }
+/* The operator's tags. */
+.utags { display: inline-flex; flex-wrap: wrap; gap: 4px; min-width: 0; }
+.utags:empty { display: none; }
+.utag {
+  font-size: 11px; line-height: 1.5; padding: 0 6px; border-radius: 9px; white-space: nowrap;
+  background: var(--raised); border: 1px solid var(--line); color: var(--text);
+  display: inline-flex; align-items: center; gap: 2px;
+}
+.utag .x { background: none; border: 0; color: var(--muted); cursor: pointer; padding: 0 0 0 2px; font-size: 13px; line-height: 1; }
+.utag .x:hover { color: var(--text); }
+.media .utags {
+  position: absolute; top: 6px; right: 6px; max-width: 65%; flex-wrap: nowrap; overflow: hidden; justify-content: flex-end;
+}
+.media .utag, .dlist .utag { display: block; max-width: 120px; overflow: hidden; text-overflow: ellipsis; }
+.media .utag { background: rgba(13, 15, 18, .75); flex: none; }
+.tagedit { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.tagedit input {
+  flex: 1 1 140px; min-width: 0; background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 4px 8px;
+}
+/* List density. */
+.lwrap { overflow-x: auto; }
+.dlist {
+  width: 100%; border-collapse: collapse; background: var(--card); border: 1px solid var(--line);
+  font-variant-numeric: tabular-nums;
+}
+.dlist th {
+  text-align: left; font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase;
+  letter-spacing: .06em; padding: 6px 8px; border-bottom: 1px solid var(--line); white-space: nowrap;
+}
+.dlist td { padding: 5px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.dlist tr:last-child td { border-bottom: 0; }
+.dlist tr.dev { cursor: pointer; }
+.dlist tr.dev:hover { background: var(--raised); }
+.dlist tr.selected td { background: rgba(76, 154, 255, .14); }
+.dlist td.nm { max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
+.dlist td.nm > span { vertical-align: middle; }
+.dlist td.nm .name { font-weight: 600; margin-right: 6px; }
+.dlist .muted { color: var(--muted); }
 .card.tally-preview { border-color: var(--pvw); }
 .card.tally-program { border-color: var(--pgm); }
 .card.offline .media, .card.offline .stats { opacity: .45; }
@@ -371,8 +457,28 @@ a.btn { color: inherit; text-decoration: none; display: inline-flex; align-items
   <a class="btn" id="clapper" href="/clapper" target="_blank" title="Flash and beep on every whole second: film it to check A/V sync">Clapper</a>
   <button class="btn" id="add-camera" type="button">Add camera</button>
 </header>
+<div id="tools" hidden>
+  <input id="search" type="search" placeholder="Search name, model, id, tag  ( / )" aria-label="Search cameras" autocomplete="off" spellcheck="false">
+  <div class="seg" id="filters"></div>
+  <select id="tag-filter" aria-label="Show cameras with this tag"></select>
+  <select id="sort" aria-label="Sort" title="Order of the cameras">
+    <option value="custom">Custom order</option>
+    <option value="name">Name</option>
+    <option value="tally">Tally first</option>
+    <option value="status">Status</option>
+    <option value="seen">Last seen</option>
+  </select>
+  <div class="seg" id="density">
+    <button type="button" data-d="cards">Cards</button>
+    <button type="button" data-d="compact">Compact</button>
+    <button type="button" data-d="list">List</button>
+  </div>
+  <button class="btn" id="group" type="button" aria-pressed="false" title="A section per tag (a camera with several tags shows in each)">Group by tag</button>
+  <button class="btn" id="hidden-chip" type="button" hidden title="Cameras hidden on this screen: show them, dimmed">Hidden</button>
+</div>
+<datalist id="tag-options"></datalist>
 <main>
-  <div id="grid"><div id="empty"></div></div>
+  <div id="grid"><div id="empty"></div><div id="sections"></div></div>
   <aside id="panel"></aside>
   <div id="shade" hidden></div>
 </main>
@@ -412,6 +518,10 @@ const CONFIG = Object.assign({
   // the tab, and sends it with invites, forgets and the controller socket.
   operatorToken: false,
 }, window.TALLYCAM_CONFIG || {});
+
+// The fragment as the page was opened: the view (#f=online&s=name...), a
+// camera to open (#<device id>), or the operator token (removed below).
+const INITIAL_HASH = location.hash;
 
 const OPERATOR_TOKEN = (() => {
   if (!CONFIG.operatorToken) return null;
@@ -546,6 +656,11 @@ function addDevice(id) {
     protocol: 0, imageStats: null, shade: null, isoLimit: null,
     // When this page last set each control, and readout parts to flash.
     sentAt: {}, flash: {}, flashTimer: null,
+    // The operator's tags, and when the hub last saw it (unix seconds).
+    tags: [], lastSeen: null,
+    // Cards and list rows by section key ("" for the first; a camera with
+    // several tags has one per tag section), and what places it (viewKey).
+    cards: new Map(), rows: new Map(), vk: "",
   };
   devices.set(id, d);
   order.push(id);
@@ -721,7 +836,7 @@ function noteChanges(d, values) {
   }
   clearTimeout(d.flashTimer);
   d.flashTimer = setTimeout(() => {
-    if (d.card) updateReadout(d, d.card.readout);
+    forCards(d, c => updateReadout(d, c.readout));
     if (d.shade) updateReadout(d, d.shade.readout);
   }, FLASH_MS + 30);
 }
@@ -814,6 +929,7 @@ function setTags(holder, d) {
 // Cards
 // ---------------------------------------------------------------------------
 
+// A card for `d`; built once per section it shows in (see cardFor).
 function buildCard(d) {
   const img = el("img", { alt: "" });
   img.style.display = "none";
@@ -836,36 +952,73 @@ function buildCard(d) {
     },
   }, "Go Live");
   const tags = el("span", { class: "tags" });
+  const utags = el("span", { class: "utags" });
+  const hide = el("button", {
+    class: "mini", type: "button",
+    onclick: ev => { ev.stopPropagation(); setHidden(d.id, !hiddenIds.has(d.id)); },
+  });
+  const drag = el("span", { class: "drag", title: "Drag to reorder", "aria-hidden": "true" }, "\u283f");
   const card = el("div", { class: "card", onclick: () => select(d.id) },
     el("div", { class: "card-head" },
-      el("span", { class: "dot" }), el("span", { class: "name" }), tags, el("span", { class: "model" })),
-    el("div", { class: "media" }, img, overlay, badge, xwarn),
+      drag, el("span", { class: "dot" }), el("span", { class: "name" }), tags, el("span", { class: "model" }), hide),
+    el("div", { class: "media" }, img, overlay, badge, xwarn, utags),
     readout,
     el("div", { class: "stats" }),
     el("div", { class: "card-actions" }, tally, golive));
-  d.card = { root: card, img, overlay, badge, xwarn, readout, tally, golive, tags };
-  return card;
+  card.dataset.id = d.id;
+  const c = { root: card, img, overlay, badge, xwarn, readout, tally, golive, tags, utags, hide, dirty: true };
+  dragSource(d, c, drag);
+  dropTarget(d, card);
+  if (cardObserver) cardObserver.observe(card);
+  return c;
+}
+
+// The card of `d` for section key `key`, built when first needed. The one
+// for "" is `d.card`.
+function cardFor(d, key) {
+  let c = d.cards.get(key);
+  if (!c) {
+    c = buildCard(d);
+    d.cards.set(key, c);
+    if (key === "") d.card = c;
+  }
+  return c;
+}
+
+// `fn` on each card of `d` that is on the page now; the others are marked
+// to update when they are placed (applyView), so 200 cameras in list view
+// or a collapsed section cost nothing per event.
+function forCards(d, fn) {
+  for (const c of d.cards.values()) {
+    if (c.root.isConnected) fn(c);
+    else c.dirty = true;
+  }
 }
 
 function renderGrid() {
-  const grid = document.getElementById("grid");
-  const empty = document.getElementById("empty");
-  empty.style.display = order.length ? "none" : "";
+  document.getElementById("empty").style.display = order.length ? "none" : "";
   for (const id of order) {
     const d = devices.get(id);
-    if (!d.card) grid.append(buildCard(d));
+    cardFor(d, "");
     updateCard(d);
   }
-  const online = order.filter(id => devices.get(id).online).length;
-  document.getElementById("count").textContent =
-    order.length ? `${online} online / ${order.length} cameras` : "";
+  scheduleView();
 }
 
 function updateCard(d) {
-  const c = d.card;
-  if (!c) return;
+  forCards(d, c => updateCardEl(d, c));
+  forRows(d, r => updateRow(d, r));
+  noteViewKey(d);
+}
+
+function updateCardEl(d, c) {
+  c.dirty = false;
   const r = c.root;
   r.classList.toggle("offline", !d.online);
+  r.classList.toggle("is-hidden", hiddenIds.has(d.id));
+  setUserTags(c.utags, d);
+  c.hide.textContent = hiddenIds.has(d.id) ? "Show" : "Hide";
+  c.hide.title = hiddenIds.has(d.id) ? "Show on this screen again" : "Hide on this screen (this browser only; not Forget)";
   r.classList.toggle("selected", selected === d.id);
   r.classList.toggle("tally-preview", d.tally === "preview");
   r.classList.toggle("tally-program", d.tally === "program");
@@ -1057,18 +1210,23 @@ function updateClockPanel(d) {
 // ---------------------------------------------------------------------------
 
 function select(id) {
+  const was = selected;
   selected = id;
-  for (const d of devices.values()) updateCard(d);
+  for (const x of new Set([was, id])) { const d = x && devices.get(x); if (d) updateCard(d); }
   buildPanel();
+  scheduleWatch();
 }
 
 function closePanel() {
+  const was = selected;
   selected = null;
   panel = null;
   const p = document.getElementById("panel");
   p.classList.remove("open");
   p.replaceChildren();
-  for (const d of devices.values()) updateCard(d);
+  const d = was && devices.get(was);
+  if (d) updateCard(d);
+  scheduleWatch();
 }
 
 function buildPanel() {
@@ -1113,6 +1271,22 @@ function buildPanel() {
   const body = el("div", { class: "p-body" },
     el("div", {}, media, hasFocusAt ? el("div", { class: "hint" }, "Click the picture to focus and expose at that point.") : null),
     el("div", { class: "offline-note", id: "offline-note" }));
+
+  // The operator's tags: x removes one, Enter adds one.
+  const tagInput = el("input", {
+    type: "text", list: "tag-options", maxlength: "40", placeholder: "Add a tag",
+    "aria-label": "Add a tag", spellcheck: "false",
+  });
+  tagInput.addEventListener("keydown", ev => {
+    if (ev.key !== "Enter") return;
+    const t = tagInput.value.trim();
+    if (!t) return;
+    send({ type: "tags", device: d.id, tags: [...d.tags, t] });
+    tagInput.value = "";
+  });
+  panel.tagChips = el("span", { class: "utags" });
+  body.append(el("div", { class: "group" }, el("h3", {}, "Tags"),
+    el("div", { class: "tagedit" }, panel.tagChips, tagInput)));
 
   // Commands.
   const cmds = d.commands.filter(c => c.name);
@@ -1417,6 +1591,7 @@ function updatePanel() {
     b.title = r ? OUTDATED_APP : "";
   });
   if (panel.tags) setTags(panel.tags, d);
+  if (panel.tagChips) setUserTags(panel.tagChips, d, true);
   if (panel.nameEl) setName(panel.nameEl, d);
   if (panel.msgButton) panel.msgButton.disabled = !d.online;
   const dot = document.querySelector("#panel .p-head .dot");
@@ -1449,6 +1624,8 @@ function applySnapshotDevice(s) {
   d.keyFingerprint = s.key_fingerprint || null;
   d.protocol = s.protocol || 0;
   d.imageStats = (s.online && s.image_stats) || null;
+  d.tags = Array.isArray(s.tags) ? s.tags : [];
+  d.lastSeen = typeof s.last_seen_s === "number" ? s.last_seen_s : null;
 }
 
 // "3f2a 9c1d 7b0e 44a1": the start of the key fingerprint, to compare with
@@ -1460,7 +1637,8 @@ function shortFingerprint(fp) {
 function removeDevice(id) {
   const d = devices.get(id);
   if (!d) return;
-  if (d.card) d.card.root.remove();
+  for (const c of d.cards.values()) { c.root.remove(); if (cardObserver) cardObserver.unobserve(c.root); visibleCards.delete(c.root); }
+  for (const r of d.rows.values()) r.root.remove();
   if (d.shade) d.shade.root.remove();
   devices.delete(id);
   const i = order.indexOf(id);
@@ -1491,15 +1669,20 @@ function onMessage(m) {
       // Devices the hub no longer lists were forgotten while this page was
       // away (a restarted hub lists the ones it keeps).
       for (const id of [...devices.keys()]) if (!seen.has(id)) removeDevice(id);
+      // The hub's display order.
+      setOrder((m.devices || []).map(s => s.id));
       // Controls may have changed meanwhile, as in `device_hello`.
       for (const dev of devices.values()) if (dev.shade && dev.shade.layout !== shadeLayout(dev)) dev.shade.rebuild = true;
       if (m.production) production = m.production;
       renderGrid();
       renderShade();
-      // Deep link: open a camera's panel with #<device id>.
-      const want = decodeURIComponent(location.hash.slice(1));
-      if (!selected && want && devices.has(want)) selected = want;
+      // Deep link: open a camera's panel with #<device id>, once.
+      if (!selected && deepLink && devices.has(deepLink)) selected = deepLink;
+      if (selected === deepLink) deepLink = null;
       if (selected) select(selected);
+      // A new connection watches everything until told otherwise.
+      watchSent = undefined;
+      scheduleWatch();
       return;
     }
     case "device_hello": {
@@ -1513,6 +1696,7 @@ function onMessage(m) {
       if (!hasShading(nd)) nd.imageStats = null;
       if (!nd.online) addLog(nd.id, "debug", "online");
       nd.online = true;
+      nd.lastSeen = Math.floor(Date.now() / 1000);
       renderGrid();
       // New controls or protocol: the shading card is rebuilt only when
       // what it shows changed, and not in the middle of a drag.
@@ -1542,7 +1726,7 @@ function onMessage(m) {
     case "device_preview":
       if (!d) return;
       d.preview = { jpeg: m.jpeg, width: m.width, height: m.height };
-      if (d.card) updateMedia(d, d.card.img, d.card.overlay);
+      forCards(d, c => updateMedia(d, c.img, c.overlay));
       if (selected === d.id && panel) updateMedia(d, panel.media.img, panel.media.overlay);
       if (d.shade) updateMedia(d, d.shade.img, d.shade.overlay);
       return;
@@ -1560,14 +1744,27 @@ function onMessage(m) {
       d.status = null;
       d.imageStats = null;
       d.isoLimit = null;
+      d.lastSeen = typeof m.last_seen_s === "number" ? m.last_seen_s : Math.floor(Date.now() / 1000);
       addLog(d.id, "warn", "offline");
-      renderGrid();
+      updateCard(d);
       if (selected === d.id) updatePanel();
       updateShadeCard(d);
       updateProductionBar();
       return;
     case "device_removed":
       removeDevice(m.device);
+      return;
+    case "device_tags":
+      if (!d) return;
+      d.tags = Array.isArray(m.tags) ? m.tags : [];
+      updateCard(d);
+      if (selected === d.id) updatePanel();
+      scheduleView();
+      return;
+    case "order":
+      setOrder(m.devices || []);
+      scheduleView();
+      if (view === "shading") renderShade();
       return;
     case "device_result": {
       const p = pending.get(m.id);
@@ -1615,6 +1812,604 @@ function onMessage(m) {
     default:
       return; // unknown types are ignored
   }
+}
+
+// ---------------------------------------------------------------------------
+// Many cameras: search, filters, sort, density, tag sections, hiding on this
+// screen, the custom order (drag and drop) and which previews this page
+// watches. Cards and rows are built once and moved, never rebuilt; the
+// layout (applyView) runs at most every 100 ms, and only when something it
+// depends on changed (viewKey).
+// ---------------------------------------------------------------------------
+
+const FILTERS = [
+  ["all", "All", () => true],
+  ["online", "Online", d => d.online],
+  ["live", "Live", d => isLiveState(d)],
+  ["onair", "On air", d => d.tally === "program" || d.tally === "preview"],
+  ["attention", "Needs attention", d => needsAttention(d)],
+  ["offline", "Offline", d => !d.online],
+];
+const SORTS = ["custom", "name", "tally", "status", "seen"];
+const DENSITIES = ["cards", "compact", "list"];
+// Offline longer than this, a camera goes into the "Offline (n)" row.
+const STALE_S = 24 * 3600;
+const STALE_KEY = "\u0000stale";
+const NO_TAG_KEY = "\u0000none";
+const HIDDEN_KEY = "tallycamHidden:" + location.host + location.pathname;
+
+// The view, kept in the URL fragment (#f=online&s=name&t=Studio%20A&d=list&g=1&q=cam).
+const vs = { f: "all", s: "custom", t: "", d: "cards", g: false, q: "" };
+// A camera to open from #<device id> (no "="), once it is listed.
+let deepLink = null;
+(() => {
+  const h = INITIAL_HASH.slice(1);
+  if (!h) return;
+  if (!h.includes("=")) {
+    try { deepLink = decodeURIComponent(h); } catch (e) { deepLink = h; }
+    return;
+  }
+  const p = new URLSearchParams(h);
+  if (FILTERS.some(([k]) => k === p.get("f"))) vs.f = p.get("f");
+  if (SORTS.includes(p.get("s"))) vs.s = p.get("s");
+  if (DENSITIES.includes(p.get("d"))) vs.d = p.get("d");
+  vs.t = p.get("t") || "";
+  vs.g = p.get("g") === "1";
+  vs.q = p.get("q") || "";
+})();
+
+function writeHash() {
+  const p = new URLSearchParams();
+  if (vs.f !== "all") p.set("f", vs.f);
+  if (vs.s !== "custom") p.set("s", vs.s);
+  if (vs.t) p.set("t", vs.t);
+  if (vs.d !== "cards") p.set("d", vs.d);
+  if (vs.g) p.set("g", "1");
+  if (vs.q) p.set("q", vs.q);
+  const h = p.toString().replace(/\+/g, "%20");
+  try { history.replaceState(null, "", location.pathname + location.search + (h ? "#" + h : "")); } catch (e) { /* sandboxed */ }
+}
+
+// Hidden on this screen: this browser, this page (host and path), never
+// the hub. Not Forget.
+const hiddenIds = new Set((() => {
+  try { const v = JSON.parse(storageGet(HIDDEN_KEY) || "[]"); return Array.isArray(v) ? v.filter(x => typeof x === "string") : []; }
+  catch (e) { return []; }
+})());
+let showHidden = false;
+
+function setHidden(id, hide) {
+  if (hide) hiddenIds.add(id); else hiddenIds.delete(id);
+  storageSet(HIDDEN_KEY, JSON.stringify([...hiddenIds]));
+  const d = devices.get(id);
+  if (d) updateCard(d);
+  scheduleView();
+}
+
+function nameOf(d) {
+  return d.info.name || d.id;
+}
+
+function byName(a, b) {
+  return nameOf(a).localeCompare(nameOf(b), undefined, { numeric: true, sensitivity: "base" });
+}
+
+// Online, and something the operator should look at: the clock not
+// healthy, hot, an exposure warning, a stream error, a low battery that is
+// not charging, or an app to update.
+function needsAttention(d) {
+  if (!d.online) return false;
+  if (refusesShading(d)) return true;
+  if (exposureWarning(d).text) return true;
+  const s = d.status;
+  if (!s) return false;
+  const c = s.clock;
+  if (c && (c.health || (c.synced ? "healthy" : "bad")) !== "healthy") return true;
+  if (s.thermal === "serious" || s.thermal === "critical") return true;
+  const st = s.stream;
+  if (st && (st.state === "error" || st.error)) return true;
+  const b = s.battery;
+  if (b && typeof b.level === "number" && b.level < 0.2 && !b.charging) return true;
+  return false;
+}
+
+function nowS() {
+  return Math.floor(Date.now() / 1000);
+}
+
+// Offline and not seen for a day (or never, as far as the hub knows).
+function isStale(d) {
+  return !d.online && (typeof d.lastSeen !== "number" || nowS() - d.lastSeen > STALE_S);
+}
+
+function fmtSeen(d) {
+  if (d.online) return "now";
+  if (typeof d.lastSeen !== "number") return "never";
+  const s = Math.max(0, nowS() - d.lastSeen);
+  if (s < 60) return "just now";
+  if (s < 3600) return Math.floor(s / 60) + " min ago";
+  if (s < 86400) return Math.floor(s / 3600) + " h ago";
+  return Math.floor(s / 86400) + " d ago";
+}
+
+function matchesSearch(d) {
+  const q = vs.q.trim().toLowerCase();
+  if (!q) return true;
+  const i = d.info || {};
+  return [i.name, i.model, d.id, i.platform, ...d.tags].some(x => x && String(x).toLowerCase().includes(q));
+}
+
+function hasTag(d, tag) {
+  const t = tag.toLowerCase();
+  return d.tags.some(x => x.toLowerCase() === t);
+}
+
+// What decides where a camera goes; a change lays the page out again.
+function viewKey(d) {
+  return [d.online, isLiveState(d), d.tally, needsAttention(d), nameOf(d), d.info.model || "",
+    d.tags.join("\u0001"), isStale(d), d.lastSeen, hiddenIds.has(d.id)].join("|");
+}
+
+function noteViewKey(d) {
+  const k = viewKey(d);
+  if (k === d.vk) return;
+  d.vk = k;
+  scheduleView();
+}
+
+let viewTimer = null;
+function scheduleView() {
+  if (!viewTimer) viewTimer = setTimeout(applyView, 100);
+}
+
+function setOrder(ids) {
+  const known = ids.filter(id => devices.has(id));
+  const listed = new Set(known);
+  const rest = order.filter(id => !listed.has(id));
+  order.splice(0, order.length, ...known, ...rest);
+}
+
+function sortDevices(list) {
+  const rank = {
+    tally: d => d.tally === "program" ? 0 : d.tally === "preview" ? 1 : 2,
+    status: d => isLiveState(d) ? 0 : d.online ? 1 : 2,
+  };
+  switch (vs.s) {
+    case "name": return list.sort(byName);
+    case "tally": case "status": return list.sort((a, b) => rank[vs.s](a) - rank[vs.s](b) || byName(a, b));
+    case "seen": {
+      const seen = d => d.online ? Infinity : typeof d.lastSeen === "number" ? d.lastSeen : -Infinity;
+      return list.sort((a, b) => (seen(b) - seen(a)) || byName(a, b));
+    }
+    default: return list; // `order`, as the hub keeps it
+  }
+}
+
+function reorderOn() {
+  return vs.s === "custom" && !vs.g && vs.d !== "list";
+}
+
+const sections = new Map();  // key -> { root, head, body, grid, table, tbody }
+let staleOpen = false;
+
+function sectionEl(key) {
+  let s = sections.get(key);
+  if (s) return s;
+  const collapsible = key === STALE_KEY;
+  const head = collapsible
+    ? el("button", { type: "button", class: "sec-head", onclick: () => { staleOpen = !staleOpen; applyView(); } })
+    : el("div", { class: "sec-head" });
+  const body = el("div", {});
+  s = { root: el("div", { class: "sec" }, head, body), head, body, grid: null, table: null, tbody: null };
+  sections.set(key, s);
+  return s;
+}
+
+function sectionBody(s, list) {
+  if (!list) {
+    if (!s.grid) s.grid = el("div", { class: "cgrid" });
+    s.grid.classList.toggle("compact", vs.d === "compact");
+    return s.grid;
+  }
+  if (!s.table) {
+    s.tbody = el("tbody", {});
+    s.table = el("div", { class: "lwrap" }, el("table", { class: "dlist" },
+      el("thead", {}, el("tr", {}, ["", "Name", "Tally", "Stream", "Battery", "Thermal", "Clock", "Last seen", ""]
+        .map(h => el("th", {}, h)))),
+      s.tbody));
+  }
+  return s.table;
+}
+
+// Put `nodes` in `parent` in this order, moving only what is out of place.
+function placeChildren(parent, nodes) {
+  let i = 0;
+  for (const n of nodes) {
+    const at = parent.children[i];
+    if (at !== n) parent.insertBefore(n, at || null);
+    i++;
+  }
+  while (parent.children.length > nodes.length) parent.lastElementChild.remove();
+}
+
+function applyView() {
+  clearTimeout(viewTimer);
+  viewTimer = null;
+  const all = order.map(id => devices.get(id)).filter(Boolean);
+  document.getElementById("empty").style.display = all.length ? "none" : "";
+  const base = all.filter(d => (showHidden || !hiddenIds.has(d.id)) && matchesSearch(d) && (!vs.t || hasTag(d, vs.t)));
+  const filter = (FILTERS.find(([k]) => k === vs.f) || FILTERS[0])[2];
+  const shown = sortDevices(base.filter(filter));
+  updateTools(all, base, shown);
+
+  // Sections: every camera (or one per tag), then old offline ones.
+  const fresh = shown.filter(d => !isStale(d));
+  const stale = shown.filter(isStale);
+  const secs = [];
+  if (vs.g) {
+    const names = new Map();  // lower case -> first spelling
+    for (const d of fresh) for (const t of d.tags) if (!names.has(t.toLowerCase())) names.set(t.toLowerCase(), t);
+    const tags = [...names.values()].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base", numeric: true }));
+    for (const t of tags) secs.push({ key: "t:" + t.toLowerCase(), title: t, devs: fresh.filter(d => hasTag(d, t)) });
+    const untagged = fresh.filter(d => !d.tags.length);
+    if (untagged.length) secs.push({ key: NO_TAG_KEY, title: "No tag", devs: untagged });
+  } else {
+    secs.push({ key: "", title: "", devs: fresh });
+  }
+  if (stale.length) secs.push({ key: STALE_KEY, title: "", devs: stale, collapsed: !staleOpen });
+
+  const list = vs.d === "list";
+  const used = new Map();  // device id -> card or row keys used
+  const roots = [];
+  for (const sec of secs) {
+    const s = sectionEl(sec.key);
+    roots.push(s.root);
+    if (sec.key === STALE_KEY) {
+      s.head.textContent = (staleOpen ? "▾ " : "▸ ") + "Offline (" + sec.devs.length + ")";
+      s.head.title = "Cameras offline for more than a day" + (staleOpen ? "" : ": click to show them");
+    } else {
+      s.head.textContent = sec.title ? sec.title + " · " + sec.devs.length : "";
+    }
+    if (sec.collapsed) { s.body.replaceChildren(); continue; }
+    const body = sectionBody(s, list);
+    placeChildren(s.body, [body]);
+    const items = sec.devs.map(d => {
+      // A camera's first place uses its "" card; more places (tags) their own.
+      const keys = used.get(d.id) || [];
+      const key = keys.length ? sec.key : "";
+      keys.push(key);
+      used.set(d.id, keys);
+      return list ? rowFor(d, key) : cardFor(d, key);
+    });
+    if (list) {
+      placeChildren(s.tbody, items.map(r => r.root));
+    } else {
+      s.grid.classList.toggle("reorder", reorderOn());
+      placeChildren(s.grid, items.map(c => c.root));
+      if (!items.length) s.grid.replaceChildren(el("div", { class: "none" }, all.length ? "No camera matches." : ""));
+    }
+    for (const it of items) if (it.dirty) (list ? updateRow : updateCardEl)(devices.get(it.root.dataset.id), it);
+  }
+  placeChildren(document.getElementById("sections"), roots);
+
+  // Extra cards and rows of sections that are gone.
+  for (const d of all) {
+    const keep = new Set(used.get(d.id) || []);
+    for (const [k, c] of d.cards) if (k !== "" && !(keep.has(k) && !list)) {
+      c.root.remove();
+      if (cardObserver) cardObserver.unobserve(c.root);
+      visibleCards.delete(c.root);
+      d.cards.delete(k);
+    }
+    for (const [k, r] of d.rows) if (k !== "" && !(keep.has(k) && list)) { r.root.remove(); d.rows.delete(k); }
+  }
+  scheduleWatch();
+}
+
+// The toolbar: chip counts, the tag list, the header count.
+function updateTools(all, base, shown) {
+  for (const b of document.querySelectorAll("#filters button")) {
+    const f = FILTERS.find(([k]) => k === b.dataset.f);
+    b.classList.toggle("active", vs.f === f[0]);
+    b.querySelector(".n").textContent = base.filter(f[2]).length;
+  }
+  const tagNames = new Map();
+  for (const d of all) for (const t of d.tags) if (!tagNames.has(t.toLowerCase())) tagNames.set(t.toLowerCase(), t);
+  if (vs.t && !tagNames.has(vs.t.toLowerCase())) tagNames.set(vs.t.toLowerCase(), vs.t);
+  const tags = [...tagNames.values()].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base", numeric: true }));
+  const sel = document.getElementById("tag-filter");
+  const key = tags.join("\u0001");
+  if (sel._key !== key) {
+    sel._key = key;
+    sel.replaceChildren(el("option", { value: "" }, "All tags"), ...tags.map(t => el("option", { value: t }, t)));
+    document.getElementById("tag-options").replaceChildren(...tags.map(t => el("option", { value: t })));
+  }
+  sel.value = tags.find(t => t.toLowerCase() === vs.t.toLowerCase()) || "";
+  sel.style.display = tags.length ? "" : "none";
+  document.getElementById("sort").value = vs.s;
+  for (const b of document.querySelectorAll("#density button")) b.classList.toggle("active", b.dataset.d === vs.d);
+  const group = document.getElementById("group");
+  group.classList.toggle("on", vs.g);
+  group.setAttribute("aria-pressed", vs.g ? "true" : "false");
+  const search = document.getElementById("search");
+  if (document.activeElement !== search && search.value !== vs.q) search.value = vs.q;
+  const hiddenNow = all.filter(d => hiddenIds.has(d.id)).length;
+  const chip = document.getElementById("hidden-chip");
+  chip.hidden = !hiddenNow;
+  chip.textContent = "Hidden (" + hiddenNow + ")";
+  chip.classList.toggle("on", showHidden);
+  const online = all.filter(d => d.online).length;
+  document.getElementById("count").textContent = !all.length ? ""
+    : shown.length < all.length ? `${shown.length} of ${all.length} cameras`
+    : `${online} online / ${all.length} cameras`;
+}
+
+function setVs(change) {
+  Object.assign(vs, change);
+  writeHash();
+  applyView();
+}
+
+function initTools() {
+  const filters = document.getElementById("filters");
+  filters.replaceChildren(...FILTERS.map(([k, label]) => el("button", {
+    type: "button", "data-f": k, onclick: () => setVs({ f: k }),
+  }, label, el("span", { class: "n" }))));
+  const search = document.getElementById("search");
+  search.value = vs.q;
+  let t = null;
+  search.addEventListener("input", () => {
+    clearTimeout(t);
+    t = setTimeout(() => setVs({ q: search.value }), 120);
+  });
+  search.addEventListener("keydown", ev => {
+    if (ev.key === "Escape") { search.value = ""; setVs({ q: "" }); search.blur(); }
+  });
+  document.getElementById("tag-filter").addEventListener("change", ev => setVs({ t: ev.target.value }));
+  document.getElementById("sort").addEventListener("change", ev => setVs({ s: ev.target.value }));
+  for (const b of document.querySelectorAll("#density button")) b.addEventListener("click", () => setVs({ d: b.dataset.d }));
+  document.getElementById("group").addEventListener("click", () => setVs({ g: !vs.g }));
+  document.getElementById("hidden-chip").addEventListener("click", () => { showHidden = !showHidden; applyView(); });
+  if ("IntersectionObserver" in window) {
+    cardObserver = new IntersectionObserver(entries => {
+      for (const e of entries) {
+        if (e.isIntersecting) visibleCards.add(e.target); else visibleCards.delete(e.target);
+      }
+      scheduleWatch();
+    }, { root: document.getElementById("grid"), rootMargin: "200px 0px" });
+  }
+  // Last seen moves on, and a camera offline for a day joins the old ones.
+  setInterval(() => {
+    for (const d of devices.values()) {
+      noteViewKey(d);
+      if (!d.online) forRows(d, r => { r.seen.textContent = fmtSeen(d); });
+    }
+  }, 30000);
+  applyView();
+}
+
+// The operator's tags as chips; `removable` adds an x that sends the tags
+// without it.
+function setUserTags(holder, d, removable) {
+  const key = d.tags.join("\u0001");
+  if (holder._key === key) return;
+  holder._key = key;
+  holder.replaceChildren(...d.tags.map(t => el("span", { class: "utag", title: t }, t,
+    removable ? el("button", {
+      class: "x", type: "button", title: "Remove " + t, "aria-label": "Remove tag " + t,
+      onclick: ev => { ev.stopPropagation(); send({ type: "tags", device: d.id, tags: d.tags.filter(x => x !== t) }); },
+    }, "×") : null)));
+}
+
+// ---------------------------------------------------------------------------
+// List density: one row per camera, no preview.
+// ---------------------------------------------------------------------------
+
+function rowFor(d, key) {
+  let r = d.rows.get(key);
+  if (r) return r;
+  const cell = cls => el("td", cls ? { class: cls } : {});
+  const dot = el("span", { class: "dot" });
+  const name = el("span", { class: "name" });
+  const notes = el("span", { class: "tags" });
+  const utags = el("span", { class: "utags" });
+  const hide = el("button", {
+    class: "mini", type: "button",
+    onclick: ev => { ev.stopPropagation(); setHidden(d.id, !hiddenIds.has(d.id)); },
+  });
+  const td = { tally: cell(), stream: cell(), battery: cell(), thermal: cell(), clock: cell(), seen: cell("muted") };
+  const nm = el("td", { class: "nm" }, name, notes, " ", utags);
+  const root = el("tr", { class: "dev", onclick: () => select(d.id) },
+    el("td", {}, dot), nm, td.tally, td.stream, td.battery, td.thermal, td.clock, td.seen, el("td", {}, hide));
+  root.dataset.id = d.id;
+  r = { root, dot, name, notes, utags, hide, ...td, dirty: true };
+  d.rows.set(key, r);
+  return r;
+}
+
+function forRows(d, fn) {
+  for (const r of d.rows.values()) {
+    if (r.root.isConnected) fn(r);
+    else r.dirty = true;
+  }
+}
+
+function updateRow(d, r) {
+  r.dirty = false;
+  r.root.classList.toggle("selected", selected === d.id);
+  r.root.classList.toggle("is-hidden", hiddenIds.has(d.id));
+  r.dot.className = "dot" + (d.online ? " on" : "");
+  setName(r.name, d);
+  setTags(r.notes, d);
+  setUserTags(r.utags, d);
+  r.hide.textContent = hiddenIds.has(d.id) ? "Show" : "Hide";
+  r.hide.title = hiddenIds.has(d.id) ? "Show on this screen again" : "Hide on this screen (this browser only; not Forget)";
+  r.tally.replaceChildren(d.tally === "program" ? el("span", { class: "name t-program" }, "PGM")
+    : d.tally === "preview" ? el("span", { class: "name t-preview" }, "PVW") : "");
+  const s = d.online ? d.status : null;
+  const st = s && s.stream;
+  r.stream.replaceChildren();
+  if (st && st.state && st.state !== "idle") {
+    r.stream.append(el("span", { class: "badge " + st.state, title: st.error || "" }, st.state.toUpperCase()));
+    if (st.state === "live" && typeof st.bitrate_kbps === "number") r.stream.append(" " + (st.bitrate_kbps / 1000).toFixed(1) + " Mb/s");
+  } else if (d.online) {
+    r.stream.append(el("span", { class: "muted" }, st ? "idle" : "-"));
+  }
+  const b = s && s.battery;
+  if (b && typeof b.level === "number") {
+    const pct = Math.round(b.level * 100);
+    r.battery.replaceChildren(el("span", { class: pct < 20 && !b.charging ? "chip low" : "" }, pct + "%" + (b.charging ? " chg" : "")));
+  } else {
+    r.battery.replaceChildren();
+  }
+  r.thermal.replaceChildren(s && s.thermal ? el("span", { class: "chip " + s.thermal }, s.thermal) : "");
+  const c = s && s.clock;
+  if (c) {
+    const level = c.health || (c.synced ? "healthy" : "bad");
+    r.clock.replaceChildren(el("span", { class: "chip clk-" + level, title: clockSummaryText(c) }, level));
+  } else {
+    r.clock.replaceChildren();
+  }
+  r.seen.textContent = fmtSeen(d);
+}
+
+// ---------------------------------------------------------------------------
+// Custom order: drag a card by its handle (mouse: HTML5 drag and drop;
+// touch and pen: pointer events) and drop it before or after another. The
+// page sends the full order (`arrange`), every camera included, with the
+// moved one next to its new visible neighbour.
+// ---------------------------------------------------------------------------
+
+let dragId = null;
+let dropAt = null;  // { card, before }
+
+function clearDrop() {
+  if (dropAt) dropAt.card.classList.remove("drop-before", "drop-after");
+  dropAt = null;
+}
+
+function markDrop(card, clientX) {
+  const r = card.getBoundingClientRect();
+  const before = clientX < r.left + r.width / 2;
+  if (dropAt && dropAt.card === card && dropAt.before === before) return;
+  clearDrop();
+  if (card.dataset.id === dragId) return;
+  dropAt = { card, before };
+  card.classList.add(before ? "drop-before" : "drop-after");
+}
+
+function finishDrop() {
+  const at = dropAt;
+  clearDrop();
+  const moved = dragId;
+  dragId = null;
+  for (const c of document.querySelectorAll(".card.dragging")) c.classList.remove("dragging");
+  if (!at || !moved || !reorderOn()) return;
+  const target = at.card.dataset.id;
+  if (target === moved) return;
+  const next = order.filter(id => id !== moved);
+  let i = next.indexOf(target);
+  if (i < 0) return;
+  if (!at.before) i++;
+  next.splice(i, 0, moved);
+  order.splice(0, order.length, ...next);
+  send({ type: "arrange", order: next });
+  applyView();
+}
+
+function dragSource(d, c, handle) {
+  handle.setAttribute("draggable", "true");
+  handle.addEventListener("click", ev => ev.stopPropagation());
+  handle.addEventListener("dragstart", ev => {
+    // Not while a touch drag (below) runs.
+    if (!reorderOn() || dragId) { ev.preventDefault(); return; }
+    dragId = d.id;
+    ev.dataTransfer.effectAllowed = "move";
+    ev.dataTransfer.setData("text/plain", d.id);
+    try { ev.dataTransfer.setDragImage(c.root, 24, 16); } catch (e) { /* older browsers */ }
+    c.root.classList.add("dragging");
+  });
+  handle.addEventListener("dragend", () => { clearDrop(); dragId = null; c.root.classList.remove("dragging"); });
+  // Touch and pen: follow the pointer, scroll near the edges.
+  handle.addEventListener("pointerdown", ev => {
+    if (ev.pointerType === "mouse" || !reorderOn()) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    dragId = d.id;
+    c.root.classList.add("dragging");
+    try { handle.setPointerCapture(ev.pointerId); } catch (e) { /* gone */ }
+    const grid = document.getElementById("grid");
+    const move = e => {
+      const g = grid.getBoundingClientRect();
+      if (e.clientY < g.top + 40) grid.scrollBy(0, -12);
+      else if (e.clientY > g.bottom - 40) grid.scrollBy(0, 12);
+      const under = document.elementFromPoint(e.clientX, e.clientY);
+      const card = under && under.closest(".cgrid.reorder .card");
+      if (card) markDrop(card, e.clientX); else clearDrop();
+    };
+    const end = e => {
+      handle.removeEventListener("pointermove", move);
+      handle.removeEventListener("pointerup", end);
+      handle.removeEventListener("pointercancel", end);
+      if (e.type === "pointercancel") clearDrop();
+      finishDrop();
+    };
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", end);
+    handle.addEventListener("pointercancel", end);
+  });
+}
+
+function dropTarget(d, card) {
+  card.addEventListener("dragover", ev => {
+    if (!dragId || !reorderOn() || !card.closest(".cgrid.reorder")) return;
+    ev.preventDefault();
+    ev.dataTransfer.dropEffect = "move";
+    markDrop(card, ev.clientX);
+  });
+  card.addEventListener("dragleave", ev => {
+    if (dropAt && dropAt.card === card && !card.contains(ev.relatedTarget)) clearDrop();
+  });
+  card.addEventListener("drop", ev => {
+    if (!dragId) return;
+    ev.preventDefault();
+    markDrop(card, ev.clientX);
+    finishDrop();
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Watch: the hub sends previews only for the cameras some controller shows.
+// This page shows the cards in (or near) the viewport and the open panel;
+// in list view and in collapsed or hidden sections only the panel; the
+// Shading view shows every camera (null: all).
+// ---------------------------------------------------------------------------
+
+let cardObserver = null;
+const visibleCards = new Set();
+let watchTimer = null;
+let watchSent;  // the last `devices` sent, as JSON; undefined after a (re)connect
+
+function watchedIds() {
+  if (view === "shading" || !cardObserver) return null;
+  const ids = new Set();
+  if (vs.d !== "list") for (const root of visibleCards) if (root.isConnected) ids.add(root.dataset.id);
+  if (selected && panel) ids.add(selected);
+  return [...ids].sort();
+}
+
+function scheduleWatch() {
+  clearTimeout(watchTimer);
+  watchTimer = setTimeout(sendWatch, 300);
+}
+
+function sendWatch() {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  const ids = watchedIds();
+  const key = JSON.stringify(ids);
+  if (key === watchSent) return;
+  watchSent = key;
+  send({ type: "watch", devices: ids });
 }
 
 // ---------------------------------------------------------------------------
@@ -2048,7 +2843,8 @@ function rebuildShadeCard(d) {
 
 // The exposure warnings, from a new log line or statistics.
 function updateWarnings(d) {
-  if (d.card) { showWarning(d.card.xwarn, d); updateReadout(d, d.card.readout); }
+  forCards(d, c => { showWarning(c.xwarn, d); updateReadout(d, c.readout); });
+  noteViewKey(d);
   if (d.shade) { showWarning(d.shade.xwarn, d); updateReadout(d, d.shade.readout); }
 }
 
@@ -2221,7 +3017,9 @@ function setView(v) {
   for (const b of document.querySelectorAll("#views button")) b.classList.toggle("active", b.dataset.view === view);
   const shading = view === "shading";
   document.getElementById("grid").hidden = shading;
+  document.getElementById("tools").hidden = shading;
   document.getElementById("shade").hidden = !shading;
+  scheduleWatch();
   if (shading) {
     document.getElementById("panel").classList.remove("open");
     renderShade();
@@ -2259,7 +3057,7 @@ function connect() {
   const query = OPERATOR_TOKEN ? "?token=" + encodeURIComponent(OPERATOR_TOKEN) : "";
   ws = new WebSocket(proto + "//" + location.host + CONFIG.controlPath + query);
   setConn("", "connecting");
-  ws.onopen = () => { backoff = 500; setConn("on", "hub connected"); updateProductionBar(); };
+  ws.onopen = () => { backoff = 500; watchSent = undefined; setConn("on", "hub connected"); updateProductionBar(); };
   ws.onmessage = ev => {
     let m;
     try { m = JSON.parse(ev.data); } catch (e) { return; }
@@ -2461,6 +3259,14 @@ document.getElementById("modal").addEventListener("click", ev => {
 });
 
 document.addEventListener("keydown", ev => {
+  // "/" finds a camera, as on many sites.
+  const typing = ev.target instanceof HTMLInputElement || ev.target instanceof HTMLTextAreaElement ||
+    ev.target instanceof HTMLSelectElement;
+  if (ev.key === "/" && !typing && !ev.metaKey && !ev.ctrlKey && !ev.altKey && view === "cameras") {
+    ev.preventDefault();
+    document.getElementById("search").focus();
+    return;
+  }
   if (ev.key !== "Escape" || ev.target instanceof HTMLInputElement) return;
   if (!document.getElementById("modal").hidden) closeAdd();
   else if (selected) closePanel();
@@ -2471,6 +3277,7 @@ if (CONFIG.clapperUrl) document.getElementById("clapper").href = CONFIG.clapperU
 else document.getElementById("clapper").remove();
 renderAddCards();
 loadInfo();
+initTools();
 setView(storageGet("tallycamView") || "cameras");
 connect();
 </script>

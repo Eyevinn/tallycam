@@ -98,52 +98,46 @@ balance; it never wraps.
 Right side shown; the left one is its mirror image.
 
 ```
- [ZOOM]  ┌─┐   selector: ZOOM / EXP / WB / FOC, the chosen one filled
- [EXP▪]  │+│
- [WB  ]  │ │
- [FOC ]  │●│   rocker: push up for more, down for less;
-         │ │   speed rises with the square of the deflection;
- [ A  ]  │ │   release: stops and springs back; tap an end: one step;
- [ M▪ ]  │−│   double tap the knob: back to the neutral value
-         └─┘
- under the selector: A / M for exposure, white balance and focus;
- the lens buttons for zoom (longest on top)
- +0.3 EV         the value (zoom: the factor, 2.3×); K / Tint under it for WB
+ ┌──────┬──────┐  ┌─┐
+ │ ZOOM │ EXP▪ │  │+│   selector: a 2 × 2 grid, the chosen group filled
+ ├──────┼──────┤  │ │
+ │  WB  │ FOC  │  │●│   rocker: push up for more, down for less;
+ └──────┴──────┘  │ │   speed rises with the square of the deflection;
+ ┌──────┬──────┐  │ │   release: stops and springs back; tap an end: one
+ │  A   │  M▪  │  │−│   step; double tap the knob: the neutral value
+ └──────┴──────┘  └─┘
+      +0.3 EV           the value (zoom: the factor, 2.3×)
+     [ K | Tint ]       white balance only; the row is kept for every group
 ```
 
-- **Mode switch.** A vertical two-segment switch, `A` over `M`, 46 wide with
-  two segments (see "Sizes"), the same look as the selector. It shows the state,
-  not an action: the filled segment is the current mode. Tap the other segment
-  to switch; the values are kept. `M` stands for any held mode: a group the
+- **Selector.** A 2 × 2 grid, `ZOOM` `EXP` over `WB` `FOC`, beside the upper
+  half of the rocker on the inner side; the chosen group is filled in its
+  colour with white text. Tap a cell to put that group on this side. Both
+  sides may not run the same group: choosing the group the other side runs
+  swaps the two. The rocker's job is never a guess.
+- **Mode switch.** Two cells side by side, `A` and `M`, under the selector,
+  the same size and look. It shows the state, not an action: the filled cell
+  is the current mode (white auto, yellow held). Tap the other cell to
+  switch; the values are kept. `M` stands for any held mode: a group the
   hub locked, focus locked by a long press on the picture, and a camera
   without a manual mode for the group (it locks instead) all show `M`. The
   difference does not matter to the operator; the rocker turns locked into
-  manual anyway. Moving the rocker in auto switches white balance and focus to
-  manual; exposure stays in auto and changes the compensation.
-- **Selector.** Four segments, `ZOOM` / `EXP` / `WB` / `FOC`, beside the
-  upper half of the rocker on the inner side, the same look as the mode
-  switch; the chosen group is filled white. Tap one to put it on this side.
-  Both sides may not run the same group: choosing the group the other side
-  runs swaps the two. The rocker's job is never a guess.
+  manual anyway. Moving the rocker in auto switches white balance and focus
+  to manual; exposure stays in auto and changes the compensation. For zoom
+  the lens buttons take this row (only on a camera with more than one lens).
 - **A colour per group,** so the usual setup is recognised at a glance (blue
   left, red right by default): zoom blue, exposure red, white balance
   violet, focus green. It marks only the control: the rocker's outline and
-  knob ring, the chosen selector segment (filled in the colour, white text)
-  and the underline of the group's values in the values row. Values never
-  take it as text colour, so yellow (held), red and green (tally), cyan
-  (hub change) and orange (warning) keep their meaning.
-- **Under the selector,** beside the lower half of the rocker: the mode
-  switch for exposure, white balance and focus; the lens buttons for zoom
-  (only on a camera with more than one lens). A small horizontal K / Tint
-  switch (white balance only) sits under the value.
-- **Sizes.** Segments 30 pt high on the selector and the mode switch where
-  the screen allows; on a landscape phone they shrink to fit between the
-  top rows and the bottom row, 20 pt at least. The rocker is as long as the
-  selector and what is under it, and both sides' rockers are the same
-  length. **Nothing moves when a group changes:** every slot has a fixed
-  size worked out from the screen once, the slot under the selector as
-  tall as the larger of the mode switch and the camera's lens buttons, the
-  K / Tint row reserved (empty) for every group.
+  knob ring, the chosen selector cell and the underline of the group's
+  values in the values row. Values never take it as text colour, so yellow
+  (held), red and green (tally), cyan (hub change) and orange (warning) keep
+  their meaning.
+- **Sizes: easy to hit without looking.** Every cell is at least 44 pt high
+  and 46 pt wide (Android 48 dp), the whole selector and mode switch about
+  100 pt wide; they never shrink below that. The rocker is as long as the
+  selector and the mode row together, both sides the same. **Nothing moves
+  when a group changes:** every slot has a fixed size worked out from the
+  screen once, and the K / Tint row is kept (empty) for every group.
 - **Rocker.** The same component as zoom, same size, with the direction
   written at its ends. Three gestures, the same on every rocker:
   - **Drag** for a move: speed rises with the square of the deflection, about

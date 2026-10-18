@@ -260,6 +260,8 @@ class CameraCapture(context: Context) {
     @Volatile var measuredWhiteBalance: Pair<Double, Double>? = null
         private set
     private var lastWhiteBalanceNs = 0L
+    /** The manual gains last logged as applied by the camera, so each is logged once. */
+    private var loggedManualGains: RggbChannelVector? = null
     private val wbGains = DoubleArray(4)
     private val wbTemperatureTint = DoubleArray(2)
 
@@ -857,6 +859,16 @@ class CameraCapture(context: Context) {
      * manual starts from, and twice a second the K and tint auto reports.
      */
     private fun sampleWhiteBalance(result: TotalCaptureResult) {
+        if (result.get(CaptureResult.CONTROL_AWB_MODE) == CameraMetadata.CONTROL_AWB_MODE_OFF) {
+            // What the camera did with manual gains, once per new value: a
+            // HAL that ignores them shows its own gains or none.
+            val applied = result.get(CaptureResult.COLOR_CORRECTION_GAINS)
+            if (applied != loggedManualGains) {
+                loggedManualGains = applied
+                Log.i(TAG, "manual white balance: asked ${wbOut.take(4).joinToString(" ") { "%.3f".format(it) }}, " +
+                    "result mode ${result.get(CaptureResult.COLOR_CORRECTION_MODE)} gains $applied")
+            }
+        }
         if (result.get(CaptureResult.CONTROL_AWB_MODE) != CameraMetadata.CONTROL_AWB_MODE_AUTO) return
         awbState = result.get(CaptureResult.CONTROL_AWB_STATE)
         val gains = result.get(CaptureResult.COLOR_CORRECTION_GAINS) ?: return

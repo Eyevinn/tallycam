@@ -221,12 +221,25 @@ private fun BoxScope.ShootingScreen(model: AppModel, onScan: () -> Unit) {
         val nameChip = @Composable { TallyChip(model.tally, model.displayName) }
         val side = @Composable { leftSide: Boolean ->
             (if (leftSide) left else right)?.let { group ->
-                if (if (leftSide) shown.leftHidden else shown.rightHidden) {
-                    // Folded into a tab at the edge; a tap brings it back.
-                    EdgeTab(group, leftSide, Modifier.touchable(screenLocked)) { place(shown.show(leftSide)) }
-                } else {
-                    SideControl(model, group, groups, leading = leftSide, readoutAbove = phone && !landscape, locked = screenLocked,
-                                onSelect = { place(shown.choose(leftSide, it)) }, modifier = Modifier.touchable(screenLocked))
+                val hidden = if (leftSide) shown.leftHidden else shown.rightHidden
+                val readoutAbove = phone && !landscape
+                // The tab just above the rocker at the screen edge, at one fixed
+                // place: a tap hides the side control, or brings it back
+                // (docs/UI_DESIGN.md, "Hide and show: one tab").
+                Column(horizontalAlignment = if (leftSide) Alignment.Start else Alignment.End,
+                       verticalArrangement = Arrangement.spacedBy(Chrome.gap)) {
+                    Box(Modifier.padding(horizontal = (Chrome.rockerWidth - Chrome.control) / 2)) {
+                        EdgeTab(group, leftSide, hidden, Modifier.touchable(screenLocked)) {
+                            place(if (hidden) shown.show(leftSide) else shown.hide(leftSide))
+                        }
+                    }
+                    if (hidden) {
+                        // Its place kept, so the tab does not move.
+                        Box(Modifier.height(SIDE_HEIGHT + if (readoutAbove) Chrome.valueHeight + Chrome.gap else 0.dp))
+                    } else {
+                        SideControl(model, group, groups, leading = leftSide, readoutAbove = readoutAbove, locked = screenLocked,
+                                    onSelect = { place(shown.choose(leftSide, it)) }, modifier = Modifier.touchable(screenLocked))
+                    }
                 }
             }
         }
@@ -261,7 +274,9 @@ private fun BoxScope.ShootingScreen(model: AppModel, onScan: () -> Unit) {
                 // upper-right corner with the meter beside it; messages and the
                 // slide to unlock in the middle.
                 Box(Modifier.weight(1f).fillMaxWidth()) {
-                    Box(Modifier.align(Alignment.TopStart).touchable(screenLocked)) { tools(landscape) }
+                    // A row in both orientations: in landscape the left tab and side
+                    // control leave no room for a column (docs/UI_DESIGN.md).
+                    Box(Modifier.align(Alignment.TopStart).touchable(screenLocked)) { tools(false) }
                     Row(Modifier.align(Alignment.TopEnd), horizontalArrangement = Arrangement.spacedBy(Chrome.gap),
                         verticalAlignment = Alignment.CenterVertically) {
                         AudioMeter()
@@ -772,19 +787,26 @@ private fun hostLabel(url: String): String? = runCatching { android.net.Uri.pars
     ?.takeIf { !it.host.isNullOrEmpty() }?.let { if (it.port > 0) "${it.host}:${it.port}" else it.host }
 
 /**
- * A hidden side control ("–"): a 46 dp tab at the edge in its group's
- * colour, with a chevron pointing into the screen; a tap brings it back
- * (docs/UI_DESIGN.md, "Hide a side").
+ * The tab above a side control's rocker at the screen edge, in its group's
+ * colour: a chevron pointing out while the control shows (a tap hides it),
+ * inward while hidden (a tap brings it back); one fixed place
+ * (docs/UI_DESIGN.md, "Hide and show: one tab").
  */
 @Composable
-private fun EdgeTab(group: String, leading: Boolean, modifier: Modifier, onClick: () -> Unit) {
+private fun EdgeTab(group: String, leading: Boolean, hidden: Boolean, modifier: Modifier, onClick: () -> Unit) {
     val shape = RoundedCornerShape(Chrome.cellRadius)
+    val side = if (leading) "left" else "right"
     Box(
-        modifier.size(Chrome.control).background(Chrome.groupColor(group).copy(alpha = 0.85f), shape)
-            .clickable(onClick = onClick).semantics { contentDescription = "Show the ${if (leading) "left" else "right"} control" },
+        modifier.size(Chrome.control).background(Chrome.chosen(Chrome.groupColor(group)), shape)
+            .border(1.dp, Chrome.border, shape)
+            .clickable(onClick = onClick)
+            .semantics { contentDescription = if (hidden) "Show the $side control" else "Hide the $side control" },
         contentAlignment = Alignment.Center,
     ) {
-        Text(if (leading) "›" else "‹", color = Color.White, fontSize = 26.sp, fontWeight = FontWeight.Bold, style = Chrome.shadowed)
+        // Out towards the edge while shown (it folds away), inward while hidden (it comes out).
+        val outward = if (leading) "‹" else "›"
+        val inward = if (leading) "›" else "‹"
+        Text(if (hidden) inward else outward, color = Color.White, fontSize = 26.sp, fontWeight = FontWeight.Bold, style = Chrome.shadowed)
     }
 }
 

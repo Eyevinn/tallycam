@@ -225,16 +225,18 @@ data class Sides(val left: String?, val right: String?, val leftHidden: Boolean 
     }
 
     /**
-     * A selector tap on one side: the chosen group again hides that side;
-     * the other side's group swaps the two (each side keeps whether it is
+     * A selector tap on one side: the chosen group again does nothing; the
+     * other side's group swaps the two (each side keeps whether it is
      * hidden).
      */
     fun choose(leftSide: Boolean, group: String): Sides = when {
-        leftSide && group == left -> copy(leftHidden = true)
-        !leftSide && group == right -> copy(rightHidden = true)
+        group == (if (leftSide) left else right) -> this
         leftSide -> copy(left = group, right = if (group == right) left else right)
         else -> copy(left = if (group == left) right else left, right = group)
     }
+
+    /** A tap on a shown side's tab: it folds away, keeping its group. */
+    fun hide(leftSide: Boolean): Sides = if (leftSide) copy(leftHidden = true) else copy(rightHidden = true)
 
     /** A tap on a hidden side's tab: it comes back with its group. */
     fun show(leftSide: Boolean): Sides = if (leftSide) copy(leftHidden = false) else copy(rightHidden = false)

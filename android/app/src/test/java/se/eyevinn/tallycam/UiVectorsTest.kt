@@ -133,6 +133,7 @@ class UiVectorsTest {
                 c.has("choose") -> c.getJSONObject("choose").let { shown.choose(it.getString("side") == "left", it.getString("group")) }
                 c.has("values_tap") -> shown.fromValues(c.getString("values_tap"))
                 c.has("show") -> shown.show(c.getString("show") == "left")
+                c.has("hide") -> shown.hide(c.getString("hide") == "left")
                 else -> shown
             }
             assertEquals(c.getString("name"), sides(c.getJSONObject("expect")), result)

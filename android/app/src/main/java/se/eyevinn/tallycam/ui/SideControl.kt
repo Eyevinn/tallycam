@@ -312,7 +312,7 @@ private fun TintSwitch(tint: Boolean, onChange: (Boolean) -> Unit) {
 /**
  * ZOOM EXP over WB FOC beside the upper half of the rocker: the chosen
  * group filled in its colour with white text; a tap puts that group on
- * this side, the chosen one again hides it (docs/UI_DESIGN.md, "Side control").
+ * this side (docs/UI_DESIGN.md, "Side control").
  */
 @Composable
 private fun GroupSelector(groups: List<String>, selected: String, onSelect: (String) -> Unit) {
@@ -320,8 +320,7 @@ private fun GroupSelector(groups: List<String>, selected: String, onSelect: (Str
         Cell(shortName(it), on = it == selected, enabled = it in groups, fill = Chrome.groupColor(it), onText = Color.White,
              description = title(it))
     }
-    // The chosen cell again hides this side.
-    Cells(cells.chunked(2), tapOn = true) { row, column -> onSelect(SIDE_GROUPS[row * 2 + column]) }
+    Cells(cells.chunked(2)) { row, column -> onSelect(SIDE_GROUPS[row * 2 + column]) }
 }
 
 /** The lens buttons in the mode row on zoom, shortest left, the active one filled. */

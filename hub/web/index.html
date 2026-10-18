@@ -590,7 +590,9 @@ function disabledReason(d, c, assume) {
     return c.id === "shutter"
       ? { short: "Production", long: "The shutter is a production setting. It is set per camera only when it is free: " +
           "Shutter Free, or Mains Off, in the Shading view's production bar." }
-      : { short: "Read-only", long: "Read-only: the camera reports it, nobody sets it" };
+      : c.readonly_reason
+        ? { short: "Read-only", long: "Read-only: " + c.readonly_reason }
+        : { short: "Read-only", long: "Read-only: the camera reports it, nobody sets it" };
   }
   if (c.locked_while_live && isLiveState(d))
     return { short: "Not while live", long: "Refused while the camera is live: stop its stream to change it" };

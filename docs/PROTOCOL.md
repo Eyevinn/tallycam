@@ -433,7 +433,8 @@ that does not own them).
 - `enabled_when`: the control is only writable when the other controls have
   these values; a list means any of them (`{"focus_mode": ["manual",
   "auto"]}`). The UI greys it out otherwise, but still shows its value.
-- `readonly: true`: shown, never set.
+- `readonly: true`: shown, never set. `readonly_reason` (optional text) says
+  why, for the UI ("no manual exposure on this camera").
 - `locked_while_live: true`: refused while the stream is live (format,
   codecs, `mains_hz`).
 

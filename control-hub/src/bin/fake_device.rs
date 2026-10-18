@@ -195,6 +195,7 @@ fn control(id: &str, label: &str, group: &str, kind: ControlKind) -> ControlDesc
         options: None,
         enabled_when: None,
         readonly: false,
+        readonly_reason: None,
         extra: Map::new(),
     }
 }

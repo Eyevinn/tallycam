@@ -101,6 +101,10 @@ pub struct ControlDescriptor {
     pub enabled_when: Option<Values>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub readonly: bool,
+    /// Why it is `readonly`, for the UI ("no manual exposure on this
+    /// camera"). Optional.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub readonly_reason: Option<String>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }

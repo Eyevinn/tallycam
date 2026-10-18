@@ -71,10 +71,14 @@ object Chrome {
     val tabular = TextStyle(fontFeatureSettings = "tnum", shadow = softShadow)
     /**
      * The side controls' light surface (docs/UI_DESIGN.md, "Light
-     * backgrounds"): black at 30 %, translucent (Android has no backdrop blur
+     * backgrounds"): black at 25 %, translucent (Android has no backdrop blur
      * for a composable over a camera preview).
      */
-    val surface = Color.Black.copy(alpha = 0.30f)
+    val surface = Color.Black.copy(alpha = 0.25f)
+    /** A chosen cell's fill: its colour at 85 %. */
+    fun chosen(color: Color): Color = color.copy(alpha = 0.85f)
+    /** The rockers' knob: light grey at 80 %. */
+    val knob = Color(0xFFD1D1D6).copy(alpha = 0.80f)
 
     /**
      * A side-control group's colour: the rocker's outline and knob ring, the
@@ -97,13 +101,13 @@ object Chrome {
 @Composable
 fun ChromeButton(label: String, active: Boolean = false, size: Dp = Chrome.control, onClick: () -> Unit) {
     Box(
-        Modifier.size(size).background(Color.Black.copy(alpha = 0.35f), CircleShape)
+        Modifier.size(size).background(Chrome.surface, CircleShape)
             .border(1.dp, Color.White.copy(alpha = 0.25f), CircleShape)
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
-        Text(label, color = if (active) Chrome.yellow else Color.White.copy(alpha = 0.85f),
-             fontSize = (size.value * 0.39f).sp, fontWeight = FontWeight.Medium)
+        Text(label, color = if (active) Chrome.yellow else Color.White.copy(alpha = 0.9f),
+             fontSize = (size.value * 0.39f).sp, fontWeight = FontWeight.Medium, style = Chrome.shadowed)
     }
 }
 

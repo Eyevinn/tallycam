@@ -354,7 +354,7 @@ private fun Cells(rows: List<List<Cell>>, fontSize: androidx.compose.ui.unit.Tex
                 row.forEachIndexed { c, cell ->
                     Box(
                         Modifier.weight(1f).height(Chrome.cell)
-                            .background(if (cell.on) cell.fill else Chrome.surface, shape)
+                            .background(if (cell.on) Chrome.chosen(cell.fill) else Chrome.surface, shape)
                             .border(1.dp, if (cell.on) Color.Transparent else Color.White.copy(alpha = 0.25f), shape)
                             .combinedClickable(enabled = cell.enabled, onClick = { if (!cell.on || tapOn) onTap(r, c) },
                                                onLongClick = cell.longPress,

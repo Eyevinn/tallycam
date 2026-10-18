@@ -507,7 +507,7 @@ private fun StatusStrip(model: AppModel, centre: (@Composable () -> Unit)?, onSe
              softWrap = false)
 
     Row(
-        Modifier.fillMaxWidth().height(Chrome.rowHeight).background(Color.Black.copy(alpha = 0.35f), CircleShape)
+        Modifier.fillMaxWidth().height(Chrome.rowHeight).background(Chrome.surface, CircleShape)
             .padding(start = 12.dp, end = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -595,7 +595,7 @@ private fun LiveButton(state: LiveStream.State, hintAbove: Boolean, onStart: () 
     }
     val idle = state == LiveStream.State.IDLE
     val fill = when (state) {
-        LiveStream.State.IDLE -> Color.Black.copy(alpha = 0.35f)
+        LiveStream.State.IDLE -> Chrome.surface
         LiveStream.State.CONNECTING -> Chrome.orange.copy(alpha = 0.85f)
         LiveStream.State.LIVE -> Color.Red
     }

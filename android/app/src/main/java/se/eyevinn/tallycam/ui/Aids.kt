@@ -294,7 +294,7 @@ fun AudioMeter(modifier: Modifier = Modifier) {
     if (!active) return
     val clipping = clipUntil > System.currentTimeMillis()
     Column(
-        modifier.background(Color.Black.copy(alpha = 0.35f), CircleShape).padding(horizontal = 5.dp, vertical = 6.dp),
+        modifier.background(Chrome.surface, CircleShape).padding(horizontal = 5.dp, vertical = 6.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(3.dp),
     ) {

@@ -74,7 +74,7 @@ fun CameraValuesRow(model: AppModel, onSides: Collection<String>, onSelect: (Str
     val now = SystemClock.uptimeMillis()
     val flashing = if (flashOver) emptySet() else hubChanged.filterValues { now - it < Shading.HUB_FLASH_MS }.keys
     // In the landscape top bar, on the bar's own background.
-    Box(modifier.height(Chrome.rowHeight).then(if (bare) Modifier else Modifier.background(Color.Black.copy(alpha = 0.45f), CircleShape))
+    Box(modifier.height(Chrome.rowHeight).then(if (bare) Modifier else Modifier.background(Chrome.surface, CircleShape))
             .padding(horizontal = 4.dp), contentAlignment = Alignment.Center) {
         // Focus is last; colour is dropped after it.
         val drop = VALUE_DROP_ORDER.mapNotNull { group -> items.indexOfFirst { it.group == group }.takeIf { it >= 0 } }

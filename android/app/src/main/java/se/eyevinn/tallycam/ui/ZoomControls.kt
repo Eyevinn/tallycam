@@ -126,7 +126,7 @@ fun Rocker(high: String, low: String, label: String, length: Dp, accent: Color =
                  style = Chrome.shadowed)
         }
         Box(Modifier.offset { IntOffset(0, (-shown * travel.toPx()).roundToInt()) }.size(KNOB)
-                .background(Color.White.copy(alpha = if (sentStep == 0) 0.7f else 0.95f), RoundedCornerShape(Chrome.knobRadius))
+                .background(if (sentStep == 0) Chrome.knob else Color.White.copy(alpha = 0.95f), RoundedCornerShape(Chrome.knobRadius))
                 .border(2.dp, accent, RoundedCornerShape(Chrome.knobRadius)))
     }
 }

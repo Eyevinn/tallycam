@@ -125,6 +125,8 @@ pub struct Genlock {
     sum: f64,
     max_abs: f64,
     last_error: Option<f64>,
+    /// The previous window's mean error, to tell a held offset from a pull.
+    last_mean: Option<f64>,
     good_windows: u32,
     status: GenlockStatus,
 }
@@ -142,6 +144,7 @@ impl Genlock {
             sum: 0.0,
             max_abs: 0.0,
             last_error: None,
+            last_mean: None,
             good_windows: 0,
             status: GenlockStatus {
                 state: GenlockState::FreeRun,
@@ -200,6 +203,7 @@ impl Genlock {
                 self.state = GenlockState::FreeRun;
                 self.good_windows = 0;
                 self.reset_window();
+                self.last_mean = None;
                 // Keep the learned rate, drop the phase steering.
                 self.correction = self.integral;
                 return Some(self.publish(self.status.phase_error_ns, 0.0));
@@ -248,9 +252,12 @@ impl Genlock {
 
         self.update_lock(mean);
         // A format that cannot run faster than nominal can only lengthen
-        // frames: catch a late phase up on the next grid point instead.
+        // frames: catch a late phase up on the next grid point instead. The
+        // room to shorten counts from the learned rate, not from nominal: a
+        // fast sensor already runs on lengthened frames and can give some
+        // back (an iPad 6 at 1080p30 sits at about +1600 ppm).
         let mut control = mean;
-        let headroom = self.period - self.cfg.min_frame_duration_ns;
+        let headroom = self.period + self.integral - self.cfg.min_frame_duration_ns;
         if headroom < self.period * 1e-3 && mean > self.cfg.lock_threshold_ns {
             control = mean - self.period;
         }
@@ -265,9 +272,16 @@ impl Genlock {
         // terms are per-frame corrections; spreading the error over the
         // window's frames makes the gains independent of the frame rate.
         let proportional = -self.cfg.kp * control / n;
-        // The integral learns the sensor's rate only near the grid: while
-        // the phase is being pulled across, the error says nothing about it.
-        let learning = control.abs() < self.cfg.unlock_threshold_ns;
+        // The integral learns the sensor's rate near the grid, or wherever
+        // the phase holds still: while it is being pulled across, the error
+        // says nothing about the rate, but a steady offset is exactly the
+        // rate the proportional term is covering (a sensor 1600 ppm fast
+        // holds about 5 ms off with the proportional term alone).
+        let holding = self
+            .last_mean
+            .is_some_and(|prev| (mean - prev).abs() < self.cfg.lock_threshold_ns);
+        self.last_mean = Some(mean);
+        let learning = control.abs() < self.cfg.unlock_threshold_ns || holding;
         let integral = if learning {
             self.integral - self.cfg.ki * control / n
         } else {
@@ -532,6 +546,55 @@ mod tests {
         let locked = locked.expect("never locked");
         assert!(locked <= 25, "locked after {locked} s");
         assert!(g.status().phase_error_ns.abs() < 300_000.0);
+    }
+
+    #[test]
+    fn locks_a_fast_sensor_without_slipping_when_frames_cannot_be_shorter() {
+        // Measured on an iPad 6 at 1080p30: no frame shorter than nominal,
+        // and the sensor runs about 1600 ppm fast against TAI. The loop
+        // learns the lengthening and must trim from there, not slip a whole
+        // frame each time the phase drifts a little late (it cycled every
+        // 6 s between -16 and +7 ms and never locked).
+        let period = 1e9 / 30.0;
+        let cfg = GenlockConfig {
+            min_frame_duration_ns: period,
+            ..Default::default()
+        };
+        let mut g = Genlock::new(cfg);
+        let mut s = Sensor::new(T0 + 6_000_000.0, period);
+        s.bias_ppm = -1_600.0;
+        let mut locked = None;
+        let mut worst_after = 0f64;
+        for i in 0..120 * 30 {
+            let t = s.next();
+            if let Some(d) = g.on_frame(t, true) {
+                assert!(d >= period);
+                s.ask(d);
+            }
+            let st = g.status();
+            if i % 30 == 29 && std::env::var("GL_TRACE").is_ok() {
+                eprintln!(
+                    "{} {:?} e {:.0} us c {:.1} ppm",
+                    i / 30,
+                    st.state,
+                    st.phase_error_ns / 1e3,
+                    st.correction_ppm
+                );
+            }
+            if locked.is_none() && st.state == GenlockState::Locked {
+                locked = Some(i / 30);
+            }
+            if i > 60 * 30 {
+                assert_eq!(st.state, GenlockState::Locked, "lost lock at {} s", i / 30);
+                worst_after = worst_after.max(st.phase_error_ns.abs());
+            }
+        }
+        let locked = locked.expect("never locked");
+        assert!(locked <= 40, "locked after {locked} s");
+        assert!(
+            worst_after < 500_000.0,
+            "window error {worst_after} ns after lock"
+        );
     }
 
     #[test]

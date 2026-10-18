@@ -256,11 +256,11 @@ impl Genlock {
         // room to shorten counts from the learned rate, not from nominal: a
         // fast sensor already runs on lengthened frames and can give some
         // back (an iPad 6 at 1080p30 sits at about +1600 ppm).
-        let mut control = mean;
         let headroom = self.period + self.integral - self.cfg.min_frame_duration_ns;
-        if headroom < self.period * 1e-3 && mean > self.cfg.lock_threshold_ns {
-            control = mean - self.period;
-        }
+        // Slip only when trimming cannot catch up within ten windows; a slip
+        // is a whole frame of disturbance, trimming is invisible.
+        let slip = mean > self.cfg.lock_threshold_ns && headroom.max(0.0) * n < 0.1 * mean;
+        let control = if slip { mean - self.period } else { mean };
         let limit = self.period
             * 1e-6
             * if self.state == GenlockState::Locked {
@@ -276,12 +276,13 @@ impl Genlock {
         // the phase holds still: while it is being pulled across, the error
         // says nothing about the rate, but a steady offset is exactly the
         // rate the proportional term is covering (a sensor 1600 ppm fast
-        // holds about 5 ms off with the proportional term alone).
+        // holds about 5 ms off with the proportional term alone). Never
+        // while slipping to the next grid point.
         let holding = self
             .last_mean
             .is_some_and(|prev| (mean - prev).abs() < self.cfg.lock_threshold_ns);
         self.last_mean = Some(mean);
-        let learning = control.abs() < self.cfg.unlock_threshold_ns || holding;
+        let learning = !slip && (control.abs() < self.cfg.unlock_threshold_ns || holding);
         let integral = if learning {
             self.integral - self.cfg.ki * control / n
         } else {
@@ -289,9 +290,13 @@ impl Genlock {
         };
         let wanted = proportional + integral;
         let clamped = wanted.clamp(-limit, limit);
-        // Anti-windup: only integrate while the output is not saturated.
+        // Anti-windup: only integrate while the output is not saturated,
+        // and never below the shortest frame the format allows (frames at
+        // the minimum cannot get any shorter, so the rate learned there
+        // would only run away).
+        let floor = (self.cfg.min_frame_duration_ns - self.period).max(-limit);
         if (wanted - clamped).abs() < f64::EPSILON {
-            self.integral = integral.clamp(-limit, limit);
+            self.integral = integral.clamp(floor.min(limit), limit);
         }
         self.correction = clamped;
         Some(self.publish(mean, max_abs))
@@ -594,6 +599,53 @@ mod tests {
         assert!(
             worst_after < 500_000.0,
             "window error {worst_after} ns after lock"
+        );
+    }
+
+    #[test]
+    fn relocks_after_a_step_when_frames_cannot_be_shorter() {
+        // The iPad 6 again: locked, then the phase jumped 3 ms late (a clock
+        // step). It must slip or trim back and lock again, not wind its rate
+        // down against the shortest frame and stay late.
+        let period = 1e9 / 30.0;
+        let cfg = GenlockConfig {
+            min_frame_duration_ns: period,
+            ..Default::default()
+        };
+        let mut g = Genlock::new(cfg);
+        let mut s = Sensor::new(T0 + 6_000_000.0, period);
+        s.bias_ppm = -300.0;
+        let mut relocked = None;
+        for i in 0..150 * 30 {
+            if i == 60 * 30 {
+                assert_eq!(g.status().state, GenlockState::Locked);
+                s.t += 3_000_000.0;
+            }
+            let t = s.next();
+            if let Some(d) = g.on_frame(t, true) {
+                assert!(d >= period);
+                s.ask(d);
+            }
+            let st = g.status();
+            if std::env::var("GL_TRACE").is_ok() && i % 30 == 29 {
+                eprintln!(
+                    "{} {:?} e {:.0} us c {:.1} ppm",
+                    i / 30,
+                    st.state,
+                    st.phase_error_ns / 1e3,
+                    st.correction_ppm
+                );
+            }
+            if i > 62 * 30 && relocked.is_none() && st.state == GenlockState::Locked {
+                relocked = Some(i / 30);
+            }
+        }
+        let relocked = relocked.expect("never locked again");
+        assert!(relocked <= 120, "locked again after {relocked} s");
+        assert_eq!(g.status().state, GenlockState::Locked);
+        assert!(
+            g.status().correction_ppm >= -1.0,
+            "rate wound below nominal"
         );
     }
 

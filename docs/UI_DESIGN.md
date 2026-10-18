@@ -6,6 +6,11 @@ Background: [CAMERA_READOUTS](CAMERA_READOUTS.md).
 
 ## Principles
 
+- **Corners, not the centre.** The centre of the screen is the picture's.
+  Controls live in the four corners (on phones: tools upper left, live
+  upper right, side controls lower left and right) and information in the
+  top bar along the top edge. Only short messages show at the top centre,
+  and they go away by themselves.
 - **Information in the middle, controls at the sides.** The top centre shows
   state and values; the thumbs reach the controls on the left and right edges.
 - **Everything a shot needs is under a thumb.** Two identical side

@@ -249,19 +249,16 @@ class AppModel(private val context: Context) : LcpClient.Listener, LiveStream.Li
 
     /**
      * Touch and hold: AE/AF lock there, as in Apple's camera apps
-     * (docs/UI_DESIGN.md, "Picture"): focus at the point and lock it (AF-L),
-     * and hold the exposure at the values it has (manual, or locked without
+     * (docs/UI_DESIGN.md, "Picture"): focus at the point, then focus and
+     * exposure manual at the values they have (no "locked" mode any more;
      * a manual sensor). A tap anywhere releases both ([focusAt]).
      */
     fun focusLockAt(x: Float, y: Float) {
         camera.focusAt(x, y)
         main.postDelayed({
-            val options = shading.descriptors["exposure_mode"]?.optJSONArray("options")
-            val offered = (0 until (options?.length() ?: 0)).map { options?.optJSONObject(it)?.optString("value") }
-            val held = if ("manual" in offered) "manual" else "locked"
-            val set = JSONObject().put("focus_mode", "locked")
-            if (options != null && shading.values.optString("exposure_mode") == "auto") {
-                set.put("exposure_mode", held)
+            val set = JSONObject().put("focus_mode", "manual")
+            if ("exposure_mode" in shading.descriptors && shading.values.optString("exposure_mode") == "auto") {
+                set.put("exposure_mode", "manual")
                 aeAfLocked = true
             }
             localSet(set)

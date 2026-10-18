@@ -36,7 +36,8 @@ internal fun fmt(pattern: String, vararg args: Any): String = String.format(Loca
  * The values row (docs/UI_DESIGN.md, "Values"): format, ISO (with CLIP or
  * DARK from the image statistics' [warning]), shutter, EV (auto and not
  * 0), white balance (K with the tint when not 0, or AWB where the camera
- * reports no temperature) and focus (AF, AF-L, F 0.42).
+ * reports no temperature) and focus (AF, or F 0.42 when held). The modes are
+ * auto and manual; "locked", from older hubs, reads as manual.
  */
 fun valueItems(values: JSONObject, format: String, warning: String?): List<ValueItem> {
     val exposureHeld = values.has("exposure_mode") && values.optString("exposure_mode") != "auto"
@@ -72,7 +73,6 @@ fun valueItems(values: JSONObject, format: String, warning: String?): List<Value
         val ids = listOf("focus_mode", "focus_position")
         list += when (values.optString("focus_mode")) {
             "auto" -> ValueItem("AF", group = "focus", ids = ids)
-            "locked" -> ValueItem("AF-L", tone = Tone.HELD, group = "focus", ids = ids)
             else -> ValueItem(if (values.has("focus_position")) fmt("F %.2f", values.optDouble("focus_position")) else "MF",
                               tone = Tone.HELD, group = "focus", ids = ids)
         }

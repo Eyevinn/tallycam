@@ -57,7 +57,7 @@ import kotlin.math.roundToLong
  * is under it (on every screen), the same on both sides. On its inner side: the
  * selector beside its upper half (a tap puts that group on this side; the
  * other side's group swaps), and beside its lower half the A / M mode
- * switch (M is any held mode, manual or locked; a tap on the other segment
+ * switch (M is manual, the values held as numbers; a tap on the other cell
  * switches, keeping the values), or for zoom the lens buttons. Under the
  * rocker the value (zoom: the factor against the wide lens), which grows
  * while adjusting, and for white balance the K / Tint switch. While the
@@ -72,10 +72,6 @@ import kotlin.math.roundToLong
  * auto switches them to manual first. A long press on colour's mode switch
  * is "white balance once". The operator and the hub may both change the
  * values; the last change wins (docs/SHADING.md).
- *
- * Android's colour goes to locked from A (what auto white balance found;
- * Camera2's manual white balance is a preset); exposure to locked where the
- * camera has no manual sensor.
  */
 @Composable
 fun SideControl(model: AppModel, group: String, groups: List<String>, leading: Boolean, readoutAbove: Boolean = false,
@@ -269,17 +265,15 @@ internal fun zoomFactorText(model: AppModel): String {
 
 /**
  * The group's mode as two cells side by side, A and M: both always shown,
- * the one in use filled (white for auto, yellow for held), a tap on the
- * other switches to it, keeping the values. M is any held mode: manual,
- * locked (by the hub, or focus locked on the picture), or the lock a camera
- * uses where it has no manual (Android's white balance). For white balance
- * a third cell, ◎, sets it once from the picture and holds it (as does a
- * long press on A or M).
+ * the one in use filled (white for auto, yellow for manual), a tap on the
+ * other switches to it, keeping the values as numbers. "locked" from an
+ * older hub reads as M. For white balance a third cell, ◎, sets it once
+ * from the picture and holds it (as does a long press on A or M).
  */
 @Composable
 private fun ModeRow(model: AppModel, group: String, mode: String) {
     val auto = mode == "auto"
-    val held = if (mode == "locked") "locked" else heldMode(model, group)
+    val held = "manual"
     val wbOnce: (() -> Unit)? = if (group == "white_balance") ({ model.localWhiteBalanceOnce() }) else null
     val cells = mutableListOf(
         Cell("A", on = auto, fill = Color.White, description = "${title(group)} auto", longPress = wbOnce),
@@ -310,17 +304,6 @@ private fun TintSwitch(tint: Boolean, onChange: (Boolean) -> Unit) {
                      .padding(horizontal = 8.dp, vertical = 5.dp))
         }
     }
-}
-
-/**
- * The held mode the A button goes to: colour locked (what auto found),
- * otherwise manual where the camera has it, else locked.
- */
-private fun heldMode(model: AppModel, group: String): String {
-    if (group == "white_balance") return "locked"
-    val options = model.shading.descriptors[modeKey(group)]?.optJSONArray("options")
-    val offered = (0 until (options?.length() ?: 0)).map { options?.optJSONObject(it)?.optString("value") }
-    return if ("manual" in offered) "manual" else "locked"
 }
 
 /**

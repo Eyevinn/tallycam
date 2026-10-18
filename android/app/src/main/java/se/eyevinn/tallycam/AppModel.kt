@@ -88,7 +88,10 @@ class AppModel(private val context: Context) : LcpClient.Listener, LiveStream.Li
     var hubProduction by mutableStateOf(false)
         private set
 
-    private var admitted = false
+    @Volatile private var admitted = false
+
+    /** The shooting screen is in front (MainActivity's onStart / onStop). */
+    var uiVisible = true
     /** Bumped per connection, so an old admission timer does nothing. */
     private var connectionSerial = 0
     private var challengeSeen = false
@@ -182,8 +185,23 @@ class AppModel(private val context: Context) : LcpClient.Listener, LiveStream.Li
         (context.getSystemService(Context.BATTERY_SERVICE) as BatteryManager)
             .getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY).takeIf { it in 0..100 }
 
-    fun clockSummary(): se.eyevinn.tallycam.control.ClockSummary? =
-        clock?.let { c -> runCatching { c.statusJson() }.getOrNull()?.let(se.eyevinn.tallycam.control.ClockSummary::parse) }
+    fun clockSummary(): se.eyevinn.tallycam.control.ClockSummary? = clockState
+
+    /**
+     * The clock's status, read once a second (statusTick) and shared by the
+     * status line, the timecode, Settings and the hub's `status`: one
+     * statusJson() call and parse a second instead of one per reader.
+     */
+    var clockState by mutableStateOf<se.eyevinn.tallycam.control.ClockSummary?>(null)
+        private set
+    private var clockJson: String? = null
+
+    private fun refreshClock() {
+        val text = clock?.let { c -> runCatching { c.statusJson() }.getOrNull() }
+        clockJson = text
+        val summary = text?.let { runCatching { se.eyevinn.tallycam.control.ClockSummary.parse(it) }.getOrNull() }
+        if (summary != clockState) clockState = summary
+    }
 
     var adaptiveOn by mutableStateOf(settings.adaptiveBitrate)
         private set
@@ -368,6 +386,7 @@ class AppModel(private val context: Context) : LcpClient.Listener, LiveStream.Li
         admitted = false
         tally = Tally.OFF
         camera.onThumbnail = null
+        camera.thumbnailGate = null
         statsIntervalNs = null
     }
 
@@ -375,9 +394,12 @@ class AppModel(private val context: Context) : LcpClient.Listener, LiveStream.Li
         val type = message.optString("type")
         when (type) {
             "challenge" -> {
+                // At most one challenge per connection, and none once admitted.
+                if (challengeSeen || admitted) return
                 challengeSeen = true
                 val k = key ?: return
-                runCatching { k.authMessage(message.getString("server"), message.getString("nonce")) }
+                // Protocol 4: the signature binds the host this connection dialled.
+                runCatching { k.authMessage(message.getString("server"), message.getString("nonce"), client.url ?: settings.controlUrl) }
                     .onSuccess { client.send(JSONObject(it)) }
                     .onFailure { Log.e(TAG, "auth failed", it) }
                 return
@@ -443,7 +465,7 @@ class AppModel(private val context: Context) : LcpClient.Listener, LiveStream.Li
         client.send(JSONObject()
             .put("type", "hello")
             // 2: production settings, image statistics and the live lock.
-            .put("protocol", 3)
+            .put("protocol", 4)
             .put("public_key", k.identity.publicKey)
             .put("device", device)
             .put("controls", Controls.array(controls))
@@ -620,15 +642,19 @@ class AppModel(private val context: Context) : LcpClient.Listener, LiveStream.Li
     private fun setPreview(enabled: Boolean, fps: Double, width: Int) {
         if (!enabled) {
             camera.onThumbnail = null
+            camera.thumbnailGate = null
             return
         }
         camera.thumbnailIntervalNs = (1e9 / fps.coerceIn(0.1, 10.0)).toLong()
         camera.thumbnailWidth = width
+        // Asked before the NV21 and JPEG work: none while the link is behind.
+        camera.thumbnailGate = { admitted && client.canSendDroppable() }
         camera.onThumbnail = { jpeg, w, h ->
             val msg = JSONObject().put("type", "preview")
                 .put("jpeg", Base64.encodeToString(jpeg, Base64.NO_WRAP)).put("width", w).put("height", h)
             // Dropped while the link is behind: previews never queue up.
-            main.post { if (admitted) client.sendDroppable(msg) }
+            // Sent from the preview thread: the JPEG's Base64 text stays off the main thread.
+            if (admitted) client.sendDroppable(msg)
         }
     }
 
@@ -663,7 +689,8 @@ class AppModel(private val context: Context) : LcpClient.Listener, LiveStream.Li
         if (!admitted || now - lastStatsSentNs < interval * 0.9) return
         lastStatsSentNs = now
         val measured = runCatching { JSONObject(stats.json) }.getOrNull() ?: return
-        val v = cameraControls.values()
+        // The values as last published (4 a second), not built again.
+        val v = shading.values
         val cameraJson = JSONObject()
         for (key in listOf("iso", "shutter", "wb_temperature", "wb_tint")) if (v.has(key)) cameraJson.put(key, v.get(key))
         val message = JSONObject().put("type", "image_stats").put("luma", measured.opt("luma")).put("camera", cameraJson)
@@ -708,6 +735,7 @@ class AppModel(private val context: Context) : LcpClient.Listener, LiveStream.Li
         override fun run() {
             lastStats = stream.stats()
             lastStats?.let { bitrateKbps = it.bitrateKbps.takeIf { k -> k > 0 } ?: bitrateKbps }
+            refreshClock()
             sendStatus()
             main.postDelayed(this, 1000)
         }
@@ -716,7 +744,8 @@ class AppModel(private val context: Context) : LcpClient.Listener, LiveStream.Li
     /** Four times a second: values that changed (measured ISO, shutter, focus in auto modes). */
     private val stateTick = object : Runnable {
         override fun run() {
-            publishState(force = false)
+            // Only while someone reads it: the hub, or the screen in front.
+            if (admitted || uiVisible) publishState(force = false)
             main.postDelayed(this, 250)
         }
     }
@@ -757,7 +786,7 @@ class AppModel(private val context: Context) : LcpClient.Listener, LiveStream.Li
             .put("stream", streamJson)
             .put("network", network())
         level?.let { status.put("battery", JSONObject().put("level", Math.round(it * 100) / 100.0).put("charging", charging)) }
-        clock?.let { c -> runCatching { JSONObject(c.statusJson()) }.getOrNull()?.let { status.put("clock", it) } }
+        clockJson?.let { text -> runCatching { JSONObject(text) }.getOrNull()?.let { status.put("clock", it) } }
         camera.genlockStatus?.let { g ->
             status.put("genlock", JSONObject().put("state", genlockStateName(g))
                 .put("phase_error_ms", Math.round(g[1] / 1e3) / 1e3).put("phase_error_max_ms", Math.round(g[2] / 1e3) / 1e3)

@@ -183,7 +183,7 @@ fun SettingsScreen(model: AppModel, atPicture: Boolean = false, onScan: () -> Un
                 }
                 // Clock.
                 Section("Clock", "The phone's own NTP-disciplined clock, used to timestamp frames.", width) {
-                    val clock = remember(tick) { model.clockSummary() }
+                    val clock = model.clockState
                     if (clock == null) {
                         Text("Clock not running", color = Secondary)
                     } else {

@@ -78,6 +78,16 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onStart() {
+        super.onStart()
+        model?.uiVisible = true
+    }
+
+    override fun onStop() {
+        super.onStop()
+        model?.uiVisible = false
+    }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         // Kept for start() when the camera permission is still being asked.

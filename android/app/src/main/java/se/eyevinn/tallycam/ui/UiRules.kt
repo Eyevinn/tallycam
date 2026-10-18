@@ -110,12 +110,15 @@ fun zoomFactorText(factor: Double): String = if (factor >= 10) fmt("%.0f×", fac
  * disciplined clock's UTC; "14:51:46:--" while it is not synchronised.
  */
 fun timecode(utcNs: Long, utcOffsetSeconds: Long, fps: Int, synced: Boolean): String {
+    // Built by hand: it runs every frame, and String.format is costly.
     val local = utcNs + utcOffsetSeconds * 1_000_000_000L
     val second = Math.floorMod(Math.floorDiv(local, 1_000_000_000L), 86_400L)
-    val hms = fmt("%02d:%02d:%02d", second / 3600, second / 60 % 60, second % 60)
-    if (!synced || fps <= 0) return "$hms:--"
-    val frame = Math.floorMod(local, 1_000_000_000L) * fps / 1_000_000_000L
-    return hms + fmt(":%02d", frame)
+    val out = StringBuilder(11)
+    fun two(n: Long) { out.append(('0' + (n / 10 % 10).toInt())).append(('0' + (n % 10).toInt())) }
+    two(second / 3600); out.append(':'); two(second / 60 % 60); out.append(':'); two(second % 60); out.append(':')
+    if (!synced || fps <= 0) return out.append("--").toString()
+    two(Math.floorMod(local, 1_000_000_000L) * fps / 1_000_000_000L)
+    return out.toString()
 }
 
 /**

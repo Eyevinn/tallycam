@@ -33,6 +33,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -47,6 +48,7 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.DrawScope
@@ -192,19 +194,20 @@ private fun DrawScope.rect(r: Rect, color: Color, stroke: Stroke) =
 @Composable
 fun HorizonLevel(modifier: Modifier = Modifier) {
     val context = LocalContext.current
-    var angle by remember { mutableStateOf<Float?>(null) }
+    // Radians; NaN while hidden. Read in the layer, so a new angle redraws
+    // without recomposing; only whether it is level recomposes.
+    val angle = remember { mutableFloatStateOf(Float.NaN) }
     DisposableEffect(Unit) {
         val sensors = context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
         val gravity = sensors.getDefaultSensor(Sensor.TYPE_GRAVITY) ?: sensors.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
+        @Suppress("DEPRECATION")
+        val display = (context.getSystemService(Context.WINDOW_SERVICE) as android.view.WindowManager).defaultDisplay
         var smoothed: Float? = null
         val listener = object : SensorEventListener {
             override fun onSensorChanged(event: SensorEvent) {
                 val (gx, gy, gz) = Triple(event.values[0], event.values[1], event.values[2])
                 // "Up" in screen coordinates (x right, y down) for the display's rotation.
-                @Suppress("DEPRECATION")
-                val rotation = (context.getSystemService(Context.WINDOW_SERVICE) as android.view.WindowManager)
-                    .defaultDisplay.rotation
-                val (ux, uy) = when (rotation) {
+                val (ux, uy) = when (display.rotation) {
                     Surface.ROTATION_90 -> -gy to -gx
                     Surface.ROTATION_270 -> gy to gx
                     Surface.ROTATION_180 -> -gx to gy
@@ -214,23 +217,28 @@ fun HorizonLevel(modifier: Modifier = Modifier) {
                 val roll = atan2(ux, -uy)
                 if (abs(gz) / norm > 0.8f || abs(roll) > MAX_ROLL) {
                     smoothed = null
-                    angle = null
+                    angle.floatValue = Float.NaN
                     return
                 }
                 val value = smoothed?.let { it + 0.3f * (roll - it) } ?: roll
                 smoothed = value
-                angle = value
+                // Only a visible change (a tenth of a degree) redraws.
+                if (angle.floatValue.isNaN() || abs(value - angle.floatValue) > ANGLE_STEP) angle.floatValue = value
             }
 
             override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
         }
-        gravity?.let { sensors.registerListener(listener, it, SensorManager.SENSOR_DELAY_GAME) }
+        // About 16 a second: plenty for a level, a third of the game rate.
+        gravity?.let { sensors.registerListener(listener, it, SensorManager.SENSOR_DELAY_UI) }
         onDispose { sensors.unregisterListener(listener) }
     }
-    val a = angle ?: return
-    val level = abs(a) <= LEVEL_TOLERANCE
+    val shown by remember { derivedStateOf { !angle.floatValue.isNaN() } }
+    if (!shown) return
+    val level by remember { derivedStateOf { abs(angle.floatValue) <= LEVEL_TOLERANCE } }
     val color = if (level) Color(0xFF34C759) else Color.White.copy(alpha = 0.75f)
-    Canvas(modifier.fillMaxSize().rotate(Math.toDegrees(a.toDouble()).toFloat())) {
+    Canvas(modifier.fillMaxSize().graphicsLayer {
+        rotationZ = Math.toDegrees(angle.floatValue.takeIf { !it.isNaN() }?.toDouble() ?: 0.0).toFloat()
+    }) {
         val width = minOf(size.width, size.height) * 0.6f
         val c = center
         val bar = width * 0.4f
@@ -241,6 +249,7 @@ fun HorizonLevel(modifier: Modifier = Modifier) {
     }
 }
 
+private const val ANGLE_STEP = (0.1 * Math.PI / 180).toFloat()
 private const val LEVEL_TOLERANCE = (1.0 * Math.PI / 180).toFloat()
 private const val MAX_ROLL = (30.0 * Math.PI / 180).toFloat()
 
@@ -271,24 +280,35 @@ fun PeakingOverlay(model: AppModel, modifier: Modifier = Modifier) {
  * after a peak above -1 dBFS. Shown while the microphone is open (live).
  */
 @Composable
-fun AudioMeter(modifier: Modifier = Modifier) {
+fun AudioMeter(live: Boolean, modifier: Modifier = Modifier) {
     var rmsDb by remember { mutableFloatStateOf(-90f) }
     var peakDb by remember { mutableFloatStateOf(-90f) }
     var clipUntil by remember { mutableStateOf(0L) }
     var active by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) {
+    // Polled only while live (the microphone runs only then on Android); a
+    // new level is written only when it moves visibly, so a quiet room
+    // redraws nothing.
+    LaunchedEffect(live) {
+        if (!live) {
+            active = false
+            return@LaunchedEffect
+        }
         var lastChunks = MicLevels.chunks
         var still = 0
+        var peak = -90f
         while (true) {
             delay(66)
             val chunks = MicLevels.chunks
             still = if (chunks == lastChunks) still + 1 else 0
             lastChunks = chunks
-            active = still < 8
-            val (peak, rms) = MicLevels.read()
-            val peakNow = db(peak)
-            rmsDb = db(rms)
-            peakDb = maxOf(peakNow, peakDb - 1.3f)
+            val nowActive = still < 8
+            if (nowActive != active) active = nowActive
+            val (p, r) = MicLevels.read()
+            val peakNow = db(p)
+            val rms = db(r)
+            peak = maxOf(peakNow, peak - 1.3f)
+            if (abs(rms - rmsDb) >= 0.5f) rmsDb = rms
+            if (abs(peak - peakDb) >= 0.5f) peakDb = peak
             if (peakNow > -1f) clipUntil = System.currentTimeMillis() + 1000
         }
     }

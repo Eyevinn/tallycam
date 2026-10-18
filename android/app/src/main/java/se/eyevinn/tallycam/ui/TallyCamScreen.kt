@@ -50,6 +50,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -279,7 +280,7 @@ private fun BoxScope.ShootingScreen(model: AppModel, onScan: () -> Unit) {
                     Box(Modifier.align(Alignment.TopStart).touchable(screenLocked)) { tools(false) }
                     Row(Modifier.align(Alignment.TopEnd), horizontalArrangement = Arrangement.spacedBy(Chrome.gap),
                         verticalAlignment = Alignment.CenterVertically) {
-                        AudioMeter()
+                        AudioMeter(model.streamState != LiveStream.State.IDLE)
                         Box(Modifier.touchable(screenLocked)) { liveButton(false) }
                     }
                     Box(Modifier.align(Alignment.TopCenter).padding(horizontal = Chrome.liveButton + Chrome.gap)) { messages() }
@@ -315,7 +316,7 @@ private fun BoxScope.ShootingScreen(model: AppModel, onScan: () -> Unit) {
                                 unlock()
                                 Timecode(model)
                             }
-                            AudioMeter(Modifier.align(Alignment.BottomEnd))
+                            AudioMeter(model.streamState != LiveStream.State.IDLE, Modifier.align(Alignment.BottomEnd))
                         }
                     }
                     Column(Modifier.fillMaxHeight(), horizontalAlignment = Alignment.End,
@@ -340,7 +341,7 @@ private fun BoxScope.ShootingScreen(model: AppModel, onScan: () -> Unit) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom) {
                     Box(Modifier.touchable(screenLocked)) { tools(false) }
                     Spacer(Modifier.weight(1f))
-                    AudioMeter()
+                    AudioMeter(model.streamState != LiveStream.State.IDLE)
                 }
                 Box(Modifier.fillMaxWidth().touchable(screenLocked), contentAlignment = Alignment.Center) { liveButton(false) }
             }
@@ -551,8 +552,9 @@ private fun StatusStrip(model: AppModel, centre: (@Composable () -> Unit)?, onSe
     LaunchedEffect(model.streamState) {
         liveSince = if (model.streamState == LiveStream.State.LIVE) liveSince ?: System.currentTimeMillis() else null
     }
-    val clockHealth = remember(now) { model.clockSummary()?.health }
-    val battery = remember(now) { model.batteryPercent() }
+    val clockHealth = model.clockState?.health
+    // The battery every 10 s: a binder call.
+    val battery = remember(now / 10_000) { model.batteryPercent() }
     val dim = Color.White.copy(alpha = 0.85f)
     @Composable
     fun label(text: String, color: Color = dim, weight: FontWeight = FontWeight.Medium) =
@@ -914,19 +916,29 @@ private fun Timecode(model: AppModel, modifier: Modifier = Modifier) {
     val fps = model.camera.settings.frameRate.coerceAtLeast(1)
     var text by remember { mutableStateOf("") }
     var synced by remember { mutableStateOf(false) }
-    var health by remember { mutableStateOf<String?>(null) }
+    val health = model.clockState?.health
     LaunchedEffect(fps) {
-        var frames = 0
+        // The zone's offset, looked up once a second rather than every frame.
+        var offset = 0L
+        var offsetAt = Long.MIN_VALUE
+        var lastFrame = -1L
         while (true) {
+            // On the display's frames: it pauses with the app in the background.
+            withFrameNanos { }
             val now = runCatching { se.eyevinn.tallycam.core.ClockMapping.at(se.eyevinn.tallycam.core.Hot.hostNowNs()) }.getOrNull()
             // Without a running clock, the phone's own time, shown as not synchronised.
             val utcNs = now?.utcNs?.takeIf { it > 0 } ?: (System.currentTimeMillis() * 1_000_000L)
             synced = now?.synced == true
-            val offset = java.util.TimeZone.getDefault().getOffset(utcNs / 1_000_000L) / 1000L
-            text = timecode(utcNs, offset, fps, synced)
-            // The clock's health about once a second.
-            if (frames++ % fps == 0) health = model.clockSummary()?.health
-            delay(1000L / fps)
+            if (utcNs - offsetAt > 1_000_000_000L || utcNs < offsetAt) {
+                offset = java.util.TimeZone.getDefault().getOffset(utcNs / 1_000_000L) / 1000L
+                offsetAt = utcNs
+            }
+            // A new text only when the frame number changes.
+            val frame = (utcNs + offset * 1_000_000_000L) * fps / 1_000_000_000L
+            if (frame != lastFrame) {
+                lastFrame = frame
+                text = timecode(utcNs, offset, fps, synced)
+            }
         }
     }
     val color = when {

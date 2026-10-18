@@ -125,7 +125,10 @@ Right side shown; the left one is its mirror image.
   "–": the side control folds into a small tab at the edge (46 × 46, the
   last group's colour, a chevron), so the picture is clear. A tap on the
   tab brings the side control back with its last group. Either side or both
-  may be hidden; the choice is remembered like the group.
+  may be hidden; the choice is remembered like the group. A tap on a value
+  in the values row brings back a hidden side that runs its group; a group
+  no side runs goes to the right side and shows it. A swap keeps each
+  side's hidden flag. Only shown sides underline their values.
 - **Mode switch.** Two cells side by side, `A` and `M`, under the selector,
   the same size and look. It shows the state, not an action: the filled cell
   is the current mode (white auto, yellow held). Tap the other cell to

@@ -140,7 +140,10 @@ Right side shown; the left one is its mirror image.
   the screen allows; on a landscape phone they shrink to fit between the
   top rows and the bottom row, 20 pt at least. The rocker is as long as the
   selector and what is under it, and both sides' rockers are the same
-  length.
+  length. **Nothing moves when a group changes:** every slot has a fixed
+  size worked out from the screen once, the slot under the selector as
+  tall as the larger of the mode switch and the camera's lens buttons, the
+  K / Tint row reserved (empty) for every group.
 - **Rocker.** The same component as zoom, same size, with the direction
   written at its ends. Three gestures, the same on every rocker:
   - **Drag** for a move: speed rises with the square of the deflection, about

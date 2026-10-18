@@ -170,6 +170,16 @@ impl SoftwareClock {
 
     /// The host clock stood still for `delta_ns` (device sleep): the true
     /// time moved on by that much, so the mapping does too.
+    ///
+    /// The mapping is one line through the anchor (`MappingSnapshot`
+    /// extrapolates before it at `prev_freq`), so the jump moves every host
+    /// time, not only those after the sleep: a host time from before the
+    /// sleep mapped after this call comes out `delta_ns` late. Map capture
+    /// times when they are taken (the platforms do), not after a sleep. A
+    /// mapping with the jump at the sleep itself would need the host time
+    /// it began, which the driver does not have (it sees the pause counter
+    /// grow between two polls, up to one poll apart from `now`), and a
+    /// discontinuity in the snapshot the platforms read.
     pub fn host_paused(&mut self, now: i64, delta_ns: i64) {
         let reg = self.remaining(now);
         let base = self.snap.base_freq;
@@ -243,5 +253,7 @@ mod tests {
         let mut c = SoftwareClock::new(0, 0, 500e-6, 83_333e-6);
         c.host_paused(10 * S, 3600 * S);
         assert_eq!(c.tai_ns(11 * S), 11 * S + 3600 * S);
+        // A host time from before the sleep moves too (see `host_paused`).
+        assert_eq!(c.tai_ns(9 * S), 9 * S + 3600 * S);
     }
 }

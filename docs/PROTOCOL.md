@@ -603,9 +603,9 @@ clock. A later provisioning step may hand the phone a venue NTP server instead
   more than 1 s off.
 - TAI - UTC comes from a built-in leap second table: 37 s since 2017, and
   for good (none at the end of 2026, and UTC has no leap seconds from May
-  2027 by the CGPM's 2026 decision). A leap second the servers announce and
-  the table does not know is still applied at the end of June 30 or
-  December 31.
+  2027 by the CGPM's 2026 decision). The servers' leap indicator is
+  ignored: a leap second they announce is never applied, so a false
+  announcement can not shift TAI by a second at midnight.
 
 ### `status.clock`
 
@@ -638,7 +638,7 @@ compact. Unknown fields are allowed and must be ignored.
 `command` `clock_log` returns the newest lines of the discipline's log in
 `result.data`: chrony's `measurements`, `statistics`, `tracking` and
 `selection` logs plus `event` lines (source selected, falseticker, step, path
-change, leap second), each line prefixed with its kind. `data.reports` holds
+change), each line prefixed with its kind. `data.reports` holds
 the current `chronyc`-like `sources`, `sourcestats` and `tracking` text.
 
 ```json

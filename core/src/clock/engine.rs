@@ -25,6 +25,14 @@ use super::sourcestats::{Sample, SelectionData, SourceStats};
 pub type SourceId = u32;
 
 const NS: i64 = 1_000_000_000;
+/// No leap second beyond the built-in table, ever. TAI - UTC is 37 s for
+/// good (the CGPM's 2026 decision, [`leap::EXPECTED_TAI_OFFSET_S`]), so the
+/// leap indicator of the sources is not acted on: a false announcement
+/// would otherwise shift TAI by a second at midnight and stay there.
+const NO_DYN_LEAP: DynamicLeap = DynamicLeap {
+    utc_s: 0,
+    offset: 0,
+};
 const SOURCE_REACH_BITS: u8 = 8;
 const IBURST_GOOD_SAMPLES: i32 = 4;
 const IBURST_TOTAL_SAMPLES: i32 = SOURCE_REACH_BITS as i32;
@@ -233,7 +241,6 @@ struct Source {
     distant: i32,
     bad: i32,
     updates: u32,
-    leap_vote: bool,
     offline: bool,
     replace: bool,
     last: Option<LastMeasurement>,
@@ -287,7 +294,6 @@ struct Reference {
     avg2_moving: bool,
     make_step_limit: u32,
     leap: LeapStatus,
-    dyn_leap: DynamicLeap,
     combined: usize,
     /// A step that was refused while live, done when the stream stops.
     pending_step: bool,
@@ -321,7 +327,7 @@ impl Engine {
     /// `wall_utc_ns`: the platform wall clock now, used until the first
     /// update (and as the raw timescale's origin).
     pub fn new(cfg: ClockConfig, now: i64, wall_utc_ns: i64, rng: Box<dyn RandomSource>) -> Self {
-        let tai = leap::utc_to_tai_ns(wall_utc_ns, DynamicLeap::default());
+        let tai = leap::utc_to_tai_ns(wall_utc_ns, NO_DYN_LEAP);
         let clock = SoftwareClock::new(now, tai, cfg.max_slew_live, cfg.max_slew_idle);
         let pools = (0..cfg.sources.len())
             .map(|_| PoolState {
@@ -371,7 +377,6 @@ impl Engine {
                 avg2_moving: false,
                 make_step_limit,
                 leap: LeapStatus::Unsynchronised,
-                dyn_leap: DynamicLeap::default(),
                 combined: 0,
                 pending_step: false,
             },
@@ -698,11 +703,10 @@ impl Engine {
         let (mut ta, mut tc) = (false, false);
         if synced_packet {
             let utc_now = self.utc_ns(t4);
-            let dyn_leap = self.reference.dyn_leap;
             let t2_utc = pkt.receive_ts.to_unix_ns(utc_now);
             let t3_utc = pkt.transmit_ts.to_unix_ns(utc_now);
-            let leap_close = leap::is_leap_close(t2_utc.div_euclid(NS), dyn_leap);
-            let tai_utc = leap::tai_utc_at_utc(t2_utc.div_euclid(NS), dyn_leap) as i64 * NS;
+            let leap_close = leap::is_leap_close(t2_utc.div_euclid(NS), NO_DYN_LEAP);
+            let tai_utc = leap::tai_utc_at_utc(t2_utc.div_euclid(NS), NO_DYN_LEAP) as i64 * NS;
             let (t2, t3) = (t2_utc + tai_utc, t3_utc + tai_utc);
             let l1 = t1 + self.raw_base;
             let l4 = t4 + self.raw_base;
@@ -1091,7 +1095,6 @@ impl Engine {
             distant: 0,
             bad: 0,
             updates: 0,
-            leap_vote: false,
             offline: !self.family_ok(&addr.ip()),
             replace: false,
             last: None,
@@ -1330,7 +1333,6 @@ impl Engine {
         let mut max_reach_sample_ago = 0.0f64;
 
         for i in 0..n {
-            self.sources[i].leap_vote = false;
             if self.sources[i].offline {
                 self.mark(now, i, SourceStatus::Offline);
                 continue;
@@ -1488,10 +1490,6 @@ impl Engine {
             return;
         }
 
-        for &i in &sel_list {
-            self.sources[i].leap_vote = true;
-        }
-
         let min_stratum = sel_list
             .iter()
             .map(|&i| self.sources[i].stratum)
@@ -1575,13 +1573,12 @@ impl Engine {
             s.updates = 0;
         }
 
-        let leap = self.voted_leap();
         let Some(mut td) = self.sources[k].stats.tracking_data() else {
             return;
         };
         let combined = self.combine_sources(now, &sel_list, k, &mut td);
         let stratum = self.sources[k].stratum;
-        self.set_reference(now, k, stratum, leap, combined, td);
+        self.set_reference(now, k, stratum, combined, td);
     }
 
     /// chrony `combine_sources`.
@@ -1653,25 +1650,6 @@ impl Engine {
         combined
     }
 
-    fn voted_leap(&self) -> LeapStatus {
-        let (mut votes, mut ins, mut del) = (0, 0, 0);
-        for s in self.sources.iter().filter(|s| s.leap_vote) {
-            votes += 1;
-            match s.leap {
-                1 => ins += 1,
-                2 => del += 1,
-                _ => {}
-            }
-        }
-        if ins > votes / 2 {
-            LeapStatus::Insert
-        } else if del > votes / 2 {
-            LeapStatus::Delete
-        } else {
-            LeapStatus::Normal
-        }
-    }
-
     // ------------------------------------------------------------------
     // Reference update (chrony `REF_SetReference`)
     // ------------------------------------------------------------------
@@ -1691,7 +1669,6 @@ impl Engine {
         now: i64,
         k: usize,
         stratum: u8,
-        voted_leap: LeapStatus,
         combined: usize,
         td: super::sourcestats::TrackingData,
     ) {
@@ -1771,7 +1748,7 @@ impl Engine {
                 .accumulate(now, est_freq, offset, correction_rate);
         }
 
-        self.update_leap(now, voted_leap);
+        self.update_leap(now);
 
         let r = &mut self.reference;
         if r.avg2_moving {
@@ -1791,15 +1768,12 @@ impl Engine {
             r.offset_sd,
             r.frequency_sd,
         );
-        let dyn_leap = r.dyn_leap;
         let snap = self.clock.snapshot_mut();
         snap.ref_host_ns = ref_time;
         snap.dist_base_s = dist_base;
         snap.dist_rate = dist_rate;
         snap.est_base_s = est_base;
         snap.est_rate = est_rate;
-        snap.dyn_leap_utc_s = dyn_leap.utc_s;
-        snap.dyn_leap_offset = dyn_leap.offset;
 
         let line = format!(
             "{} {:<15} {:2} {:10.3} {:10.3} {:10.3e} {} {:2} {:10.3e} {:10.3e} {:10.3e} {:10.3e} {:10.3e}",
@@ -1828,36 +1802,22 @@ impl Engine {
         }
     }
 
-    /// chrony `update_leap_status`: the leap table first, then a leap the
-    /// sources vote for (applied only on June 30 / December 31).
-    fn update_leap(&mut self, now: i64, voted: LeapStatus) {
+    /// chrony `update_leap_status`, from the leap table alone: the
+    /// sources' leap indicator is ignored ([`NO_DYN_LEAP`]). The table has
+    /// no leap after 2017, so this is `Normal` from now on.
+    fn update_leap(&mut self, now: i64) {
         let utc_s = self.utc_ns(now).div_euclid(NS);
-        let r = &mut self.reference;
-        let table = leap::leap_at_end_of_day(utc_s, r.dyn_leap);
-        let wanted = match voted {
-            LeapStatus::Insert => 1,
-            LeapStatus::Delete => -1,
-            _ => table,
-        };
-        if wanted != 0 && leap::is_leap_second_day(utc_s) && !leap::is_leap_close(utc_s, r.dyn_leap)
+        let wanted = leap::leap_at_end_of_day(utc_s, NO_DYN_LEAP);
+        self.reference.leap = if wanted == 0
+            || !leap::is_leap_second_day(utc_s)
+            || leap::is_leap_close(utc_s, NO_DYN_LEAP)
         {
-            if table != wanted {
-                let at = leap::next_midnight(utc_s);
-                let offset = leap::tai_utc_at_utc(at - 1, r.dyn_leap) + wanted;
-                r.dyn_leap = DynamicLeap { utc_s: at, offset };
-                self.event(
-                    now,
-                    format!("Leap second announced by the sources: TAI - UTC becomes {offset} s"),
-                );
-            }
-            self.reference.leap = if wanted > 0 {
-                LeapStatus::Insert
-            } else {
-                LeapStatus::Delete
-            };
+            LeapStatus::Normal
+        } else if wanted > 0 {
+            LeapStatus::Insert
         } else {
-            self.reference.leap = LeapStatus::Normal;
-        }
+            LeapStatus::Delete
+        };
     }
 
     fn set_unsynchronised(&mut self, now: i64) {
@@ -1872,7 +1832,7 @@ impl Engine {
     // ------------------------------------------------------------------
 
     fn utc_ns(&self, now: i64) -> i64 {
-        leap::tai_to_utc_ns(self.clock.tai_ns(now), self.reference.dyn_leap)
+        leap::tai_to_utc_ns(self.clock.tai_ns(now), NO_DYN_LEAP)
     }
 
     fn date(&self, now: i64) -> String {
@@ -1943,7 +1903,7 @@ impl Engine {
             },
             ref_time_utc_ns: r
                 .last_update
-                .map(|_| leap::tai_to_utc_ns(snap.tai_ns(r.ref_time), r.dyn_leap)),
+                .map(|_| leap::tai_to_utc_ns(snap.tai_ns(r.ref_time), NO_DYN_LEAP)),
             system_offset_s: -self.clock.remaining(now),
             last_offset_s: r.last_offset,
             rms_offset_s: r.avg2_offset.sqrt(),
@@ -1967,7 +1927,7 @@ impl Engine {
             } else {
                 LeapStatus::Unsynchronised
             },
-            tai_utc_s: leap::tai_utc_at_tai(snap.tai_ns(now), r.dyn_leap),
+            tai_utc_s: leap::tai_utc_at_tai(snap.tai_ns(now), NO_DYN_LEAP),
             est_error_s: if r.last_update.is_some() {
                 secs(snap.est_error_ns(now))
             } else {

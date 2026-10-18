@@ -5,6 +5,9 @@
 //!
 //! Unknown `type` values and unknown fields are ignored. Fields a server does
 //! not interpret are kept in `extra` maps so they can be forwarded unchanged.
+//! An enum value from the other side that this version does not know reads
+//! as `Unknown` (or, for [`TallyState`], as off), and numbers and flags are
+//! read leniently ([`lenient`]): one odd value never rejects the message.
 //! Controller-side envelopes (operator UI <-> server) belong to the server.
 
 use serde::{Deserialize, Serialize};
@@ -30,6 +33,80 @@ pub const CONTROL_PATH: &str = "/lcp/v0/control";
 
 /// Map of control id to value, used by `state` and `set`.
 pub type Values = Map<String, Value>;
+
+/// `deserialize_with` helpers so that a number or flag from another
+/// implementation never rejects the whole message (docs/PROTOCOL.md,
+/// "Transport"):
+///
+/// - An integer field takes any number with an integral value (`1920.0`),
+///   saturated to the type's range (`"stratum": 256` reads as 255).
+/// - A fraction (`120.5`), a non-number or `null` reads as the default: 0
+///   for a plain field, absent for an `Option`.
+/// - A float field takes any number; anything else reads as the default.
+/// - A flag is `true` only for `true`; anything else reads as `false`.
+///
+/// A field without `#[serde(default)]` must still be present.
+pub mod lenient {
+    use serde::{Deserialize, Deserializer};
+    use serde_json::Value;
+
+    /// An integer type a JSON number saturates into.
+    pub trait Int: Sized + Default {
+        fn from_i64(x: i64) -> Self;
+        fn from_u64(x: u64) -> Self;
+        /// `x` is finite and integral; `as` saturates.
+        fn from_f64(x: f64) -> Self;
+    }
+
+    macro_rules! int {
+        ($($t:ty),*) => {$(
+            impl Int for $t {
+                fn from_i64(x: i64) -> Self {
+                    <$t>::try_from(x).unwrap_or(if x < 0 { <$t>::MIN } else { <$t>::MAX })
+                }
+                fn from_u64(x: u64) -> Self {
+                    <$t>::try_from(x).unwrap_or(<$t>::MAX)
+                }
+                fn from_f64(x: f64) -> Self {
+                    x as $t
+                }
+            }
+        )*};
+    }
+    int!(u8, i8, u32, i32, u64, i64);
+
+    fn int_of<T: Int>(v: &Value) -> Option<T> {
+        let Value::Number(n) = v else { return None };
+        if let Some(x) = n.as_i64() {
+            return Some(T::from_i64(x));
+        }
+        if let Some(x) = n.as_u64() {
+            return Some(T::from_u64(x));
+        }
+        let x = n.as_f64()?;
+        (x.is_finite() && x.fract() == 0.0).then(|| T::from_f64(x))
+    }
+
+    pub fn int<'de, D: Deserializer<'de>, T: Int>(d: D) -> Result<T, D::Error> {
+        Ok(int_of(&Value::deserialize(d)?).unwrap_or_default())
+    }
+
+    pub fn opt_int<'de, D: Deserializer<'de>, T: Int>(d: D) -> Result<Option<T>, D::Error> {
+        Ok(int_of(&Value::deserialize(d)?))
+    }
+
+    pub fn float<'de, D: Deserializer<'de>>(d: D) -> Result<f64, D::Error> {
+        Ok(opt_float(d)?.unwrap_or_default())
+    }
+
+    pub fn opt_float<'de, D: Deserializer<'de>>(d: D) -> Result<Option<f64>, D::Error> {
+        Ok(Value::deserialize(d)?.as_f64())
+    }
+
+    pub fn flag<'de, D: Deserializer<'de>>(d: D) -> Result<bool, D::Error> {
+        Ok(Value::deserialize(d)? == Value::Bool(true))
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Descriptors
@@ -69,6 +146,10 @@ pub enum Scale {
     #[default]
     Linear,
     Log,
+    /// A scale this version does not know (from a newer phone): draw the
+    /// control as linear. Forwarded as `"unknown"`.
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -86,11 +167,23 @@ pub struct ControlDescriptor {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub group: Option<String>,
     pub kind: ControlKind,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "lenient::opt_float",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub min: Option<f64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "lenient::opt_float",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub max: Option<f64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "lenient::opt_float",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub step: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scale: Option<Scale>,
@@ -101,7 +194,11 @@ pub struct ControlDescriptor {
     /// The control is writable only when the named controls have these values.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enabled_when: Option<Values>,
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[serde(
+        default,
+        deserialize_with = "lenient::flag",
+        skip_serializing_if = "std::ops::Not::not"
+    )]
     pub readonly: bool,
     /// Why it is `readonly`, for the UI ("no manual exposure on this
     /// camera"). Optional.
@@ -142,7 +239,7 @@ pub struct CommandDescriptor {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Hello {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient::int")]
     pub protocol: u32,
     pub device: DeviceInfo,
     /// The device's P-256 public key, SEC1 uncompressed (65 bytes, X9.63),
@@ -158,8 +255,9 @@ pub struct Hello {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Battery {
+    #[serde(deserialize_with = "lenient::float")]
     pub level: f64,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient::flag")]
     pub charging: bool,
 }
 
@@ -169,27 +267,55 @@ pub struct StreamStatus {
     pub state: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "lenient::opt_float",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub bitrate_kbps: Option<f64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "lenient::opt_float",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub rtt_ms: Option<f64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "lenient::opt_int",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub retransmits: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "lenient::opt_int",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub dropped: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
     /// The SRT latency the listener agreed to (the larger of both ends), ms.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "lenient::opt_int",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub srt_latency_ms: Option<u32>,
     /// Send pipeline latency per stage over the last second.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub latency: Option<Box<StreamLatency>>,
     /// Frames muxed after their PCR deadline (`PTS < PCR`) since the stream
     /// started: a receiver gets them late.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "lenient::opt_int",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub late_video_frames: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "lenient::opt_int",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub late_audio_frames: Option<u64>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
@@ -198,8 +324,11 @@ pub struct StreamStatus {
 /// p50, p95 and maximum of one stage over the last second, ms.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct Percentiles {
+    #[serde(deserialize_with = "lenient::float")]
     pub p50: f64,
+    #[serde(deserialize_with = "lenient::float")]
     pub p95: f64,
+    #[serde(deserialize_with = "lenient::float")]
     pub max: f64,
 }
 
@@ -262,15 +391,16 @@ pub struct Status {
 pub struct Preview {
     /// Base64 encoded JPEG.
     pub jpeg: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient::int")]
     pub width: u32,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient::int")]
     pub height: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CommandResult {
     pub id: Value,
+    #[serde(deserialize_with = "lenient::flag")]
     pub ok: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
@@ -329,13 +459,27 @@ pub enum DeviceMessage {
 // Server -> device
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+/// The tally light. A state this version does not know (from a newer hub or
+/// operator UI) reads as `Off`: rather no light than a red one that may be
+/// wrong, and off is also what a phone shows without a hub. There is no
+/// `Unknown` variant, so it is never sent on.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum TallyState {
     #[default]
     Off,
     Preview,
     Program,
+}
+
+impl<'de> Deserialize<'de> for TallyState {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        Ok(match Value::deserialize(d)? {
+            Value::String(s) if s == "preview" => TallyState::Preview,
+            Value::String(s) if s == "program" => TallyState::Program,
+            _ => TallyState::Off,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -360,10 +504,19 @@ pub enum ServerToDevice {
         text: String,
     },
     Preview {
+        #[serde(deserialize_with = "lenient::flag")]
         enabled: bool,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            deserialize_with = "lenient::opt_float",
+            skip_serializing_if = "Option::is_none"
+        )]
         fps: Option<f64>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            deserialize_with = "lenient::opt_int",
+            skip_serializing_if = "Option::is_none"
+        )]
         width: Option<u32>,
     },
     /// Sent after a `hello` that carries a public key: sign
@@ -380,8 +533,13 @@ pub enum ServerToDevice {
     Production(Production),
     /// Start or stop `image_stats` (default 1 per second, at most 4).
     Stats {
+        #[serde(deserialize_with = "lenient::flag")]
         enabled: bool,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            deserialize_with = "lenient::opt_float",
+            skip_serializing_if = "Option::is_none"
+        )]
         fps: Option<f64>,
     },
 }
@@ -436,6 +594,7 @@ impl<'de> Deserialize<'de> for ShutterPolicy {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Production {
     /// 50, 60, or 0 (no mains-lit light).
+    #[serde(deserialize_with = "lenient::int")]
     pub mains_hz: u32,
     #[serde(default)]
     pub shutter: ShutterPolicy,
@@ -464,13 +623,19 @@ impl Production {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct LumaStats {
+    #[serde(deserialize_with = "lenient::float")]
     pub mean: f64,
+    #[serde(deserialize_with = "lenient::float")]
     pub p01: f64,
+    #[serde(deserialize_with = "lenient::float")]
     pub p50: f64,
+    #[serde(deserialize_with = "lenient::float")]
     pub p99: f64,
     /// Share of the picture at the top of the range.
+    #[serde(deserialize_with = "lenient::float")]
     pub clipped: f64,
     /// Share of the picture at the bottom of the range.
+    #[serde(deserialize_with = "lenient::float")]
     pub crushed: f64,
     /// 32 bins from black to white, one byte each (relative to the fullest
     /// bin, 255), standard base64.
@@ -485,11 +650,19 @@ pub struct LumaStats {
 /// pixel is near grey.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct ColourStats {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "lenient::opt_float",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub neutral_rg: Option<f64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "lenient::opt_float",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub neutral_bg: Option<f64>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient::float")]
     pub neutral_fraction: f64,
 }
 
@@ -516,6 +689,10 @@ pub enum ClockHealthLevel {
     Degraded,
     #[default]
     Bad,
+    /// A level this version does not know (from a newer phone): no better
+    /// than `Bad`. Forwarded as `"unknown"`.
+    #[serde(other)]
+    Unknown,
 }
 
 /// `status.clock`: the phone's chrony-like clock discipline, compact. Every
@@ -525,6 +702,7 @@ pub enum ClockHealthLevel {
 #[serde(default)]
 pub struct ClockStatus {
     /// At least `minsources` sources agree and the clock follows them.
+    #[serde(deserialize_with = "lenient::flag")]
     pub synced: bool,
     pub health: ClockHealthLevel,
     /// Operator-readable findings behind `health`.
@@ -532,6 +710,7 @@ pub struct ClockStatus {
     /// Timescale of the SEI capture times: `tai`.
     pub timescale: String,
     /// TAI - UTC in seconds.
+    #[serde(deserialize_with = "lenient::int")]
     pub tai_utc_s: i32,
     /// Address of the selected source.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -540,32 +719,54 @@ pub struct ClockStatus {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reference_name: Option<String>,
     /// Our stratum (selected source stratum + 1); 0 when not synced.
+    #[serde(deserialize_with = "lenient::int")]
     pub stratum: u8,
     /// Seconds since the last clock update.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        deserialize_with = "lenient::opt_float",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub update_age_s: Option<f64>,
     /// Correction still being slewed in, ns; positive = clock fast.
+    #[serde(deserialize_with = "lenient::int")]
     pub system_offset_ns: i64,
     /// Offset at the last update, ns; positive = clock fast.
+    #[serde(deserialize_with = "lenient::int")]
     pub last_offset_ns: i64,
+    #[serde(deserialize_with = "lenient::int")]
     pub rms_offset_ns: i64,
     /// Frequency correction of the host clock, ppm; positive = host slow.
+    #[serde(deserialize_with = "lenient::float")]
     pub freq_ppm: f64,
+    #[serde(deserialize_with = "lenient::float")]
     pub resid_freq_ppm: f64,
+    #[serde(deserialize_with = "lenient::float")]
     pub skew_ppm: f64,
+    #[serde(deserialize_with = "lenient::int")]
     pub root_delay_us: i64,
+    #[serde(deserialize_with = "lenient::int")]
     pub root_dispersion_us: i64,
+    #[serde(deserialize_with = "lenient::float")]
     pub update_interval_s: f64,
     /// `normal | insert | delete | unsynchronised`
     pub leap: String,
+    #[serde(deserialize_with = "lenient::int")]
     pub est_error_us: i64,
+    #[serde(deserialize_with = "lenient::int")]
     pub max_error_us: i64,
     /// Disciplined UTC minus the phone's own wall clock, ms.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        deserialize_with = "lenient::opt_float",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub device_offset_ms: Option<f64>,
+    #[serde(deserialize_with = "lenient::int")]
     pub selected: u32,
+    #[serde(deserialize_with = "lenient::int")]
     pub combined: u32,
+    #[serde(deserialize_with = "lenient::int")]
     pub reachable: u32,
+    #[serde(deserialize_with = "lenient::int")]
     pub total: u32,
     pub sources: Vec<ClockSourceSummary>,
     #[serde(flatten)]
@@ -581,18 +782,30 @@ pub struct ClockSourceSummary {
     pub state: String,
     pub name: String,
     pub addr: String,
+    #[serde(deserialize_with = "lenient::int")]
     pub stratum: u8,
     /// log2 of the poll interval in seconds.
+    #[serde(deserialize_with = "lenient::int")]
     pub poll: i8,
     /// Reachability register, last 8 polls (377 octal = all answered).
+    #[serde(deserialize_with = "lenient::int")]
     pub reach: u8,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        deserialize_with = "lenient::opt_int",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub last_rx_s: Option<u64>,
     /// Last sample offset, us; positive = the reference is ahead of us.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        deserialize_with = "lenient::opt_int",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub offset_us: Option<i64>,
     /// Error bound of the last sample (root distance), us.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        deserialize_with = "lenient::opt_int",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub error_us: Option<i64>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
@@ -752,5 +965,171 @@ mod tests {
             panic!()
         };
         assert_eq!(r.data.unwrap()["lines"][0], "a");
+    }
+
+    fn hello_control(control: &str) -> ControlDescriptor {
+        let text = format!(
+            r#"{{"type":"hello","protocol":4,"device":{{"id":"ab"}},"controls":[{control}]}}"#
+        );
+        let DeviceMessage::Hello(mut h) = serde_json::from_str(&text).unwrap() else {
+            panic!("not a hello")
+        };
+        h.controls.remove(0)
+    }
+
+    fn clock(fields: &str) -> ClockStatus {
+        let text = format!(r#"{{"type":"status","clock":{{{fields}}}}}"#);
+        let DeviceMessage::Status(s) = serde_json::from_str(&text).unwrap() else {
+            panic!("not a status")
+        };
+        *s.clock.unwrap()
+    }
+
+    #[test]
+    fn unknown_scale_does_not_reject_the_hello() {
+        let c = hello_control(r#"{"id":"iso","kind":"range","min":25,"max":3200,"scale":"exp"}"#);
+        assert_eq!(c.scale, Some(Scale::Unknown));
+        assert_eq!(c.max, Some(3200.0));
+        let c = hello_control(r#"{"id":"iso","kind":"range","scale":"log"}"#);
+        assert_eq!(c.scale, Some(Scale::Log));
+    }
+
+    #[test]
+    fn unknown_clock_health_keeps_the_status() {
+        let c = clock(r#""synced":true,"health":"unknown","max_error_us":120"#);
+        assert_eq!(c.health, ClockHealthLevel::Unknown);
+        assert!(c.synced);
+        assert_eq!(c.max_error_us, 120);
+        assert_eq!(
+            clock(r#""health":"later""#).health,
+            ClockHealthLevel::Unknown
+        );
+        assert_eq!(
+            clock(r#""health":"healthy""#).health,
+            ClockHealthLevel::Healthy
+        );
+    }
+
+    #[test]
+    fn unknown_tally_reads_as_off() {
+        for (state, want) in [
+            ("\"program\"", TallyState::Program),
+            ("\"preview\"", TallyState::Preview),
+            ("\"off\"", TallyState::Off),
+            ("\"program_iso\"", TallyState::Off),
+            ("null", TallyState::Off),
+            ("1", TallyState::Off),
+        ] {
+            let msg: ServerToDevice =
+                serde_json::from_str(&format!(r#"{{"type":"tally","state":{state}}}"#)).unwrap();
+            assert_eq!(msg, ServerToDevice::Tally { state: want }, "{state}");
+        }
+        // Sent as before.
+        assert_eq!(
+            serde_json::to_value(ServerToDevice::Tally {
+                state: TallyState::Program
+            })
+            .unwrap(),
+            serde_json::json!({"type":"tally","state":"program"})
+        );
+    }
+
+    #[test]
+    fn out_of_range_integer_saturates() {
+        let c = clock(r#""stratum":256,"sources":[{"stratum":-3,"poll":200,"reach":1e3}]"#);
+        assert_eq!(c.stratum, 255);
+        assert_eq!(c.sources[0].stratum, 0);
+        assert_eq!(c.sources[0].poll, 127);
+        assert_eq!(c.sources[0].reach, 255);
+        let c = clock(r#""max_error_us":1e30,"total":-1"#);
+        assert_eq!(c.max_error_us, i64::MAX);
+        assert_eq!(c.total, 0);
+    }
+
+    #[test]
+    fn fractional_integer_is_dropped_not_the_message() {
+        let msg: DeviceMessage = serde_json::from_str(
+            r#"{"type":"status","stream":{"state":"live","srt_latency_ms":120.5,"dropped":3.0}}"#,
+        )
+        .unwrap();
+        let DeviceMessage::Status(s) = msg else {
+            panic!("not a status")
+        };
+        let stream = s.stream.unwrap();
+        assert_eq!(stream.srt_latency_ms, None);
+        assert_eq!(stream.dropped, Some(3));
+        assert_eq!(stream.state, "live");
+        assert_eq!(clock(r#""stratum":2.5,"synced":true"#).stratum, 0);
+    }
+
+    #[test]
+    fn integral_float_is_an_integer() {
+        let msg: DeviceMessage =
+            serde_json::from_str(r#"{"type":"preview","jpeg":"","width":1920.0,"height":1080}"#)
+                .unwrap();
+        let DeviceMessage::Preview(p) = msg else {
+            panic!("not a preview")
+        };
+        assert_eq!((p.width, p.height), (1920, 1080));
+        let msg: ServerToDevice =
+            serde_json::from_str(r#"{"type":"preview","enabled":true,"width":640.0}"#).unwrap();
+        assert_eq!(
+            msg,
+            ServerToDevice::Preview {
+                enabled: true,
+                fps: None,
+                width: Some(640)
+            }
+        );
+        let hello: DeviceMessage =
+            serde_json::from_str(r#"{"type":"hello","protocol":4.0,"device":{"id":"ab"}}"#)
+                .unwrap();
+        let DeviceMessage::Hello(h) = hello else {
+            panic!("not a hello")
+        };
+        assert_eq!(h.protocol, 4);
+    }
+
+    #[test]
+    fn null_reads_as_the_default() {
+        let c = hello_control(r#"{"id":"iso","kind":"range","readonly":null,"min":null}"#);
+        assert!(!c.readonly);
+        assert_eq!(c.min, None);
+        assert!(c.is_enabled(&Values::new()));
+        let c = clock(r#""synced":null,"stratum":null,"freq_ppm":null,"update_age_s":null"#);
+        assert!(!c.synced);
+        assert_eq!(c.stratum, 0);
+        assert_eq!(c.freq_ppm, 0.0);
+        assert_eq!(c.update_age_s, None);
+        let msg: DeviceMessage =
+            serde_json::from_str(r#"{"type":"status","battery":{"level":null,"charging":null}}"#)
+                .unwrap();
+        let DeviceMessage::Status(s) = msg else {
+            panic!("not a status")
+        };
+        assert_eq!(
+            s.battery,
+            Some(Battery {
+                level: 0.0,
+                charging: false
+            })
+        );
+        // A required field must still be there.
+        assert!(
+            serde_json::from_str::<DeviceMessage>(r#"{"type":"status","battery":{}}"#).is_err()
+        );
+    }
+
+    #[test]
+    fn lenient_fields_serialize_unchanged() {
+        let text = r#"{"type":"status","stream":{"state":"live","srt_latency_ms":120,"rtt_ms":2.5},
+            "clock":{"synced":true,"stratum":3,"max_error_us":40,"sources":[{"reach":255,"offset_us":-7}]}}"#;
+        let msg: DeviceMessage = serde_json::from_str(text).unwrap();
+        let back = serde_json::to_value(&msg).unwrap();
+        assert_eq!(back["stream"]["srt_latency_ms"], 120);
+        assert_eq!(back["stream"]["rtt_ms"], 2.5);
+        assert_eq!(back["clock"]["stratum"], 3);
+        assert_eq!(back["clock"]["sources"][0]["offset_us"], -7);
+        assert_eq!(serde_json::from_value::<DeviceMessage>(back).unwrap(), msg);
     }
 }

@@ -291,22 +291,30 @@ fn kod_deny_takes_the_source_offline() {
 }
 
 #[test]
-fn dynamic_leap_maps_utc_after_midnight() {
+fn announced_leap_is_ignored_past_midnight() {
     let mut sim = Simulation::new(
         vectors()
             .into_iter()
             .find(|s| s.name == "leap_second_announced")
             .expect("leap vector"),
     );
+    let midnight = 1_798_761_600i64; // 2027-01-01
     sim.run();
     let now = sim.host_now();
+    assert!(sim.engine.tracking_report(now).synced);
+    // No leap was scheduled from the vote ...
     let snap = sim.engine.snapshot(now);
-    let midnight = 1_798_761_600i64; // 2027-01-01
-    assert_eq!(snap.dyn_leap_utc_s, midnight);
-    assert_eq!(snap.dyn_leap_offset, 38);
-    let tai_after = (midnight + 38 + 10) * 1_000_000_000;
-    assert_eq!(
-        leap::tai_to_utc_ns(tai_after, snap.dynamic_leap()),
-        (midnight + 10) * 1_000_000_000
+    assert_eq!(snap.dyn_leap_utc_s, 0);
+    assert_eq!(snap.dyn_leap_offset, 0);
+    // ... so TAI is where the servers (which never inserted it) put it, and
+    // UTC an hour past midnight is TAI - 37 s.
+    assert!(
+        sim.error_ns().abs() < 5_000_000,
+        "error {} ns",
+        sim.error_ns()
     );
+    let tai = sim.engine.tai_ns(now);
+    let utc = leap::tai_to_utc_ns(tai, snap.dynamic_leap());
+    assert_eq!(tai - utc, 37 * 1_000_000_000);
+    assert!(utc.div_euclid(1_000_000_000) >= midnight + 3_590);
 }

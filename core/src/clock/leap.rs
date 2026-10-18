@@ -2,9 +2,10 @@
 //! `leapsectz right/UTC`.
 //!
 //! The disciplined clock runs on TAI, which never jumps. UTC is derived from
-//! it with this table. A leap second announced by the NTP sources (leap
-//! indicator, majority of the selected sources) and not yet in the table is
-//! added at runtime as [`DynamicLeap`].
+//! it with this table. The table is final ([`EXPECTED_TAI_OFFSET_S`]), so
+//! the clock engine ignores a leap second the NTP sources announce (leap
+//! indicator) and never installs a [`DynamicLeap`]; the type stays for the
+//! mapping snapshot, where it is always none.
 
 /// (UTC Unix seconds when the offset takes effect, TAI - UTC in seconds),
 /// from the IERS leap second list.
@@ -84,20 +85,20 @@ pub fn tai_to_utc_ns(tai_ns: i64, extra: DynamicLeap) -> i64 {
 }
 
 /// TAI - UTC at a TAI instant. An entry applies from the start of its leap
-/// second, (UTC of the entry + previous offset) in TAI.
+/// second, (UTC of the entry + previous offset) in TAI, or for a deleted
+/// one from the entry's UTC midnight, (UTC of the entry + new offset) in
+/// TAI: the smaller of the two.
 pub fn tai_utc_at_tai(tai_ns: i64, extra: DynamicLeap) -> i32 {
     let tai_s = tai_ns.div_euclid(NS);
     let mut offset = 10;
-    let mut prev = 10;
     for &(at, o) in LEAP_TABLE.iter() {
-        if tai_s >= at + prev as i64 {
+        if tai_s >= at + offset.min(o) as i64 {
             offset = o;
-            prev = o;
         } else {
             break;
         }
     }
-    if extra.utc_s != 0 && tai_s >= extra.utc_s + offset as i64 {
+    if extra.utc_s != 0 && tai_s >= extra.utc_s + offset.min(extra.offset) as i64 {
         offset = extra.offset;
     }
     offset
@@ -214,6 +215,28 @@ mod tests {
         assert_eq!(leap_at_end_of_day(end_2026 - 10, extra), 1);
         assert!(is_leap_second_day(end_2026 - 10));
         assert!(!is_leap_second_day(end_2026 - 86_400 - 10));
+    }
+
+    #[test]
+    fn a_deleted_leap_second() {
+        // 23:59:59 is skipped: UTC goes from 23:59:58 straight to midnight.
+        let midnight = 1_798_761_600; // 2027-01-01
+        let extra = DynamicLeap {
+            utc_s: midnight,
+            offset: 36,
+        };
+        let tai_2359_58 = (midnight - 2 + 37) * NS;
+        assert_eq!(tai_to_utc_ns(tai_2359_58, extra), (midnight - 2) * NS);
+        assert_eq!(tai_to_utc_ns(tai_2359_58 + NS, extra), midnight * NS);
+        assert_eq!(
+            tai_to_utc_ns(tai_2359_58 + 2 * NS, extra),
+            (midnight + 1) * NS
+        );
+        for utc_s in [midnight - 2, midnight, midnight + 1] {
+            let utc = utc_s * NS + NS / 3;
+            assert_eq!(tai_to_utc_ns(utc_to_tai_ns(utc, extra), extra), utc);
+        }
+        assert_eq!(leap_at_end_of_day(midnight - 10, extra), -1);
     }
 
     #[test]

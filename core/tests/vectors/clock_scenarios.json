@@ -754,8 +754,8 @@
   },
   {
    "name": "leap_second_announced",
-   "description": "2026-12-31: the sources announce a leap insert that is not in the built-in table; it is accepted by majority vote.",
-   "start_utc_s": 1798747200,
+   "description": "2026-12-31 23:00 to 2027-01-01 01:00: every source announces a leap insert that is not in the built-in table and never inserts it. TAI - UTC is 37 s for good, so the vote is ignored: no leap is scheduled and TAI is not shifted past midnight.",
+   "start_utc_s": 1798758000,
    "servers": [
     {
      "pool": 0,
@@ -822,11 +822,15 @@
      "leap": 1
     }
    ],
-   "duration_s": 1800,
+   "duration_s": 7200,
    "seed": 25,
    "expect": {
     "synced": true,
-    "leap": "insert",
+    "max_final_error_ms": 5,
+    "max_late_error_ms": 5,
+    "max_error_bounds_error": true,
+    "no_step": true,
+    "leap": "normal",
     "tai_utc_s": 37
    }
   }

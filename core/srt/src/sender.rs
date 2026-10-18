@@ -45,8 +45,12 @@ const RECONNECT_DELAY: Duration = Duration::from_secs(1);
 /// With ICMP port unreachable and nothing heard for this long, the listener
 /// is gone; do not wait for the full peer idle timeout.
 const UNREACHABLE_GRACE: Duration = Duration::from_millis(1500);
-/// Payload slots between the producer and the SRT thread (1.3 MB).
-const QUEUE_SLOTS: usize = 1024;
+/// Payload slots between the producer and the SRT thread (5.4 MB). The TS
+/// muxer queues a whole video frame in one `send`, all or nothing, so this
+/// is the largest frame that can go out at all: an IDR at the 50 Mbit/s
+/// ceiling reaches 2 to 3 MB. A slot is 56 bytes; the payloads themselves
+/// are allocated only while queued (`queue::PayloadArena`).
+const QUEUE_SLOTS: usize = 4096;
 /// SRT send buffer, packets (libsrt's default SRTO_SNDBUF is 8192 packets).
 const SEND_BUFFER_PACKETS: u32 = 8192;
 /// How often the engine refreshes its statistics (send buffer, in flight);
@@ -1321,6 +1325,17 @@ mod tests {
             epoch: Instant::now(),
             abr: RefCell::new(None),
         }
+    }
+
+    #[test]
+    fn an_idr_at_the_bitrate_ceiling_fits_an_empty_queue() {
+        // 3 MB in one send (2280 payloads): more than the 1024 slots there
+        // were, which dropped such a frame every time.
+        let w = worker();
+        let frame = vec![0x47u8; 3_000_000];
+        let n = frame.len().div_ceil(crate::PAYLOAD_SIZE);
+        assert_eq!(w.shared.queue.push(&frame, 1, 1), Ok(n));
+        assert_eq!(w.shared.queue.clear(), n);
     }
 
     #[test]

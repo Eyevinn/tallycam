@@ -44,7 +44,14 @@ pub const IDENTITY: Mat3 = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
 pub const MIN_TEMPERATURE_K: f64 = 2000.0;
 pub const MAX_TEMPERATURE_K: f64 = 10000.0;
 /// The tint range the functions clamp to (Adobe tint units, as AVFoundation).
+/// Green tints at low temperatures are clamped further, see [`max_tint`].
 pub const MAX_TINT: f64 = 150.0;
+/// The largest x + y (CIE 1931) of an illuminant the functions take. Near
+/// the yellow edge of the chromaticity diagram (x + y = 1: no blue) the DNG
+/// SDK pins the illuminant's XYZ, so the gains no longer depend on the tint
+/// and the inverse gives back a different one (2000 K +33 came back as
+/// 2004 K +32, 2000 K +150 as 2403 K +53). 0.98 keeps a margin.
+pub const MAX_X_PLUS_Y: f64 = 0.98;
 
 /// One reference illuminant of a camera's colour calibration, as Camera2's
 /// `CameraCharacteristics` gives it (DNG tags in brackets).
@@ -173,7 +180,7 @@ pub fn illuminant_temperature_k(light_source: u32) -> Option<f64> {
 }
 
 /// The camera gains for an illuminant of `temperature_k` and `tint`
-/// (clamped to 2000-10000 K and ±150): a neutral under it comes out
+/// (clamped to 2000-10000 K and -150 to [`max_tint`]): a neutral under it comes out
 /// neutral. None for a NaN input or an unusable calibration.
 pub fn gains_for(temperature_k: f64, tint: f64, cal: &Calibration) -> Option<Gains> {
     let (_, _, _, white) = prepare(temperature_k, tint, cal)?;
@@ -182,9 +189,9 @@ pub fn gains_for(temperature_k: f64, tint: f64, cal: &Calibration) -> Option<Gai
 
 /// The matching `COLOR_CORRECTION_TRANSFORM` (see [`WhiteBalance`]). Without
 /// forward matrices, None also where the colour matrix cannot be inverted or
-/// the illuminant has (almost) no blue: a green tint at a low temperature
-/// (2000 K from +30, 3000 K from +90) reaches the yellow edge of the
-/// chromaticity diagram, x + y = 1. The gains are still there.
+/// the illuminant has too little blue for the Bradford adaptation: near the
+/// green tint clamp at low temperatures ([`max_tint`]; with the test
+/// calibration from x + y 0.977, 3000 K from +83). The gains are still there.
 pub fn color_transform_for(temperature_k: f64, tint: f64, cal: &Calibration) -> Option<Mat3> {
     let (spec, xy, m, white) = prepare(temperature_k, tint, cal)?;
     spec.camera_to_srgb(&m, xy, white)
@@ -237,7 +244,7 @@ fn gains_of(white: [f64; 3]) -> Gains {
 
 /// The illuminant (temperature K, tint) that the gains neutralise, e.g. the
 /// `COLOR_CORRECTION_GAINS` of an auto white balance capture result; the
-/// inverse of [`gains_for`]. Clamped to 2000-10000 K and ±150. None for
+/// inverse of [`gains_for`]. Clamped as [`gains_for`] clamps. None for
 /// non-positive or non-finite gains or an unusable calibration.
 pub fn temperature_tint_for(gains: Gains, cal: &Calibration) -> Option<(f64, f64)> {
     let g = (gains.gr + gains.gb) * 0.5;
@@ -256,10 +263,27 @@ pub fn temperature_tint_for(gains: Gains, cal: &Calibration) -> Option<(f64, f64
 }
 
 fn clamp(temperature_k: f64, tint: f64) -> (f64, f64) {
-    (
-        temperature_k.clamp(MIN_TEMPERATURE_K, MAX_TEMPERATURE_K),
-        tint.clamp(-MAX_TINT, MAX_TINT),
-    )
+    let k = temperature_k.clamp(MIN_TEMPERATURE_K, MAX_TEMPERATURE_K);
+    (k, tint.clamp(-MAX_TINT, max_tint(k)))
+}
+
+/// The greenest tint the functions take at `temperature_k` (2000-10000 K):
+/// [`MAX_TINT`], or less where the illuminant would reach
+/// [`MAX_X_PLUS_Y`] (+21 at 2000 K, +49 at 2500 K, +82 at 3000 K, +118 at
+/// 3500 K; from about 3900 K the full +150).
+pub fn max_tint(temperature_k: f64) -> f64 {
+    // Along the isotherm u and v move linearly with the offset, and
+    // x + y = (1.5u + v) / (u - 4v + 2) = L is linear in them too.
+    let (u, v, du, dv) = isotherm(temperature_k);
+    let l = MAX_X_PLUS_Y;
+    let slope = 1.5 * du + dv - l * (du - 4.0 * dv);
+    let offset = (l * (u - 4.0 * v + 2.0) - 1.5 * u - v) / slope;
+    let tint = offset * TINT_SCALE;
+    if tint.is_finite() && tint > 0.0 {
+        tint.min(MAX_TINT)
+    } else {
+        MAX_TINT
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -309,8 +333,18 @@ const TABLE: [(f64, f64, f64, f64); 31] = [
 /// CIE 1931 xy of an illuminant of `temperature_k` (> 0; the table covers
 /// 1667 K and up) and `tint` (`dng_temperature::Get_xy_coord`).
 pub fn xy_for_temperature_tint(temperature_k: f64, tint: f64) -> [f64; 2] {
-    let r = 1.0e6 / temperature_k;
+    let (u, v, du, dv) = isotherm(temperature_k);
     let offset = tint / TINT_SCALE;
+    let u = u + du * offset;
+    let v = v + dv * offset;
+    let d = u - 4.0 * v + 2.0;
+    [1.5 * u / d, v / d]
+}
+
+/// The Planckian locus at `temperature_k` in CIE 1960 uv and the unit
+/// direction of its isotherm, interpolated from [`TABLE`].
+fn isotherm(temperature_k: f64) -> (f64, f64, f64, f64) {
+    let r = 1.0e6 / temperature_k;
     let mut i = 0;
     while i < 29 && r >= TABLE[i + 1].0 {
         i += 1;
@@ -318,17 +352,14 @@ pub fn xy_for_temperature_tint(temperature_k: f64, tint: f64) -> [f64; 2] {
     let (r0, u0, v0, t0) = TABLE[i];
     let (r1, u1, v1, t1) = TABLE[i + 1];
     let f = (r1 - r) / (r1 - r0);
-    let mut u = u0 * f + u1 * (1.0 - f);
-    let mut v = v0 * f + v1 * (1.0 - f);
+    let u = u0 * f + u1 * (1.0 - f);
+    let v = v0 * f + v1 * (1.0 - f);
     let len0 = (1.0 + t0 * t0).sqrt();
     let len1 = (1.0 + t1 * t1).sqrt();
     let du = f / len0 + (1.0 - f) / len1;
     let dv = t0 / len0 * f + t1 / len1 * (1.0 - f);
     let len = (du * du + dv * dv).sqrt();
-    u += du / len * offset;
-    v += dv / len * offset;
-    let d = u - 4.0 * v + 2.0;
-    [1.5 * u / d, v / d]
+    (u, v, du / len, dv / len)
 }
 
 /// Temperature (K) and tint of a CIE 1931 xy (`dng_temperature::Set_xy_coord`).
@@ -790,6 +821,49 @@ mod tests {
     }
 
     #[test]
+    fn gains_round_trip_over_the_whole_range() {
+        // Every temperature and tint the apps can set, green tints at the
+        // per-temperature clamp included, comes back as it went in (after
+        // the clamp).
+        for cal in sets() {
+            let mut k = MIN_TEMPERATURE_K;
+            while k <= MAX_TEMPERATURE_K {
+                let mut tints = [-150.0, -100.0, -50.0, 0.0, 50.0, 100.0, 150.0, max_tint(k)];
+                tints.sort_by(f64::total_cmp);
+                for tint in tints {
+                    let (k0, t0) = clamp(k, tint);
+                    let g = gains_for(k, tint, &cal).unwrap();
+                    let (k2, t2) = temperature_tint_for(g, &cal).unwrap();
+                    assert!((k2 - k0).abs() / k0 < 0.002, "{k} {tint}: {k2}");
+                    assert!((t2 - t0).abs() < 0.5, "{k} {tint}: {t2}");
+                }
+                k += 100.0;
+            }
+        }
+    }
+
+    #[test]
+    fn green_tints_are_clamped_off_the_yellow_edge() {
+        let mut k = MIN_TEMPERATURE_K;
+        while k <= MAX_TEMPERATURE_K {
+            let t = max_tint(k);
+            assert!(t > 0.0 && t <= MAX_TINT, "{k}: {t}");
+            let [x, y] = xy_for_temperature_tint(k, clamp(k, 400.0).1);
+            assert!(x + y <= MAX_X_PLUS_Y + 1e-9, "{k}: x + y {}", x + y);
+            k += 50.0;
+        }
+        assert!((max_tint(2000.0) - 21.5).abs() < 0.5);
+        assert_eq!(max_tint(5000.0), MAX_TINT);
+        let cal = pixel_7_pro();
+        assert_eq!(
+            gains_for(2000.0, 150.0, &cal),
+            gains_for(2000.0, max_tint(2000.0), &cal)
+        );
+        // Magenta is not limited.
+        assert_eq!(clamp(2000.0, -150.0), (2000.0, -150.0));
+    }
+
+    #[test]
     fn gains_are_at_least_one() {
         for cal in sets() {
             for k in [2000.0, 3000.0, 5000.0, 8000.0, 10000.0] {
@@ -872,9 +946,9 @@ mod tests {
         }
         // Over the whole range: with forward matrices always a
         // neutral-keeping transform. Without, none only where a green tint
-        // at a low temperature puts the illuminant on or past the yellow
-        // edge of the chromaticity diagram (x + y about 1: no blue, a
-        // negative Bradford cone); the gains are still there.
+        // at a low temperature puts the illuminant near the yellow edge of
+        // the chromaticity diagram (x + y about 1: no blue, a negative
+        // Bradford cone); the gains are still there.
         for cal in sets() {
             let mut k = 2000.0;
             while k <= 10000.0 {
@@ -887,8 +961,9 @@ mod tests {
                         }
                         None => {
                             assert!(cal.reference1.forward_matrix.is_none());
-                            let [x, y] = xy_for_temperature_tint(k, tint);
-                            assert!(x + y > 0.98, "{k} {tint}");
+                            let (k0, t0) = clamp(k, tint);
+                            let [x, y] = xy_for_temperature_tint(k0, t0);
+                            assert!(x + y > 0.975, "{k} {tint}");
                             assert!(gains_for(k, tint, &cal).is_some());
                         }
                     }

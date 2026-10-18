@@ -154,7 +154,8 @@ pub struct AutoIsoInput {
     pub iso: f64,
     pub exposure_ns: f64,
     /// The active format's limits; `max_exposure_ns` from
-    /// [`longest_exposure_ns`].
+    /// [`longest_exposure_ns`]. A sample with `max_exposure_ns` <= 0 is
+    /// ignored.
     pub min_iso: f64,
     pub max_iso: f64,
     pub min_exposure_ns: f64,
@@ -282,13 +283,16 @@ impl AutoIso {
     }
 
     /// Starts over (auto ISO turned on, or the device changed). Keeps the
-    /// learned gain and the bias.
+    /// learned gain, the bias and a held mains shutter: auto ISO turned off
+    /// and on again (iOS's torch probe) can find the shutter still shortened
+    /// to 1/100, and the loop must still go back to 1/50 when the light
+    /// drops. A held shutter that no longer applies is dropped where it is
+    /// used (see `mains_duration`).
     pub fn reset(&mut self) {
         self.phase = Phase::Idle;
         self.len = 0;
         self.head = 0;
         self.window_start = i64::MIN;
-        self.mains_held_ns = None;
         self.status.limit = AutoIsoLimit::None;
         self.status.settling = false;
     }
@@ -301,6 +305,7 @@ impl AutoIso {
             && s.exposure_ns > 0.0
             && s.min_iso > 0.0
             && s.max_iso >= s.min_iso
+            && s.max_exposure_ns > 0.0
             && s.max_exposure_ns >= s.min_exposure_ns;
         if !valid {
             return None;
@@ -483,7 +488,9 @@ impl AutoIso {
         let current = self.duration(s);
         // A held shutter longer than the frame now allows (a higher frame
         // rate, genlock's room) becomes the longest flicker-free one that
-        // fits: commanded as it is, it would stretch the frame.
+        // fits: commanded as it is, it would stretch the frame. One no
+        // longer than the current shutter is stale (the device's exposure
+        // was set again since): the current one is held instead.
         let held = match self.mains_held_ns {
             Some(h) if h > s.max_exposure_ns * (1.0 + 1e-6) => flicker_free_exposure_ns(
                 s.max_exposure_ns,
@@ -492,8 +499,8 @@ impl AutoIso {
                 s.max_exposure_ns,
             )
             .unwrap_or(current),
-            Some(h) => h,
-            None => current,
+            Some(h) if h > current => h,
+            _ => current,
         };
         let shorter = if self.cfg.mains_hz > 0 && product / held < s.min_iso {
             let pulse = 1e9 / (2.0 * f64::from(self.cfg.mains_hz));
@@ -874,6 +881,118 @@ mod tests {
         assert_eq!(cam.exposure_ns, 10_000_000.0);
         assert_eq!(cam.iso, 34.0);
         assert_eq!(ai.status().limit, AutoIsoLimit::TooBright);
+    }
+
+    /// Held at 1/50 and shortened to 1/100 by `scene` EV of light from 2 s.
+    fn shortened_from_one_fiftieth(scene: f64) -> (Camera, AutoIso) {
+        let mut cam = Camera::new(3.0, 30, 50.0);
+        cam.exposure_ns = 20_000_000.0;
+        cam.iso = 224.0;
+        cam.scene = Box::new(move |t| if t < 2000 * MS { 0.0 } else { scene });
+        let mut ai = AutoIso::new(AutoIsoConfig::default());
+        run(&mut cam, &mut ai, 11_500, |_, _| {});
+        assert_eq!(cam.exposure_ns, 10_000_000.0);
+        (cam, ai)
+    }
+
+    #[test]
+    fn a_reset_keeps_the_held_mains_shutter() {
+        // iOS's torch probe turns auto ISO off and on (a reset) while the
+        // shutter is shortened; when the light drops it must be 1/50 at
+        // about ISO 224 again, not 1/100 at twice the ISO.
+        let (mut cam, mut ai) = shortened_from_one_fiftieth(3.2);
+        ai.reset();
+        cam.scene = Box::new(|_| 0.0);
+        run(&mut cam, &mut ai, 10_000, |_, _| {});
+        assert_eq!(cam.exposure_ns, 20_000_000.0);
+        assert!((cam.iso / 224.0 - 1.0).abs() < 0.15, "ISO {}", cam.iso);
+    }
+
+    #[test]
+    fn a_stale_held_shutter_gives_way_to_a_longer_current_one() {
+        // Held at 1/50 from before, but the device was set to 3/100 since.
+        let (mut cam, mut ai) = shortened_from_one_fiftieth(3.2);
+        ai.reset();
+        cam.exposure_ns = 30_000_000.0;
+        cam.iso = 448.0 / 3.0;
+        cam.scene = Box::new(|_| -1.0);
+        run(&mut cam, &mut ai, 10_000, |_, _| {});
+        assert_eq!(cam.exposure_ns, 30_000_000.0);
+        assert!(cam.picture_ev().abs() < 0.3, "{}", cam.picture_ev());
+    }
+
+    #[test]
+    fn a_new_mains_frequency_drops_the_held_shutter() {
+        // Shortened at 50 Hz, then the production goes to 60 Hz: 1/50 is not
+        // flicker-free there, so when the light drops the shutter must stay
+        // a whole number of 1/120 s pulses from the first command on.
+        let (mut cam, mut ai) = shortened_from_one_fiftieth(3.2);
+        ai.set_mains_hz(60);
+        cam.scene = Box::new(|_| 0.0);
+        let pulse = 1e9 / 120.0;
+        run(&mut cam, &mut ai, 10_000, |cam, _| {
+            let pulses = cam.exposure_ns / pulse;
+            assert!(
+                cam.exposure_ns == 10_000_000.0 || (pulses - pulses.round()).abs() < 1e-3,
+                "{} ms flickers at 60 Hz",
+                cam.exposure_ns / 1e6
+            );
+        });
+    }
+
+    #[test]
+    fn a_shortened_mains_shutter_never_leaves_the_iso_below_its_minimum() {
+        // 2.9 EV brighter at 1/50 needs 17.7 ms at ISO 34: 1/100 at a higher
+        // ISO, not 1/50 (the nearer whole number of pulses) clipped at ISO 34.
+        let (cam, ai) = shortened_from_one_fiftieth(2.9);
+        assert!(cam.iso > 34.0 * 1.5, "ISO {}", cam.iso);
+        assert!(
+            cam.picture_ev().abs() < 0.2,
+            "picture {} EV off",
+            cam.picture_ev()
+        );
+        assert_eq!(ai.status().limit, AutoIsoLimit::None);
+    }
+
+    #[test]
+    fn no_shutter_longer_than_the_frame_when_no_pulse_fits() {
+        // 120 fps at 50 Hz: no flicker-free shutter fits the frame, so the
+        // shutter stays and too much light is too bright, never 1/100.
+        let mut cam = Camera::new(3.0, 30, 50.0);
+        cam.max_exposure_ns = 8_200_000.0;
+        cam.exposure_ns = 8_000_000.0;
+        cam.iso = 560.0;
+        cam.scene = Box::new(|t| if t < 2000 * MS { 0.0 } else { 6.0 });
+        let mut ai = AutoIso::new(AutoIsoConfig::default());
+        run(&mut cam, &mut ai, 11_500, |cam, _| {
+            assert!(
+                cam.exposure_ns <= cam.max_exposure_ns,
+                "{} ms exposure in an 8.2 ms frame",
+                cam.exposure_ns / 1e6
+            );
+        });
+        assert_eq!(cam.exposure_ns, 8_000_000.0);
+        assert_eq!(ai.status().limit, AutoIsoLimit::TooBright);
+    }
+
+    #[test]
+    fn rejects_a_zero_longest_exposure() {
+        let mut ai = AutoIso::new(AutoIsoConfig::default());
+        for (min, max) in [(0.0, 0.0), (-1.0, 0.0), (0.0, -5.0)] {
+            for t in 0..40 {
+                let input = AutoIsoInput {
+                    t_ns: t * 125 * MS,
+                    offset_ev: 4.0,
+                    iso: 448.0,
+                    exposure_ns: 4_000_000.0,
+                    min_iso: 34.0,
+                    max_iso: 3264.0,
+                    min_exposure_ns: min,
+                    max_exposure_ns: max,
+                };
+                assert_eq!(ai.on_sample(&input), None, "min {min} max {max}");
+            }
+        }
     }
 
     #[test]

@@ -113,7 +113,8 @@ impl SpscQueue {
 
     /// Splits `data` into payloads of up to [`PAYLOAD_SIZE`] bytes and queues
     /// them all, or none. With `frame_capture_ns` != 0 the first and last
-    /// payload carry the frame marks. Returns the number of payloads.
+    /// payload carry the frame marks. Returns the number of payloads. A
+    /// buffer of more payloads than the queue has slots never fits.
     pub fn push(
         &self,
         data: &[u8],

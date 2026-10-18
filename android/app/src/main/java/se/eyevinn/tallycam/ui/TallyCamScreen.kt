@@ -365,6 +365,7 @@ private fun MessageSlot(banner: String?, toast: String?) {
     Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(Chrome.rowGap)) {
         banner?.let {
             Text(it, color = Color.Black, fontSize = 20.sp, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center,
+                 maxLines = 3, overflow = TextOverflow.Ellipsis,
                  modifier = Modifier.background(Chrome.yellow, RoundedCornerShape(10.dp))
                      .padding(horizontal = 18.dp, vertical = 10.dp))
         }
@@ -800,6 +801,10 @@ private fun JoinDialog(link: ProvisioningLink, live: Boolean, onJoin: (Provision
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text("Control hub: $hub")
                 Text(link.srtUrl?.let { "Stream to: ${hostLabel(it) ?: it}" } ?: "Stream: unchanged")
+                // ws:// carries the control in the clear: anyone on the path could steer the camera.
+                if (link.controlUrl.startsWith("ws://")) {
+                    Text("Not encrypted (ws://): use it only on a network you trust", color = Chrome.orange, fontSize = 13.sp)
+                }
                 if (live && link.srtUrl != null) {
                     Text("The stream URL applies on the next Go Live", color = Color.White.copy(alpha = 0.7f), fontSize = 13.sp)
                 }

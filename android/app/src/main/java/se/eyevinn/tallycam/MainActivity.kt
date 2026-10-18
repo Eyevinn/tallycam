@@ -109,12 +109,32 @@ class MainActivity : ComponentActivity() {
      */
     private fun offer(link: ProvisioningLink) {
         val model = model ?: return
-        if (server(link.controlUrl) == server(model.settings.controlUrl)) {
+        // A link already waiting keeps its dialog: another cannot swap in behind it.
+        if (pendingLink != null) return
+        if (sameHub(link, model.settings.controlUrl, model.settings.srtUrl)) {
             model.provision(link)
         } else {
             pendingLink = link
         }
     }
+
+    /**
+     * Applies without asking only for the hub in use (security review): the
+     * same scheme, host, port and path as the current control URL (its token
+     * may differ), and no stream URL or one to the same SRT host and port.
+     * Anything else (another path on the host, ws:// for wss://, a new SRT
+     * destination, no hub set) asks first.
+     */
+    private fun sameHub(link: ProvisioningLink, controlUrl: String, srtUrl: String): Boolean {
+        val now = parse(controlUrl) ?: return false
+        val next = parse(link.controlUrl) ?: return false
+        if (now.scheme != next.scheme || now.host != next.host || now.port != next.port || (now.path ?: "") != (next.path ?: "")) return false
+        val srt = link.srtUrl ?: return true
+        return server(srt) != null && server(srt) == server(srtUrl)
+    }
+
+    private fun parse(url: String): android.net.Uri? =
+        runCatching { android.net.Uri.parse(url.trim()) }.getOrNull()?.takeIf { !it.host.isNullOrEmpty() }
 
     /** "host:port" of a URL, for "the same hub"; null when it has no host (none set). */
     private fun server(url: String): String? =

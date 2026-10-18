@@ -270,8 +270,17 @@ the lens buttons, which follow the active lens.
   none is set, asks first: "Join <hub host>?", with "Control hub:
   <host[:port]>" and "Stream to: <SRT host[:port]>" ("Stream: unchanged" when
   the link has none; while live, "The stream URL applies on the next Go
-  Live"), and Join / Cancel. A link for the hub already in use applies
-  without asking. A restored or recreated screen never asks again.
+  Live"; for `ws://`, "Not encrypted (ws://): use it only on a network you
+  trust" in orange), and Join / Cancel. Only a link for the hub already in
+  use applies without asking: the same scheme, host, port and path as the
+  current control URL (the token may differ), and no stream URL or one to
+  the same SRT host and port. Anything else asks, so a stray link cannot
+  move the camera to another hub, downgrade it to `ws://` or send its stream
+  elsewhere. While a dialog is up, another link is ignored. A restored or
+  recreated screen never asks again.
+- **Hub changes.** When the hub sets a stream URL to another host, the
+  banner says "The control hub sends the stream to <host>". A hub's message
+  shows only once it is admitted, at most 200 characters on three lines.
 - **Live.** Settings that cannot change mid-stream (resolution, frame rate,
   video and audio codec, mains) are disabled with a note; the values row and
   the rockers work as always.

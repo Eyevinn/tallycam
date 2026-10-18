@@ -34,6 +34,8 @@ class StreamService : Service() {
             .setSmallIcon(android.R.drawable.presence_video_online)
             .setContentIntent(open)
             .setOngoing(true)
+            // Shown at once, not after Android's grace period: the camera is live.
+            .apply { if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE) }
             .build()
         // Android 14+ refuses a type whose permission is missing: the
         // microphone only when RECORD_AUDIO is granted.

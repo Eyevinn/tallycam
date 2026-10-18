@@ -307,7 +307,7 @@ class AppModel(private val context: Context) : LcpClient.Listener, LiveStream.Li
         return try {
             // The foreground first: from the background Android 12+ refuses
             // it, and then nothing else has started.
-            StreamService.start(context, "Live as $displayName", microphone = mic)
+            StreamService.start(context, "Live as $displayName: camera" + if (mic) " and microphone" else "", microphone = mic)
             val surface = stream.start(ProvisioningLink.resolveSrtUrl(url, id), camera.streamSize.width,
                                        camera.streamSize.height, camera.settings.frameRate, kbps,
                                        camera.timestampOffsetNs(), withAudio = mic,
@@ -405,7 +405,8 @@ class AppModel(private val context: Context) : LcpClient.Listener, LiveStream.Li
                 return
             }
             "message" -> {
-                showBanner(message.optString("text"))
+                // Only from an admitted hub, and bounded (security review).
+                if (admitted) showBanner(message.optString("text").take(MESSAGE_MAX))
                 return
             }
         }
@@ -479,7 +480,8 @@ class AppModel(private val context: Context) : LcpClient.Listener, LiveStream.Li
         val v = cameraControls.values()
         v.put("camera_name", displayName)
             .put("live", streamState != LiveStream.State.IDLE)
-            .put("stream_url", settings.srtUrl)
+            // Without the passphrase: the hub gets "***" and sends it back unchanged.
+            .put("stream_url", SrtUrl.redacted(settings.srtUrl))
             .put("srt_latency_ms", SrtUrl.latency(settings.srtUrl) ?: SrtUrl.DEFAULT_LATENCY_MS)
             .put("bitrate_kbps", settings.bitrateKbps.takeIf { it > 0 } ?: DEFAULT_KBPS)
             .put("adaptive_bitrate", settings.adaptiveBitrate)
@@ -543,8 +545,13 @@ class AppModel(private val context: Context) : LcpClient.Listener, LiveStream.Li
         val errors = mutableListOf<String>()
         val applied = mutableListOf<String>()
         for (key in ordered(values)) {
+            val streamHost = streamHost()
             val error = applyValue(key, values.get(key))
             if (error == null) applied += key else errors += "$key: $error"
+            // The hub may redirect the stream: say so on the phone (security review).
+            if (key == "stream_url" && error == null && streamHost() != streamHost) {
+                showBanner("The control hub sends the stream to ${streamHost() ?: "another address"}")
+            }
         }
         // The operator's screen flashes what the hub changed.
         shading.markHubChange(applied)
@@ -579,7 +586,7 @@ class AppModel(private val context: Context) : LcpClient.Listener, LiveStream.Li
         "stream_url" -> when {
             value !is String || !value.startsWith("srt://") -> "expected an srt:// URL"
             else -> {
-                settings.srtUrl = value
+                settings.srtUrl = withPassphraseKept(value)
                 if (streamState == LiveStream.State.IDLE) null else "applies the next time the stream starts"
             }
         }
@@ -814,6 +821,18 @@ class AppModel(private val context: Context) : LcpClient.Listener, LiveStream.Li
         return (c.logLines(emptyList(), lines.toUInt()) + listOf("", c.reportsText())).joinToString("\n")
     }
 
+    /** The SRT destination's host:port, for telling the operator when the hub moves it. */
+    private fun streamHost(): String? = runCatching { android.net.Uri.parse(settings.srtUrl) }.getOrNull()
+        ?.takeIf { !it.host.isNullOrEmpty() }?.let { if (it.port > 0) "${it.host}:${it.port}" else it.host }
+
+    /** A stream URL whose passphrase came back redacted ("***") keeps the passphrase it had. */
+    private fun withPassphraseKept(url: String): String {
+        if (!url.contains(Regex("(?i)passphrase=\\*\\*\\*"))) return url
+        val kept = Regex("(?i)passphrase=([^&]*)").find(settings.srtUrl)?.groupValues?.get(1)
+        return if (kept != null) url.replace(Regex("(?i)passphrase=\\*\\*\\*"), "passphrase=" + Regex.escapeReplacement(kept))
+               else url.replace(Regex("(?i)[?&]passphrase=\\*\\*\\*"), "")
+    }
+
     /** The video codecs this phone encodes (H.264, and HEVC where it has an encoder). */
     val videoCodecs: List<Pair<String, String>> by lazy {
         buildList {
@@ -890,6 +909,8 @@ class AppModel(private val context: Context) : LcpClient.Listener, LiveStream.Li
     companion object {
         private const val TAG = "TallyCam"
         const val DEFAULT_KBPS = 6000
+        /** A hub message shown on the phone: at most this many characters. */
+        const val MESSAGE_MAX = 200
         /** The `bitrate_kbps` control's range: the descriptor, the clamp and Settings' stepper. */
         val BITRATE_KBPS = 500..20000
         private val MODE_FIRST = listOf("lens", "resolution", "frame_rate", "exposure_mode", "wb_mode", "focus_mode", "genlock")

@@ -268,8 +268,6 @@ class CameraCapture(context: Context) {
     private var wbCount = 0
     private var wbKey: Triple<DoubleArray, Double, Double>? = null
 
-    /** Whether the last request set the manual gains (else manual fell back to AWB lock). */
-    @Volatile private var manualGainsApplied = false
 
     // MARK: Capabilities of the active camera
 
@@ -534,7 +532,10 @@ class CameraCapture(context: Context) {
      */
     fun reportedWhiteBalance(): Pair<Double, Double>? {
         val s = settings
-        if (s.whiteBalanceMode == WhiteBalanceMode.MANUAL && manualGainsApplied) {
+        // Decided from the settings, not from the last request: state goes
+        // out right after a set, before the camera thread builds the next
+        // request.
+        if (s.whiteBalanceMode == WhiteBalanceMode.MANUAL && takesManualGains(s)) {
             return ColorCalibration.roundedKelvin(s.wbTemperatureK) to ColorCalibration.roundedTint(s.wbTint)
         }
         return measuredWhiteBalance
@@ -793,7 +794,6 @@ class CameraCapture(context: Context) {
         // White balance: manual is the core's gains for K and tint where the
         // camera takes them, else the AWB lock.
         val manualGains = s.whiteBalanceMode == WhiteBalanceMode.MANUAL && setManualWhiteBalance(s)
-        manualGainsApplied = manualGains
         if (!manualGains) {
             set(CaptureRequest.CONTROL_AWB_MODE, CameraMetadata.CONTROL_AWB_MODE_AUTO)
             set(CaptureRequest.CONTROL_AWB_LOCK, s.whiteBalanceMode == WhiteBalanceMode.MANUAL)
@@ -813,6 +813,17 @@ class CameraCapture(context: Context) {
         if (hasTorch) {
             set(CaptureRequest.FLASH_MODE, if (s.torch) CameraMetadata.FLASH_MODE_TORCH else CameraMetadata.FLASH_MODE_OFF)
         }
+    }
+
+    /**
+     * Would [setManualWhiteBalance] set gains for `s` (rather than lock the
+     * AWB)? Any thread.
+     */
+    private fun takesManualGains(s: Settings): Boolean {
+        if (!hasManualWhiteBalance) return false
+        val cal = colorCalibration ?: return false
+        val count = Hot.whiteBalanceFor(cal, s.wbTemperatureK, s.wbTint, DoubleArray(13))
+        return count == 13 || (count >= 4 && autoTransform != null)
     }
 
     /**

@@ -8,12 +8,13 @@ Background: [CAMERA_READOUTS](CAMERA_READOUTS.md).
 
 - **Information in the middle, controls at the sides.** The top centre shows
   state and values; the thumbs reach the controls on the left and right edges.
-- **The value is the control.** Tap a value to adjust it, as on cinema camera
-  apps. No separate mode chips.
-- **One control per thumb.** Zoom on the left edge, the adjustment on the
-  right edge, both the same vertical rocker, both always there. Selecting a
-  value (a reach to the top) is rare; adjusting it (a thumb on the rocker) is
-  what happens during a shot.
+- **Everything a shot needs is under a thumb.** Zoom and lenses on the left
+  edge; the adjustment, what it adjusts and its mode on the right edge. The
+  same vertical rocker on both, always there, with its buttons beside it on
+  the inner side, so neither hand has to change its grip.
+- **The value is also a way in.** Tapping a value in the values row selects
+  its group too, as on cinema camera apps; it is a shortcut, not the only
+  way.
 - **Chrome over the black bars.** A 16:9 picture leaves bars at the sides of a
   wide phone in landscape and at the top and bottom of an iPad; the edge
   zones and the rows sit there, so the picture stays clear.
@@ -59,11 +60,12 @@ bottom row above it.
 3. **Message slot.** Centred under the values row: operator messages (yellow
    banner, 8 s) and toasts (stream errors and hints, 4 s). Nothing else goes
    there and nothing else shows messages.
-4. **Left edge.** Lens buttons (longest on top) above the zoom rocker,
-   vertically centred.
-5. **Right edge.** The adjust control, always: mode switch above the rocker,
-   the value label below. It adjusts the selected group, exposure until
-   another is chosen; the choice is remembered.
+4. **Left edge.** The zoom rocker at the edge, the lens buttons (longest on
+   top) beside it on the inner side, vertically centred.
+5. **Right edge.** The adjust control, always: the rocker at the edge, the
+   group selector and the mode switch beside it on the inner side, the value
+   label below. It adjusts the selected group, exposure until another is
+   chosen; the choice is remembered.
 6. **Bottom row.** Left: aids menu, QR scan (only while no hub is connected and
    not live), screen lock. Right: microphone meter, then (landscape) the live
    button in the bottom-right corner, at a fixed place that never moves. The
@@ -91,17 +93,16 @@ drops focus first, then white balance; it never wraps.
 ## Adjust control
 
 ```
- EXP        which group the control adjusts (EXP, WB, FOCUS)
- ┌─┐
- │A│        mode switch: two segments, tap the other one to switch;
- │M│        the active one is filled (white auto, yellow held)
- └─┘
- ┌─┐
- │+│        rocker: push up for more, down for less
- │●│        speed rises with the square of the deflection
- │−│        release: stops and springs back; tap an end: one step
- └─┘        double tap the knob: back to the neutral value
- +0.3 EV    what the rocker changes, and its value
+            ┌─┐
+ [EXP]      │+│   group selector: EXP / WB / FOC, the selected one filled
+ [WB ]      │ │
+ [FOC]      │●│   rocker: push up for more, down for less;
+            │ │   speed rises with the square of the deflection;
+ [ A ]      │ │   release: stops and springs back; tap an end: one step;
+ [ M ]      │−│   double tap the knob: back to the neutral value
+            └─┘
+ mode switch: A / M, the active one filled (white auto, yellow held)
+       +0.3 EV    what the rocker changes, and its value
 ```
 
 - **Mode switch.** A vertical two-segment switch, `A` over `M`, 46 wide with
@@ -113,8 +114,12 @@ drops focus first, then white balance; it never wraps.
   difference does not matter to the operator; the rocker turns locked into
   manual anyway. Moving the rocker in auto switches white balance and focus to
   manual; exposure stays in auto and changes the compensation.
-- **Caption.** The group's short name above the switch (`EXP`, `WB`,
-  `FOCUS`), so the rocker's job is never a guess.
+- **Group selector.** Three segments, `EXP` / `WB` / `FOC`, beside the upper
+  half of the rocker, the same look as the mode switch; the selected group is
+  filled white, and its values are underlined in the values row. Tap one to
+  select it; a tap on a value in the values row does the same. It replaces
+  the caption: the rocker's job is never a guess. The mode switch sits beside
+  the lower half, the K/Tint switch (white balance only) under the value.
 - **Rocker.** The same component as zoom, same size, with the direction
   written at its ends. Three gestures, the same on every rocker:
   - **Drag** for a move: speed rises with the square of the deflection, about

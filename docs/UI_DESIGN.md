@@ -91,7 +91,12 @@ with the bottom row above it.
      top rows: the tools in the upper-left corner (a column in landscape, a
      row in portrait), the live button in the upper-right corner at a fixed
      place with the microphone meter beside it on the inner side. The middle
-     of the screen stays clear.
+     of the screen stays clear. In portrait the side controls are too wide
+     side by side with their value beside them, so the value and K / Tint sit
+     above each block. The landscape tools column uses 6 pt gaps so it and
+     the side control fit one above the other.
+   - **Screen lock on a phone:** the slide to unlock sits at the bottom edge
+     between the side controls in landscape, just above them in portrait.
 
    The live button is dark at standby, orange connecting, red live; a tap starts,
    a hold stops (with a filling ring and a "Hold to stop" hint), with a

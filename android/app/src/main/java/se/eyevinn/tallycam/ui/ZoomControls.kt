@@ -155,8 +155,8 @@ fun lensFactor(model: AppModel, lens: se.eyevinn.tallycam.media.CameraCapture.Le
 fun lensLabel(model: AppModel, lens: se.eyevinn.tallycam.media.CameraCapture.Lens): String {
     val f = lensFactor(model, lens)
     return when {
-        f < 0.95 -> "%.1f×".format(f)
+        f < 0.95 -> fmt("%.1f×", f)
         kotlin.math.abs(f - Math.round(f)) < 0.15 -> "${Math.round(f)}×"
-        else -> "%.1f×".format(f)
+        else -> fmt("%.1f×", f)
     }
 }

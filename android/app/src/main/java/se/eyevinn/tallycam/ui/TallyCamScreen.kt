@@ -132,27 +132,20 @@ private fun BoxScope.ShootingScreen(model: AppModel, onScan: () -> Unit) {
     // zoom on the left and exposure on the right until changed, each side
     // remembered across launches.
     val prefs = remember { context.getSharedPreferences("chrome", android.content.Context.MODE_PRIVATE) }
-    var leftChoice by remember { mutableStateOf(prefs.getString("left", null) ?: "zoom") }
-    var rightChoice by remember { mutableStateOf(prefs.getString("right", null) ?: "exposure") }
+    var sides by remember {
+        mutableStateOf(Sides(prefs.getString("left", null) ?: Sides.DEFAULT.left,
+                             prefs.getString("right", null) ?: Sides.DEFAULT.right))
+    }
     // The groups this camera has, in the selector's order.
     val groups = SIDE_GROUPS.filter {
         if (it == "zoom") model.camera.zoomRange != null || model.camera.lenses.size > 1 else modeKey(it) in model.shading.descriptors
     }
-    // The choice where the camera has it, else the first it has that the other side does not run.
-    val right = rightChoice.takeIf { it in groups } ?: groups.firstOrNull { it != leftChoice }
-    val left = leftChoice.takeIf { it in groups && it != right } ?: groups.firstOrNull { it != right }
-    fun place(leftGroup: String?, rightGroup: String?) {
-        leftGroup?.let { leftChoice = it }
-        rightGroup?.let { rightChoice = it }
-        prefs.edit().putString("left", leftChoice).putString("right", rightChoice).apply()
-    }
-    /** A selector tap on one side: the other side's group swaps over. */
-    fun choose(leftSide: Boolean, group: String) {
-        if (leftSide) place(group, if (group == right) left else null) else place(if (group == left) right else null, group)
-    }
-    /** A tap in the values row: the group goes to the right unless a side runs it already. */
-    fun chooseFromValues(group: String) {
-        if (group != left && group != right) place(null, group)
+    val shown = sides.resolved(groups)
+    val left = shown.left
+    val right = shown.right
+    fun place(next: Sides) {
+        sides = next
+        prefs.edit().putString("left", next.left).putString("right", next.right).apply()
     }
     var toast by remember { mutableStateOf<String?>(null) }
     var toastSerial by remember { mutableIntStateOf(0) }
@@ -213,16 +206,18 @@ private fun BoxScope.ShootingScreen(model: AppModel, onScan: () -> Unit) {
         val top = Chrome.rowHeight * rows + Chrome.rowGap * (rows - 1)
         // Both side controls the same size: segments 30 dp where the screen
         // allows; on a landscape phone what is left between the top rows and
-        // the bottom row, less the value label under the rocker.
+        // the bottom row, less the value and K / Tint rows under the rocker;
+        // never from the group shown.
         val lenses = model.camera.lenses.size.takeIf { it > 1 } ?: 0
         val sideHeight = if (!landscape) 400.dp
-                         else maxHeight - top - Chrome.zoneGap * 2 - Chrome.liveButton - Chrome.gap - Chrome.valueHeight
+                         else maxHeight - top - Chrome.zoneGap * 2 - Chrome.liveButton - Chrome.gap * 2 - Chrome.valueHeight -
+                             Chrome.tintHeight
         val metrics = SideMetrics.fitting(sideHeight, lenses)
         val nameChip = @Composable { TallyChip(model.tally, model.displayName) }
         val side = @Composable { leftSide: Boolean ->
             (if (leftSide) left else right)?.let { group ->
                 SideControl(model, group, groups, leading = leftSide, metrics = metrics, locked = screenLocked,
-                            onSelect = { choose(leftSide, it) }, modifier = Modifier.touchable(screenLocked))
+                            onSelect = { place(shown.choose(leftSide, it)) }, modifier = Modifier.touchable(screenLocked))
             }
         }
         val messages = @Composable { MessageSlot(model.banner, toast) }
@@ -233,7 +228,7 @@ private fun BoxScope.ShootingScreen(model: AppModel, onScan: () -> Unit) {
                    verticalArrangement = Arrangement.spacedBy(Chrome.rowGap)) {
                 StatusStrip(model, if (nameInline) nameChip else null) { showSettings = true }
                 if (!nameInline) nameChip()
-                CameraValuesRow(model, listOfNotNull(left, right), ::chooseFromValues, onFormat = { showSettings = true })
+                CameraValuesRow(model, listOfNotNull(left, right), { place(shown.fromValues(it)) }, onFormat = { showSettings = true })
             }
             if (landscape) {
                 // Left: zoom over the tools. Centre: messages, the slide to
@@ -535,15 +530,15 @@ private fun StatusStrip(model: AppModel, nameChip: (@Composable () -> Unit)?, on
     }
 }
 
-private fun uptime(seconds: Long): String {
+internal fun uptime(seconds: Long): String {
     val s = seconds.coerceAtLeast(0)
     val h = s / 3600
     val m = s / 60 % 60
-    return if (h > 0) "%d:%02d:%02d".format(h, m, s % 60) else "%02d:%02d".format(m, s % 60)
+    return if (h > 0) fmt("%d:%02d:%02d", h, m, s % 60) else fmt("%02d:%02d", m, s % 60)
 }
 
 /** "6.4 Mb/s", "800 kb/s", as on iOS. */
-internal fun bitrate(kbps: Int): String = if (kbps >= 1000) "%.1f Mb/s".format(kbps / 1000.0) else "$kbps kb/s"
+internal fun bitrate(kbps: Int): String = if (kbps >= 1000) fmt("%.1f Mb/s", kbps / 1000.0) else "$kbps kb/s"
 
 /**
  * The large round Go Live button, as on iOS: a tap starts the stream;

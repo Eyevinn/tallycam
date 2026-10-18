@@ -59,7 +59,7 @@ private val HUB_CYAN = Color(0xFF64D2FF)
 @Composable
 fun CameraValuesRow(model: AppModel, onSides: Collection<String>, onSelect: (String) -> Unit, onFormat: () -> Unit,
                     modifier: Modifier = Modifier) {
-    val items = items(model)
+    val items = valueItems(model.shading.values, model.shading.format, model.shading.exposureWarning)
     val descriptors = model.shading.descriptors
     // What the hub changed in the last second, until the flash is over.
     val hubChanged = model.shading.hubChanged
@@ -74,8 +74,7 @@ fun CameraValuesRow(model: AppModel, onSides: Collection<String>, onSelect: (Str
     Box(modifier.height(Chrome.rowHeight).background(Color.Black.copy(alpha = 0.45f), CircleShape)
             .padding(horizontal = 4.dp), contentAlignment = Alignment.Center) {
         // Focus is last; colour is dropped after it.
-        val drop = listOfNotNull(items.indexOfFirst { it.group == "focus" }.takeIf { it >= 0 },
-                                 items.indexOfFirst { it.group == "white_balance" }.takeIf { it >= 0 })
+        val drop = VALUE_DROP_ORDER.mapNotNull { group -> items.indexOfFirst { it.group == group }.takeIf { it >= 0 } }
         DroppingRow(drop) {
             items.forEachIndexed { index, item ->
                 val enabled = item.group == null || modeKey(item.group) in descriptors
@@ -88,16 +87,18 @@ fun CameraValuesRow(model: AppModel, onSides: Collection<String>, onSelect: (Str
     }
 }
 
-private class Item(val text: String, val flag: String? = null, val tone: Color = Color.White,
-                   /** The group it opens; null opens Settings. */
-                   val group: String? = null,
-                   /** The controls it shows: it flashes when the hub changes one. */
-                   val ids: List<String> = emptyList())
+/** A tone as drawn. */
+private fun Tone.color(): Color = when (this) {
+    Tone.AUTO -> Color.White
+    Tone.HELD -> Chrome.yellow
+    Tone.ORANGE -> Chrome.orange
+    Tone.RED -> Color(0xFFFF453A)
+}
 
 @Composable
-private fun ValueButton(item: Item, separator: Boolean, selected: Boolean, enabled: Boolean, flash: Boolean,
+private fun ValueButton(item: ValueItem, separator: Boolean, selected: Boolean, enabled: Boolean, flash: Boolean,
                         onClick: () -> Unit) {
-    val tone by animateColorAsState(if (flash) HUB_CYAN else item.tone, tween(if (flash) 80 else 400), label = "flash")
+    val tone by animateColorAsState(if (flash) HUB_CYAN else item.tone.color(), tween(if (flash) 80 else 400), label = "flash")
     Row(Modifier.height(Chrome.rowHeight), verticalAlignment = Alignment.CenterVertically) {
         if (separator) Box(Modifier.width(1.dp).height(14.dp).background(Color.White.copy(alpha = 0.25f)))
         Box(
@@ -120,50 +121,6 @@ private fun ValueButton(item: Item, separator: Boolean, selected: Boolean, enabl
         }
     }
 }
-
-private fun items(model: AppModel): List<Item> {
-    val v = model.shading.values
-    val exposureHeld = v.has("exposure_mode") && v.optString("exposure_mode") != "auto"
-    val held = if (exposureHeld) Chrome.yellow else Color.White
-    val list = mutableListOf<Item>()
-    if (model.shading.format.isNotEmpty()) list += Item(model.shading.format, ids = listOf("resolution", "frame_rate"))
-    if (v.has("iso")) {
-        val iso = "ISO ${v.optInt("iso")}"
-        val ids = listOf("iso", "exposure_mode")
-        list += when (model.shading.exposureWarning) {
-            "too_dark" -> Item(iso, "DARK", Chrome.orange, "exposure", ids)
-            "clipping" -> Item(iso, "CLIP", Color(0xFFFF453A), "exposure", ids)
-            else -> Item(iso, tone = held, group = "exposure", ids = ids)
-        }
-    }
-    v.optDouble("shutter", 0.0).takeIf { it > 0 }?.let { list += Item("1/${kotlin.math.round(it).toLong()}", tone = held, group = "exposure", ids = listOf("shutter")) }
-    val bias = v.optDouble("ev_bias", 0.0)
-    if (!exposureHeld && abs(bias) >= 0.05) list += Item("%+.1f EV".format(bias), group = "exposure", ids = listOf("ev_bias"))
-    if (v.has("wb_mode")) list += colour(v)
-    if (v.has("focus_mode")) {
-        val ids = listOf("focus_mode", "focus_position")
-        list += when (v.optString("focus_mode")) {
-            "auto" -> Item("AF", group = "focus", ids = ids)
-            "locked" -> Item("AF-L", tone = Chrome.yellow, group = "focus", ids = ids)
-            else -> Item(if (v.has("focus_position")) "F %.2f".format(v.optDouble("focus_position")) else "MF",
-                         tone = Chrome.yellow, group = "focus", ids = ids)
-        }
-    }
-    return list
-}
-
-/** "5200 K" (with the tint when not 0) while manual, else AWB. */
-private fun colour(v: JSONObject): Item {
-    val mode = v.optString("wb_mode")
-    val tone = if (mode == "auto") Color.White else Chrome.yellow
-    val ids = listOf("wb_mode", "wb_temperature", "wb_tint")
-    if (mode != "manual" || !v.has("wb_temperature")) return Item("AWB", tone = tone, group = "white_balance", ids = ids)
-    val tint = v.optDouble("wb_tint", 0.0).takeIf { abs(it) >= 0.5 }?.let { " %+.0f".format(it) } ?: ""
-    return Item("${v.optInt("wb_temperature")} K$tint", tone = tone, group = "white_balance", ids = ids)
-}
-
-/** The mode control of a shading group. */
-internal fun modeKey(group: String): String = Shading.MODE_CONTROLS.first { it.first == group }.second
 
 /** A row on one line: when it does not fit, the children at [drop] (in that order) are left out. */
 @Composable

@@ -1,0 +1,186 @@
+{
+  "about": "Shared UI vectors for the iOS and Android apps (docs/UI_DESIGN.md): the values row, the side controls' value labels, the rockers' tap steps and double-tap neutral values, and which group each side control runs. Numbers print with a point in every language. `tone`: auto (white), held (yellow), orange, red. A step's `expect` is the set the app sends (the mode first where it has to change); `base` is a quick tap's last value. A neutral's `expect` is a set, a command, or null (nothing to do).",
+  "format": [
+    { "width": 1920, "height": 1080, "fps": 30, "expect": "1080p30" },
+    { "width": 3840, "height": 2160, "fps": 30, "expect": "4K30" },
+    { "width": 1280, "height": 720, "fps": 60, "expect": "720p60" },
+    { "width": 1080, "height": 1920, "fps": 25, "expect": "1080p25" }
+  ],
+  "values_row": [
+    {
+      "name": "all auto, with EV and tint",
+      "format": "1080p30",
+      "values": { "exposure_mode": "auto", "iso": 26, "shutter": 100, "ev_bias": 0.3, "wb_mode": "auto", "wb_temperature": 5200, "wb_tint": 4, "focus_mode": "auto" },
+      "expect": [
+        { "text": "1080p30", "tone": "auto", "group": null },
+        { "text": "ISO 26", "tone": "auto", "group": "exposure" },
+        { "text": "1/100", "tone": "auto", "group": "exposure" },
+        { "text": "+0.3 EV", "tone": "auto", "group": "exposure" },
+        { "text": "5200 K +4", "tone": "auto", "group": "white_balance" },
+        { "text": "AF", "tone": "auto", "group": "focus" }
+      ]
+    },
+    {
+      "name": "manual: no EV, held values yellow, negative tint",
+      "format": "4K30",
+      "values": { "exposure_mode": "manual", "iso": 400, "shutter": 50, "ev_bias": 0.3, "wb_mode": "manual", "wb_temperature": 3200, "wb_tint": -6, "focus_mode": "manual", "focus_position": 0.42 },
+      "expect": [
+        { "text": "4K30", "tone": "auto", "group": null },
+        { "text": "ISO 400", "tone": "held", "group": "exposure" },
+        { "text": "1/50", "tone": "held", "group": "exposure" },
+        { "text": "3200 K -6", "tone": "held", "group": "white_balance" },
+        { "text": "F 0.42", "tone": "held", "group": "focus" }
+      ]
+    },
+    {
+      "name": "locked exposure and focus; rounding",
+      "format": "720p60",
+      "values": { "exposure_mode": "locked", "iso": 25.6, "shutter": 99.6, "wb_mode": "auto", "wb_temperature": 5600, "wb_tint": 0.4, "focus_mode": "locked", "focus_position": 0.5 },
+      "expect": [
+        { "text": "720p60", "tone": "auto", "group": null },
+        { "text": "ISO 26", "tone": "held", "group": "exposure" },
+        { "text": "1/100", "tone": "held", "group": "exposure" },
+        { "text": "5600 K", "tone": "auto", "group": "white_balance" },
+        { "text": "AF-L", "tone": "held", "group": "focus" }
+      ]
+    },
+    {
+      "name": "EV under 0.05 hidden, negative EV shown",
+      "format": "",
+      "values": { "exposure_mode": "auto", "iso": 100, "ev_bias": -0.04 },
+      "expect": [
+        { "text": "ISO 100", "tone": "auto", "group": "exposure" }
+      ]
+    },
+    {
+      "name": "negative EV",
+      "format": "",
+      "values": { "exposure_mode": "auto", "iso": 100, "ev_bias": -0.7 },
+      "expect": [
+        { "text": "ISO 100", "tone": "auto", "group": "exposure" },
+        { "text": "-0.7 EV", "tone": "auto", "group": "exposure" }
+      ]
+    },
+    {
+      "name": "clipping",
+      "format": "1080p30",
+      "warning": "clipping",
+      "values": { "exposure_mode": "auto", "iso": 25, "shutter": 100 },
+      "expect": [
+        { "text": "1080p30", "tone": "auto", "group": null },
+        { "text": "ISO 25", "flag": "CLIP", "tone": "red", "group": "exposure" },
+        { "text": "1/100", "tone": "auto", "group": "exposure" }
+      ]
+    },
+    {
+      "name": "too dark, also in manual",
+      "format": "1080p30",
+      "warning": "too_dark",
+      "values": { "exposure_mode": "manual", "iso": 3200, "shutter": 50 },
+      "expect": [
+        { "text": "1080p30", "tone": "auto", "group": null },
+        { "text": "ISO 3200", "flag": "DARK", "tone": "orange", "group": "exposure" },
+        { "text": "1/50", "tone": "held", "group": "exposure" }
+      ]
+    },
+    {
+      "name": "white balance without a temperature (Android's auto)",
+      "format": "1080p30",
+      "values": { "wb_mode": "auto", "focus_mode": "manual" },
+      "expect": [
+        { "text": "1080p30", "tone": "auto", "group": null },
+        { "text": "AWB", "tone": "auto", "group": "white_balance" },
+        { "text": "MF", "tone": "held", "group": "focus" }
+      ]
+    },
+    {
+      "name": "white balance locked without a temperature",
+      "format": "1080p30",
+      "values": { "wb_mode": "locked" },
+      "expect": [
+        { "text": "1080p30", "tone": "auto", "group": null },
+        { "text": "AWB", "tone": "held", "group": "white_balance" }
+      ]
+    }
+  ],
+  "drop_order": ["focus", "white_balance"],
+  "adjust_value": [
+    { "group": "exposure", "tint": false, "values": { "exposure_mode": "auto", "ev_bias": 0.3 }, "expect": "+0.3 EV" },
+    { "group": "exposure", "tint": false, "values": { "exposure_mode": "auto" }, "expect": "+0.0 EV" },
+    { "group": "exposure", "tint": false, "values": { "exposure_mode": "manual", "iso": 400 }, "expect": "ISO 400" },
+    { "group": "exposure", "tint": false, "values": { "exposure_mode": "locked", "iso": 125.98 }, "expect": "ISO 126" },
+    { "group": "white_balance", "tint": false, "values": { "wb_mode": "manual", "wb_temperature": 5200 }, "expect": "5200 K" },
+    { "group": "white_balance", "tint": true, "values": { "wb_mode": "manual", "wb_temperature": 5200, "wb_tint": -6 }, "expect": "Tint -6" },
+    { "group": "white_balance", "tint": true, "values": { "wb_mode": "manual", "wb_tint": 0 }, "expect": "Tint +0" },
+    { "group": "focus", "tint": false, "values": { "focus_mode": "auto", "focus_position": 0.3 }, "expect": "AF" },
+    { "group": "focus", "tint": false, "values": { "focus_mode": "manual", "focus_position": 0.42 }, "expect": "F 0.42" }
+  ],
+  "zoom_factor": [
+    { "factor": 1.0, "expect": "1.0×" },
+    { "factor": 2.34, "expect": "2.3×" },
+    { "factor": 0.5, "expect": "0.5×" },
+    { "factor": 12.4, "expect": "12×" }
+  ],
+  "bitrate": [
+    { "kbps": 6425, "expect": "6.4 Mb/s" },
+    { "kbps": 1000, "expect": "1.0 Mb/s" },
+    { "kbps": 800, "expect": "800 kb/s" }
+  ],
+  "uptime": [
+    { "seconds": 5, "expect": "00:05" },
+    { "seconds": 65, "expect": "01:05" },
+    { "seconds": 3725, "expect": "1:02:05" }
+  ],
+  "descriptors": {
+    "ev_bias": { "min": -2, "max": 2, "step": 0.1 },
+    "iso": { "min": 25, "max": 3200, "step": 1 },
+    "wb_temperature": { "min": 2000, "max": 10000, "step": 50 },
+    "wb_tint": { "min": -150, "max": 150, "step": 1 },
+    "focus_position": { "min": 0, "max": 1, "step": 0.01 },
+    "zoom": { "min": 1, "max": 10, "step": 0.01 }
+  },
+  "steps": [
+    { "name": "EV up", "group": "exposure", "tint": false, "values": { "exposure_mode": "auto", "ev_bias": 0 }, "direction": 1, "expect": { "ev_bias": 0.3 } },
+    { "name": "EV down", "group": "exposure", "tint": false, "values": { "exposure_mode": "auto", "ev_bias": 0 }, "direction": -1, "expect": { "ev_bias": -0.3 } },
+    { "name": "EV clamped", "group": "exposure", "tint": false, "values": { "exposure_mode": "auto", "ev_bias": 1.9 }, "direction": 1, "expect": { "ev_bias": 2 } },
+    { "name": "EV quick taps add up", "group": "exposure", "tint": false, "values": { "exposure_mode": "auto", "ev_bias": 0 }, "base": 0.3, "direction": 1, "expect": { "ev_bias": 0.6 } },
+    { "name": "ISO a third of a stop up", "group": "exposure", "tint": false, "values": { "exposure_mode": "manual", "iso": 100 }, "direction": 1, "expect": { "iso": 126 } },
+    { "name": "ISO a third of a stop down", "group": "exposure", "tint": false, "values": { "exposure_mode": "manual", "iso": 100 }, "direction": -1, "expect": { "iso": 79 } },
+    { "name": "ISO from locked goes manual", "group": "exposure", "tint": false, "values": { "exposure_mode": "locked", "iso": 100 }, "direction": 1, "expect": { "iso": 126, "exposure_mode": "manual" } },
+    { "name": "K up", "group": "white_balance", "tint": false, "values": { "wb_mode": "manual", "wb_temperature": 5200 }, "direction": 1, "expect": { "wb_temperature": 5300 } },
+    { "name": "K from auto goes manual", "group": "white_balance", "tint": false, "values": { "wb_mode": "auto", "wb_temperature": 5200 }, "direction": -1, "expect": { "wb_temperature": 5100, "wb_mode": "manual" } },
+    { "name": "K without a temperature starts mid-range", "group": "white_balance", "tint": false, "values": { "wb_mode": "auto" }, "direction": 1, "expect": { "wb_temperature": 6100, "wb_mode": "manual" } },
+    { "name": "tint up", "group": "white_balance", "tint": true, "values": { "wb_mode": "manual", "wb_temperature": 5200, "wb_tint": 4 }, "direction": 1, "expect": { "wb_tint": 5 } },
+    { "name": "focus far", "group": "focus", "tint": false, "values": { "focus_mode": "manual", "focus_position": 0.42 }, "direction": 1, "expect": { "focus_position": 0.44 } },
+    { "name": "focus from auto goes manual", "group": "focus", "tint": false, "values": { "focus_mode": "auto", "focus_position": 0.5 }, "direction": -1, "expect": { "focus_position": 0.48, "focus_mode": "manual" } },
+    { "name": "focus clamped", "group": "focus", "tint": false, "values": { "focus_mode": "manual", "focus_position": 0.99 }, "direction": 1, "expect": { "focus_position": 1 } },
+    { "name": "zoom a quarter doubling in", "group": "zoom", "tint": false, "values": { "zoom": 1 }, "direction": 1, "expect": { "zoom": 1.19 } },
+    { "name": "zoom out from 2", "group": "zoom", "tint": false, "values": { "zoom": 2 }, "direction": -1, "expect": { "zoom": 1.68 } },
+    { "name": "zoom clamped at the wide end", "group": "zoom", "tint": false, "values": { "zoom": 1 }, "direction": -1, "expect": { "zoom": 1 } }
+  ],
+  "neutral": [
+    { "group": "exposure", "tint": false, "values": { "exposure_mode": "auto", "ev_bias": 0.7 }, "expect": { "set": { "ev_bias": 0 } } },
+    { "group": "exposure", "tint": false, "values": { "exposure_mode": "manual", "iso": 400 }, "expect": { "set": { "exposure_mode": "auto" } } },
+    { "group": "exposure", "tint": false, "values": { "exposure_mode": "locked" }, "expect": { "set": { "exposure_mode": "auto" } } },
+    { "group": "white_balance", "tint": false, "values": { "wb_mode": "manual", "wb_temperature": 3200 }, "expect": { "command": "wb_one_shot" } },
+    { "group": "white_balance", "tint": true, "values": { "wb_mode": "auto", "wb_tint": 6 }, "expect": { "set": { "wb_tint": 0 } } },
+    { "group": "focus", "tint": false, "values": { "focus_mode": "manual", "focus_position": 0.4 }, "expect": { "set": { "focus_mode": "auto" } } },
+    { "group": "focus", "tint": false, "values": { "focus_mode": "auto" }, "expect": null },
+    { "group": "zoom", "tint": false, "values": { "zoom": 3.2 }, "expect": { "set": { "zoom": 1 } } }
+  ],
+  "sides": {
+    "default": { "left": "zoom", "right": "exposure" },
+    "cases": [
+      { "name": "left picks exposure: swap", "start": { "left": "zoom", "right": "exposure" }, "choose": { "side": "left", "group": "exposure" }, "expect": { "left": "exposure", "right": "zoom" } },
+      { "name": "right picks zoom: swap", "start": { "left": "zoom", "right": "exposure" }, "choose": { "side": "right", "group": "zoom" }, "expect": { "left": "exposure", "right": "zoom" } },
+      { "name": "right picks focus", "start": { "left": "zoom", "right": "exposure" }, "choose": { "side": "right", "group": "focus" }, "expect": { "left": "zoom", "right": "focus" } },
+      { "name": "left picks white balance", "start": { "left": "zoom", "right": "exposure" }, "choose": { "side": "left", "group": "white_balance" }, "expect": { "left": "white_balance", "right": "exposure" } },
+      { "name": "values row: white balance to the right", "start": { "left": "zoom", "right": "exposure" }, "values_tap": "white_balance", "expect": { "left": "zoom", "right": "white_balance" } },
+      { "name": "values row: shown on the right already", "start": { "left": "zoom", "right": "exposure" }, "values_tap": "exposure", "expect": { "left": "zoom", "right": "exposure" } },
+      { "name": "values row: shown on the left already", "start": { "left": "focus", "right": "exposure" }, "values_tap": "focus", "expect": { "left": "focus", "right": "exposure" } },
+      { "name": "values row: replaces the right", "start": { "left": "exposure", "right": "zoom" }, "values_tap": "focus", "expect": { "left": "exposure", "right": "focus" } },
+      { "name": "camera without zoom", "start": { "left": "zoom", "right": "exposure" }, "available": ["exposure", "white_balance", "focus"], "expect": { "left": "white_balance", "right": "exposure" } },
+      { "name": "camera without the right's group", "start": { "left": "zoom", "right": "focus" }, "available": ["zoom", "exposure", "white_balance"], "expect": { "left": "zoom", "right": "exposure" } }
+    ]
+  }
+}

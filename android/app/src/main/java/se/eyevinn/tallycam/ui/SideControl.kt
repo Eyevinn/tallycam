@@ -36,6 +36,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -83,7 +84,7 @@ fun SideControl(model: AppModel, group: String, groups: List<String>, leading: B
     // K each time colour is chosen.
     var tint by remember(group) { mutableStateOf(false) }
     var rate by remember(group) { mutableDoubleStateOf(0.0) }
-    val ramping by rememberUpdatedState(if (zoom) null else ramped(model, group, tint))
+    val ramping by rememberUpdatedState(ramped(model.shading.values, descriptors, group, tint))
     val haptics = rememberHaptics()
     // When a value last changed from here: the value label stands out a moment longer.
     var touched by remember(group) { mutableLongStateOf(0L) }
@@ -97,23 +98,22 @@ fun SideControl(model: AppModel, group: String, groups: List<String>, leading: B
     // The value a quick tap builds on: the camera reports a step back a moment later (as iOS).
     var lastTap by remember(group) { mutableStateOf<Pair<Long, Double>?>(null) }
 
-    /** Clamps [raw] to the control's range, snaps it to its step and sends it (with the mode first where needed); null when out of reach. */
-    fun send(r: Ramped, raw: Double, last: Double? = null): Double? {
-        val d = model.shading.descriptors[r.id] ?: return null
-        val low = d.optDouble("min", Double.NaN)
-        val high = d.optDouble("max", Double.NaN)
-        if (low.isNaN() || high.isNaN() || high <= low) return null
-        var value = raw
-        val step = d.optDouble("step", 0.0)
-        if (step > 0) value = (value / step).roundToLong() * step
-        value = value.coerceIn(low, high)
-        if (value == last) return value
-        val set = JSONObject().put(r.id, value)
-        r.mode?.let { set.put(modeKey(group), it) }
+    /** Sends a set from the rocker, with its tick (firmer at the end of the range); returns the value sent. */
+    fun sendSet(set: JSONObject): Double? {
+        val mode = if (zoom) null else modeKey(group)
+        val id = set.keys().asSequence().firstOrNull { it != mode } ?: return null
+        val value = set.optDouble(id)
+        val d = model.shading.descriptors[id]
         model.localSet(set, quiet = true)
-        haptics.step(atEnd = value <= low || value >= high)
+        haptics.step(atEnd = d != null && (value <= d.optDouble("min") || value >= d.optDouble("max")))
         touched = android.os.SystemClock.uptimeMillis()
         return value
+    }
+    /** [raw] clamped, snapped and sent unless it is the value [last] sent. */
+    fun send(r: Ramped, raw: Double, last: Double? = null): Double? {
+        val set = rampSet(r, group, model.shading.descriptors, raw) ?: return null
+        val value = set.optDouble(r.id)
+        return if (value == last) value else sendSet(set)
     }
 
     LaunchedEffect(group) {
@@ -147,53 +147,25 @@ fun SideControl(model: AppModel, group: String, groups: List<String>, leading: B
             sent = send(r, r.unscale(next), sent) ?: sent
         }
     }
-    /** The value a step starts from: the last tap's within a second, else the camera's. */
-    fun base(id: String, fallback: Double?): Double? {
-        val now = android.os.SystemClock.uptimeMillis()
-        lastTap?.let { (at, v) -> if (now - at < 1000) return v }
-        return model.shading.values.optDouble(id, Double.NaN).takeIf { !it.isNaN() } ?: fallback
-    }
-    fun zoomTo(factor: Double) {
-        val d = model.shading.descriptors["zoom"] ?: return
-        val low = d.optDouble("min", 1.0)
-        val high = d.optDouble("max", 1.0)
-        val value = (Math.round(factor * 100) / 100.0).coerceIn(low, high)
-        model.localSet(JSONObject().put("zoom", value), quiet = true)
-        haptics.step(atEnd = value <= low || value >= high)
-        lastTap = android.os.SystemClock.uptimeMillis() to value
-        touched = android.os.SystemClock.uptimeMillis()
-    }
-    /** A tap on an end: one step up (+1) or down (-1). */
+    /** A tap on an end: one step up (+1) or down (-1), from the last tap's value within a second (as iOS). */
     fun step(direction: Int) {
-        if (zoom) {
-            base("zoom", 1.0)?.let { zoomTo(it * 2.0.pow(ZOOM_TAP * direction)) }
-            return
-        }
-        val r = ramping ?: return
-        // No value yet (Android's auto white balance reports no temperature):
-        // from the middle of the range, as the drag does.
-        val d = model.shading.descriptors[r.id] ?: return
-        val current = base(r.id, ((d.optDouble("min") + d.optDouble("max")) / 2).takeIf { !it.isNaN() }) ?: return
-        if (r.log && current <= 0) return
-        send(r, r.unscale(r.scale(current) + direction * r.tap))?.let { lastTap = android.os.SystemClock.uptimeMillis() to it }
+        val now = android.os.SystemClock.uptimeMillis()
+        val base = lastTap?.takeIf { now - it.first < 1000 }?.second
+        val set = tapStep(group, model.shading.values, model.shading.descriptors, tint, direction, base) ?: return
+        sendSet(set)?.let { lastTap = now to it }
     }
     /** A double tap on the knob: the neutral value (docs/UI_DESIGN.md). */
     fun reset() {
         lastTap = null
-        if (zoom) {
-            zoomTo(1.0)
-            return
+        when (val action = neutral(group, model.shading.values, tint)) {
+            is Neutral.Set -> sendSet(action.values)
+            is Neutral.Command -> {
+                if (action.name == "wb_one_shot") model.localWhiteBalanceOnce()
+                haptics.step()
+                touched = android.os.SystemClock.uptimeMillis()
+            }
+            null -> Unit
         }
-        val mode = model.shading.values.optString(modeKey(group), "auto")
-        when {
-            // Tint 0, the white balance mode as it is (docs/UI_DESIGN.md).
-            group == "white_balance" && tint -> ramping?.let { send(Ramped(it.id, it.label, it.speed, it.tap), 0.0) }
-            group == "white_balance" -> model.localWhiteBalanceOnce()
-            group == "exposure" && mode == "auto" -> ramping?.let { send(it, 0.0) }
-            mode != "auto" -> model.localSet(JSONObject().put(modeKey(group), "auto"))
-        }
-        haptics.step()
-        touched = android.os.SystemClock.uptimeMillis()
     }
 
     // The zoom drag ticks only at its ends: once when it reaches one.
@@ -209,7 +181,7 @@ fun SideControl(model: AppModel, group: String, groups: List<String>, leading: B
 
     val mode = if (zoom) "auto" else model.shading.values.optString(modeKey(group), "auto")
     val auto = mode == "auto"
-    val text = if (zoom) zoomFactorText(model) else valueText(group, model.shading.values, tint)
+    val text = if (zoom) zoomFactorText(model) else adjustValueText(group, model.shading.values, tint)
     val adjusting = rate != 0.0 || recent
 
     val rocker = @Composable {
@@ -243,22 +215,24 @@ fun SideControl(model: AppModel, group: String, groups: List<String>, leading: B
             }
         }
     }
-    Column(modifier, horizontalAlignment = if (leading) Alignment.Start else Alignment.End,
+    // The same size whatever the group (docs/UI_DESIGN.md, "Sizes"): the
+    // rocker and the inner column wide, the K / Tint row always reserved.
+    Column(modifier.width(Chrome.control * 2 + Chrome.gap), horizontalAlignment = if (leading) Alignment.Start else Alignment.End,
            verticalArrangement = Arrangement.spacedBy(Chrome.gap)) {
         Row(horizontalArrangement = Arrangement.spacedBy(Chrome.gap)) {
             // The rocker at the screen edge; hidden while the screen is locked, its place kept.
             val edge = @Composable { if (locked) Box(Modifier.width(Chrome.control).height(metrics.rocker)) else rocker() }
             if (leading) { edge(); inner() } else { inner(); edge() }
         }
-        // The value under the rocker; the K / Tint switch under it takes no
-        // room, so both sides stay level.
+        // The value under the rocker (a long one may reach past the side's
+        // width) and the K / Tint row under it, reserved on every group.
         Layout({ value(); if (hasTint) TintSwitch(tint) { tint = it; rate = 0.0 } }) { measurables, constraints ->
-            val loose = constraints.copy(minWidth = 0, minHeight = 0)
+            val loose = Constraints()
             val placeables = measurables.map { it.measure(loose) }
-            val width = placeables.maxOf { it.width }
+            val width = constraints.maxWidth
             val first = placeables.first()
             fun x(w: Int) = if (leading) 0 else width - w
-            layout(width, first.height) {
+            layout(width, (Chrome.valueHeight + Chrome.gap + Chrome.tintHeight).roundToPx()) {
                 first.place(x(first.width), 0)
                 placeables.getOrNull(1)?.let { it.place(x(it.width), first.height + Chrome.gap.roundToPx()) }
             }
@@ -285,9 +259,9 @@ class SideMetrics(val segment: Dp, val rocker: Dp) {
 }
 
 /** The zoom factor against the wide lens, as the lens buttons count: "2.3×", "12×". */
-private fun zoomFactorText(model: AppModel): String {
+internal fun zoomFactorText(model: AppModel): String {
     val factor = lensFactor(model) * model.shading.values.optDouble("zoom", 1.0)
-    return if (factor >= 10) "%.0f×".format(factor) else "%.1f×".format(factor)
+    return zoomFactorText(factor)
 }
 
 /**
@@ -338,7 +312,7 @@ private fun TintSwitch(tint: Boolean, onChange: (Boolean) -> Unit) {
     Row(Modifier.background(Color.Black.copy(alpha = 0.45f), CircleShape).padding(2.dp)) {
         for ((title, on) in listOf("K" to !tint, "Tint" to tint)) {
             Text(title, color = if (on) Color.Black else Color.White.copy(alpha = 0.8f), fontSize = 12.sp, fontWeight = FontWeight.Bold,
-                 modifier = Modifier.height(Chrome.rowHeight - 10.dp).background(if (on) Color.White else Color.Transparent, CircleShape)
+                 modifier = Modifier.height(Chrome.tintHeight).background(if (on) Color.White else Color.Transparent, CircleShape)
                      .clickable { if (!on) onChange(title == "Tint") }
                      .semantics { contentDescription = if (title == "K") "Rocker moves the temperature" else "Rocker moves the tint" }
                      .padding(horizontal = 8.dp, vertical = 5.dp))
@@ -355,31 +329,6 @@ private fun heldMode(model: AppModel, group: String): String {
     val options = model.shading.descriptors[modeKey(group)]?.optJSONArray("options")
     val offered = (0 until (options?.length() ?: 0)).map { options?.optJSONObject(it)?.optString("value") }
     return if ("manual" in offered) "manual" else "locked"
-}
-
-/**
- * What the rocker moves: full speed in the control's scale per second, a
- * tap's step in the same scale (log2 for ISO), and the mode to switch to
- * first.
- */
-private class Ramped(val id: String, val label: String, val speed: Double, val tap: Double, val log: Boolean = false,
-                     val mode: String? = null) {
-    fun scale(x: Double) = if (log) log2(x) else x
-    fun unscale(x: Double) = if (log) 2.0.pow(x) else x
-}
-
-private fun ramped(model: AppModel, group: String, tint: Boolean): Ramped? {
-    val descriptors = model.shading.descriptors
-    val mode = model.shading.values.optString(modeKey(group), "auto")
-    val manual = if (mode == "manual") null else "manual"
-    val r = when (group) {
-        "exposure" -> if (mode == "auto") Ramped("ev_bias", "compensation", 2.0, tap = 0.3)
-                      else Ramped("iso", "ISO", 2.0, tap = 1.0 / 3, log = true, mode = manual)
-        "white_balance" -> if (tint) Ramped("wb_tint", "tint", 60.0, tap = 1.0, mode = manual)
-                           else Ramped("wb_temperature", "temperature", 1500.0, tap = 100.0, mode = manual)
-        else -> Ramped("focus_position", "position", 0.4, tap = 0.02, mode = manual)
-    }
-    return r.takeIf { it.id in descriptors }
 }
 
 /**
@@ -437,9 +386,6 @@ private fun Segments(segments: List<Segment>, segment: Dp, fill: Color = Color.W
     }
 }
 
-/** The groups a side control can run, in the selector's order. */
-val SIDE_GROUPS = listOf("zoom", "exposure", "white_balance", "focus")
-
 private fun shortName(group: String) = when (group) {
     "zoom" -> "ZOOM"
     "exposure" -> "EXP"
@@ -466,23 +412,7 @@ private fun lowLabel(group: String, tint: Boolean) = when (group) {
     else -> "Near"
 }
 
-/** What the rocker moves, as it stands. */
-private fun valueText(group: String, v: JSONObject, tint: Boolean): String {
-    val auto = v.optString(modeKey(group), "auto") == "auto"
-    return when (group) {
-        "exposure" -> if (auto) "%+.1f EV".format(v.optDouble("ev_bias", 0.0))
-                      else if (v.has("iso")) "ISO ${v.optInt("iso")}" else "ISO"
-        "white_balance" -> when {
-            tint -> if (v.has("wb_tint")) "Tint %+.0f".format(v.optDouble("wb_tint")) else "Tint"
-            v.optString("wb_mode") == "manual" && v.has("wb_temperature") -> "${v.optInt("wb_temperature")} K"
-            else -> "AWB"
-        }
-        else -> if (auto) "AF" else if (v.has("focus_position")) "F %.2f".format(v.optDouble("focus_position")) else "F"
-    }
-}
 
 /** How often a held rocker changes its value (about 10 Hz). */
 private const val RAMP_MS = 100L
-/** Zoom doublings per second at full deflection, and per tap on an end. */
-private const val MAX_ZOOM_RATE = 2.0
-private const val ZOOM_TAP = 0.25
+

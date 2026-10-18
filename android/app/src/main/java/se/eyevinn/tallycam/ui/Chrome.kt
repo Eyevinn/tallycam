@@ -43,8 +43,9 @@ object Chrome {
     val rocker = 180.dp
     /** The live button. */
     val liveButton = 76.dp
-    /** The value label under the adjust rocker. */
+    /** The value label under a side control's rocker, and the K / Tint row under it. */
     val valueHeight = 28.dp
+    val tintHeight = 24.dp
     /** A rocker touch that moves less than this is a tap (as iOS's 8 pt). */
     val tapSlop = 8.dp
 

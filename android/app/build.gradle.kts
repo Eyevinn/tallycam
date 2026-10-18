@@ -94,3 +94,8 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")
 }
+
+// The shared test vectors (core/tests/vectors), read by the unit tests.
+tasks.withType<Test>().configureEach {
+    systemProperty("tallycam.vectors", rootDir.parentFile.resolve("core/tests/vectors").path)
+}

@@ -139,7 +139,7 @@ fun SettingsScreen(model: AppModel, onScan: () -> Unit, onDone: () -> Unit) {
                             Labeled("Encoder now", "${s.targetKbps} kbit/s")
                         }
                         Divider()
-                        Labeled("Round trip", "%.0f ms".format(s.rttMs))
+                        Labeled("Round trip", fmt("%.0f ms", s.rttMs))
                         Divider()
                         Labeled("Retransmitted / dropped", "${s.retransmits} / ${s.dropped}")
                     }

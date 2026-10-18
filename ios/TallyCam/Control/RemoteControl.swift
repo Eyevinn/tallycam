@@ -63,7 +63,8 @@ final class RemoteControl: ObservableObject {
         url.trimmingCharacters(in: .whitespaces).isEmpty
     }
 
-    /// Ownership of exposure, colour and focus, and the image statistics.
+    /// Exposure, colour and focus values for the operator's controls, and
+    /// the image statistics.
     let shading = Shading()
 
     private let client: LcpClient
@@ -73,8 +74,9 @@ final class RemoteControl: ObservableObject {
     /// The server asked for `image_stats`, at most this often.
     private var statsInterval: TimeInterval?
     private var lastStatsSent = Date.distantPast
-    /// The saved group values were applied after a relaunch (D3).
-    private var restoredShading = false
+    /// The hub's production as last received (nil: none, the phone's own),
+    /// applied once the camera controls exist.
+    private var production: CameraControls.Production?
     private var capture: Capture?
     private var controller: StreamController?
     private var cameraControls: [ControlDescriptor] = []
@@ -139,12 +141,6 @@ final class RemoteControl: ObservableObject {
         preview.onJpeg = { jpeg, width, height in
             client.send(PreviewMessage(jpeg: jpeg.base64EncodedString(), width: width, height: height), droppable: true)
         }
-        shading.onChange = { [weak self] message in
-            guard let self, helloSent else {
-                return
-            }
-            client.send(text: message)
-        }
         statsSampler.onStats = { [weak self] stats in
             Task { @MainActor in
                 self?.statsMeasured(stats)
@@ -165,6 +161,9 @@ final class RemoteControl: ObservableObject {
             .receive(on: DispatchQueue.main)
             .sink { [weak controller] format in controller?.setCaptureFormat(format) }
             .store(in: &subscriptions)
+        if production != nil {
+            applyProduction()
+        }
         capture.$orientationMode
             .removeDuplicates()
             .receive(on: DispatchQueue.main)
@@ -265,6 +264,7 @@ final class RemoteControl: ObservableObject {
     /// the app asks for a QR scan again. The stream URL stays.
     func forget() {
         url = ""
+        newProduction()
         reconnect()
     }
 
@@ -284,7 +284,7 @@ final class RemoteControl: ObservableObject {
         }
         log.info("Provisioned control \(parsed.controlUrl, privacy: .public)")
         if Self.server(of: parsed.controlUrl) != Self.server(of: url) {
-            // Another server is another production (docs/SHADING.md, rule 8).
+            // Another server is another production.
             newProduction()
         }
         url = parsed.controlUrl
@@ -327,8 +327,6 @@ final class RemoteControl: ObservableObject {
         case let .closed(reason):
             log.info("Control channel closed: \(reason)")
             connected = false
-            shading.machine.setConnected(connected: false)
-            shading.changed(notify: false)
             helloSent = false
             awaitingAdmission = false
             tally = .off
@@ -342,15 +340,14 @@ final class RemoteControl: ObservableObject {
         switch update {
         case let .values(values):
             cameraValues = values
-            shading.note(values: values, shutterFree: shutterFree)
+            shading.update(values: values)
             publishState()
         case let .controls(controls, commands, values):
             cameraControls = controls
             cameraCommands = commands
             cameraValues = values
             shading.update(descriptors: controls)
-            shading.note(values: values, shutterFree: shutterFree)
-            restoreShadingOnce()
+            shading.update(values: values)
             if helloSent {
                 sendHello()
             } else if awaitingAdmission {
@@ -368,8 +365,6 @@ final class RemoteControl: ObservableObject {
         }
         awaitingAdmission = false
         client.admitted()
-        shading.machine.setConnected(connected: true)
-        shading.changed(notify: false)
         sendAfterHello()
     }
 
@@ -396,10 +391,6 @@ final class RemoteControl: ObservableObject {
             if let id {
                 client.send(ResultMessage(id: id, ok: true, data: data))
             }
-        case let .command(id, name, _) where shadingCommandGroup(command: name)
-            .flatMap({ shading.machine.checkRemote(group: $0) }) != nil:
-            let reason = shadingCommandGroup(command: name).flatMap { shading.machine.checkRemote(group: $0) } ?? ""
-            sendResult(id: id, errors: ["\(name): \(reason)"])
         case let .command(id, name, args):
             capture?.controls.run(command: name, args: args) { [weak self] error in
                 Task { @MainActor in
@@ -421,31 +412,9 @@ final class RemoteControl: ObservableObject {
             tally = Tally(rawValue: state) ?? .off
         case let .message(text):
             showBanner(text)
-        case let .own(id, groups, holderId, holderLabel):
-            let taken = shading.machine.own(groups: groups, holderId: holderId, holderLabel: holderLabel)
-            if !taken.fromLocal.isEmpty {
-                let names = taken.fromLocal.compactMap { g in shading.view(g)?.title }
-                showBanner("\(names.joined(separator: " and ")) taken over by \(holderLabel.isEmpty ? "the hub" : holderLabel)")
-            }
-            shading.changed()
-            sendResult(id: id, errors: taken.skipped.map { "\($0): no such group on this camera" })
-        case let .release(id, groups):
-            let released = shading.machine.release(groups: groups)
-            shading.changed()
-            applyAuto(released) { [weak self] errors in
-                self?.sendResult(id: id, errors: errors)
-            }
         case let .production(mainsHz, shutter):
-            guard let controls = capture?.controls else {
-                return
-            }
-            controls.queue.async { [weak self] in
-                if let warning = controls.setProduction(mainsHz: mainsHz, shutter: shutter) {
-                    Task { @MainActor in
-                        self?.sendLog(level: "warn", message: warning)
-                    }
-                }
-            }
+            production = CameraControls.Production(mainsHz: mainsHz, shutter: shutter)
+            applyProduction()
         case let .stats(enabled, fps):
             statsInterval = enabled ? 1 / fps : nil
             statsSampler.setFps(max(fps, 2))
@@ -463,14 +432,8 @@ final class RemoteControl: ObservableObject {
     private func applySet(id: JSONValue?, values: [String: JSONValue]) {
         var errors: [String] = []
         var cameraSet: [String: JSONValue] = [:]
-        let free = shutterFree
         for (key, value) in values {
-            if let group = shadingControlGroup(control: key, shutterFree: free),
-               let reason = shading.machine.checkRemote(group: group)
-            {
-                // Not this server's group (docs/SHADING.md, rule 2).
-                errors.append("\(key): \(reason)")
-            } else if StreamControls.ids.contains(key) {
+            if StreamControls.ids.contains(key) {
                 if let error = applyStream(key, value) {
                     errors.append("\(key): \(error)")
                 }
@@ -478,6 +441,7 @@ final class RemoteControl: ObservableObject {
                 cameraSet[key] = value
             }
         }
+        shading.hubSet(cameraSet.keys)
         guard !cameraSet.isEmpty, let capture else {
             if !cameraSet.isEmpty {
                 errors.append("Camera not ready")
@@ -567,7 +531,6 @@ final class RemoteControl: ObservableObject {
         client.send(StateMessage(values: values))
         sentValues = values
         helloSent = true
-        client.send(text: shading.machine.messageJson())
         if !pendingLogs.isEmpty {
             client.send(LogMessage(level: "info", message: "While disconnected:"))
             for message in pendingLogs {
@@ -670,57 +633,31 @@ final class RemoteControl: ObservableObject {
         sendLog(level: "info", message: message)
     }
 
-    // MARK: Shading
-
-    /// The production shutter is free (the shutter is then an exposure
-    /// control): its descriptor is writable.
-    private var shutterFree: Bool {
-        cameraControls.first { $0.id == "shutter" }.map { $0.readonly != true } ?? false
-    }
+    // MARK: Production
 
     private static func server(of url: String) -> String? {
         URL(string: url.trimmingCharacters(in: .whitespaces)).map { "\($0.host ?? ""):\($0.port ?? 0)" }
     }
 
-    /// A new control server: its remote groups go back to auto, and the
-    /// phone's own production applies until it sends one.
+    /// A new control server, or none: the phone's own production applies
+    /// until a hub sends one.
     private func newProduction() {
-        let released = shading.machine.newServer()
-        shading.changed(notify: false)
-        applyAuto(released) { _ in }
-        if let controls = capture?.controls {
-            controls.queue.async { _ = controls.setProduction(mainsHz: nil, shutter: nil) }
-        }
+        production = nil
+        applyProduction()
     }
 
-    private func applyAuto(_ groups: [String], completion: @escaping ([String]) -> Void) {
-        let values = Shading.autoValues(groups)
-        guard !values.isEmpty, let capture else {
-            completion([])
+    /// Applies `production` to the camera (kept until the stream stops if
+    /// live). Before `start` it waits there for the camera controls.
+    private func applyProduction() {
+        guard let controls = capture?.controls else {
             return
         }
-        capture.controls.apply(values) { errors in
-            Task { @MainActor in completion(errors) }
-        }
-    }
-
-    /// After a relaunch, the groups that were local or remote get their
-    /// values back, once the camera is up.
-    private func restoreShadingOnce() {
-        guard !restoredShading, let capture else {
-            return
-        }
-        restoredShading = true
-        let values = shading.restoredValues()
-        guard !values.isEmpty else {
-            return
-        }
-        capture.controls.apply(values) { [weak self] errors in
-            guard !errors.isEmpty else {
-                return
-            }
-            Task { @MainActor in
-                self?.sendLog(level: "warn", message: "Restoring exposure, colour and focus: \(errors.joined(separator: "; "))")
+        let production = production
+        controls.queue.async { [weak self] in
+            if let warning = controls.setProduction(production) {
+                Task { @MainActor in
+                    self?.sendLog(level: "warn", message: warning)
+                }
             }
         }
     }
@@ -741,44 +678,21 @@ final class RemoteControl: ObservableObject {
 
     // MARK: Local controls (the camera operator)
 
-    /// The operator locks or sets values in a group. Refused, with a banner,
-    /// while the group is remote.
-    func localSet(group: String, values: [String: JSONValue]) {
-        switch shading.machine.localChange(group: group) {
-        case let .refused(reason):
-            showBanner(reason.capitalizedFirst)
-        case .changed:
-            shading.changed()
-            capture?.controls.apply(values) { _ in }
-        case .unchanged:
-            capture?.controls.apply(values) { _ in }
+    /// The operator sets values (modes, ISO, temperature, ...). The hub may
+    /// change them too; the last change wins.
+    func localSet(_ values: [String: JSONValue]) {
+        capture?.controls.apply(values) { [weak self] errors in
+            // Clamping is expected from the operator's controls; failures not.
+            guard let error = errors.first(where: { !$0.contains("clamped") }) else {
+                return
+            }
+            Task { @MainActor in
+                self?.showBanner(error)
+            }
         }
     }
 
-    /// The operator puts a group back into auto.
-    func localAuto(group: String) {
-        switch shading.machine.localAuto(group: group) {
-        case let .refused(reason):
-            showBanner(reason.capitalizedFirst)
-        case .changed, .unchanged:
-            shading.changed()
-            applyAuto([group]) { _ in }
-        }
-    }
-
-    /// The escape hatch (D2): a remote group taken local while the hub is
-    /// away. The values stay.
-    func takeLocal(group: String) {
-        switch shading.machine.takeLocal(group: group) {
-        case let .refused(reason):
-            showBanner(reason.capitalizedFirst)
-        case .changed, .unchanged:
-            shading.changed()
-        }
-    }
-
-    /// A camera command from the operator's own controls (no ownership
-    /// check: the caller went through `localSet` first).
+    /// A camera command from the operator's own controls.
     func runLocal(command: String, args: [String: JSONValue] = [:]) {
         capture?.controls.run(command: command, args: args) { [weak self] error in
             guard let error else {
@@ -791,30 +705,26 @@ final class RemoteControl: ObservableObject {
     }
 
     /// Tap to focus: continuous autofocus at a point (focus back to auto).
-    /// Refused while focus is remote.
     func localFocus(at point: CGPoint) {
-        if shading.view("focus")?.isRemote == true {
-            showBanner("Focus is under remote control")
-            return
-        }
-        if case .changed = shading.machine.localAuto(group: "focus") {
-            shading.changed()
-        }
         capture?.focus(atStreamPoint: point)
     }
 
-    /// Long press: focus at a point, then lock it there (focus local).
+    /// Long press: focus at a point, then lock it there.
     func localFocusLock(at point: CGPoint) {
-        guard shading.view("focus")?.isRemote != true else {
-            showBanner("Focus is under remote control")
-            return
-        }
         capture?.focus(atStreamPoint: point)
         Task { @MainActor [weak self] in
             try? await Task.sleep(for: .milliseconds(700))
-            self?.localSet(group: "focus", values: ["focus_mode": .string("locked")])
+            self?.localSet(["focus_mode": .string("locked")])
         }
     }
+
+    #if DEBUG
+        /// Tally and a banner for the layout preview (`-uiPreviewState`).
+        func preview(tally: Tally, banner: String) {
+            self.tally = tally
+            showBanner(banner)
+        }
+    #endif
 
     private func showBanner(_ text: String) {
         banner = text

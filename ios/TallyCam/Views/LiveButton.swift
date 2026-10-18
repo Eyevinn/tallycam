@@ -9,9 +9,9 @@ struct LiveButton: View {
     static let size: CGFloat = 76
 
     let state: StreamController.State
-    /// Where the "Hold to stop" hint goes: beside the button (landscape,
-    /// right edge) or above it (portrait).
-    let hintBeside: Bool
+    /// The "Hold to stop" hint above and left of the button (landscape,
+    /// bottom-right corner, over the picture) or left of it (portrait).
+    var hintAbove = false
     let onStart: () -> Void
     let onStop: () -> Void
 
@@ -21,22 +21,20 @@ struct LiveButton: View {
 
     var body: some View {
         gestures(face)
-            .overlay(alignment: hintAlignment) { placedHint }
+            .overlay(alignment: hintAbove ? .topLeading : .leading) { placedHint }
             .sensoryFeedback(.impact(weight: .heavy), trigger: state, condition: Self.feedback)
             .modifier(accessibility)
     }
 
-    private var hintAlignment: Alignment {
-        hintBeside ? .leading : .top
-    }
-
-    /// Left of the button (landscape) or above it (portrait).
+    /// Clear of the bottom row and the adjust control: over the picture.
     @ViewBuilder
     private var placedHint: some View {
         if showHint {
             hint
-                .alignmentGuide(HorizontalAlignment.leading) { (d: ViewDimensions) -> CGFloat in d.width + 14 }
-                .alignmentGuide(VerticalAlignment.top) { (d: ViewDimensions) -> CGFloat in d.height + 14 }
+                .alignmentGuide(HorizontalAlignment.leading) { (d: ViewDimensions) -> CGFloat in
+                    hintAbove ? d.width : d.width + Chrome.gap
+                }
+                .alignmentGuide(VerticalAlignment.top) { (d: ViewDimensions) -> CGFloat in d.height + Chrome.gap }
                 .transition(.opacity)
         }
     }

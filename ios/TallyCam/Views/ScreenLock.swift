@@ -1,33 +1,26 @@
 import SwiftUI
 
-/// Over the whole screen while it is locked: swallows every touch except
-/// the slide to unlock. Remote control, tally and the stream keep running;
-/// only touches are blocked (docs/SHADING.md).
-struct ScreenLockLayer: View {
-    /// Space below the slider (clear of the live button in portrait).
-    let bottomPadding: CGFloat
-    let onUnlock: () -> Void
-
+/// Under the chrome while the screen is locked: swallows every touch on
+/// the picture. The chrome stays visible but takes no touches either, all
+/// but the slide to unlock in the bottom row. Remote control, tally and the
+/// stream keep running; only touches are blocked (docs/SHADING.md).
+struct ScreenLockShield: View {
     var body: some View {
-        ZStack(alignment: .bottom) {
-            Color.clear
-                .contentShape(Rectangle())
-                .onTapGesture {}
-                .gesture(DragGesture(minimumDistance: 0))
-                .ignoresSafeArea()
-            SlideToUnlock(onUnlock: onUnlock)
-                .padding(.bottom, bottomPadding)
-        }
+        Color.clear
+            .contentShape(Rectangle())
+            .onTapGesture {}
+            .gesture(DragGesture(minimumDistance: 0))
+            .ignoresSafeArea()
     }
 }
 
 /// A knob slid all the way to the right unlocks; let go early and it
 /// springs back.
-private struct SlideToUnlock: View {
+struct SlideToUnlock: View {
     let onUnlock: () -> Void
 
     private static let width: CGFloat = 240
-    private static let knob: CGFloat = 46
+    private static let knob = Chrome.control - 6
 
     @State private var offset: CGFloat = 0
 
@@ -61,7 +54,7 @@ private struct SlideToUnlock: View {
                         }
                 )
         }
-        .frame(width: Self.width, height: Self.knob + 6)
+        .frame(width: Self.width, height: Chrome.control)
         .sensoryFeedback(.impact, trigger: offset >= travel * 0.85)
         .accessibilityElement()
         .accessibilityLabel("Slide to unlock")

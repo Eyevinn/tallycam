@@ -6,7 +6,7 @@ import SwiftUI
 /// simulator).
 struct CameraStage: View {
     @ObservedObject var capture: Capture
-    /// Focus goes through the ownership rules (refused while remote).
+    /// Tap and long press focus through the operator's local controls.
     let remote: RemoteControl
     @ObservedObject var shading: Shading
 
@@ -81,8 +81,8 @@ struct CameraStage: View {
             }
         }
         .onDisappear { peaking.stop() }
-        .onChange(of: shading.view("focus")?.indicator) { _, indicator in
-            if indicator != "locked" {
+        .onChange(of: shading.mode(.focus)) { _, mode in
+            if mode != "locked" {
                 withAnimation(.easeIn(duration: 0.3)) { lockPoint = nil }
             }
         }
@@ -207,10 +207,6 @@ struct CameraStage: View {
             return
         }
         remote.localFocus(at: point)
-        // Refused while remote (the banner says so): no square.
-        guard shading.view("focus")?.isRemote != true else {
-            return
-        }
         withAnimation(.easeOut(duration: 0.15)) {
             lockPoint = nil
             focusPoint = location
@@ -232,9 +228,6 @@ struct CameraStage: View {
             return
         }
         remote.localFocusLock(at: point)
-        guard shading.view("focus")?.isRemote != true else {
-            return
-        }
         focusTask?.cancel()
         withAnimation(.easeOut(duration: 0.15)) {
             focusPoint = nil

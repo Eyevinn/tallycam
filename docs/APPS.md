@@ -26,22 +26,29 @@ cannot tell them apart except by `hello.device.platform`.
 
 ## The shooting screen
 
-| Part | Both apps |
+The design, zones and measures are in docs/UI_DESIGN.md; both apps follow
+it. In short, information in the middle and controls at the sides, on one
+grid (iOS `Chrome`, Android the same names):
+
+| Zone | Both apps |
 |---|---|
-| Picture | Full bleed, 16:9; tap to focus and expose at that point (`focus_at`, focus back to auto, never the exposure mode); long press to lock focus there |
-| Tally | A 14 pt border, red on program, green on preview; none when off |
-| Camera name | Always shown, large, in a chip at the top under the status line: "ON AIR · Kamera 2" in red, "PREVIEW · …" in green, the name alone in a dark chip when tally is off |
-| Group chips | Under the status line: `EXP`, `WB`, `FOC`, each `AUTO`, `LOCKED` (yellow), `REMOTE` (cyan) or `REMOTE · OFFLINE` (orange), and "TOO DARK" / "CLIPPING" from the image statistics. Tap: the group's mode and values, read-only while remote. While remote and offline, "Take local control" with a confirmation, also by a long press on the chip (docs/SHADING.md, D2) |
-| Operator message | A yellow banner under the chip, for 8 s ("Exposure taken over by Shader" when a hub takes a group) |
-| Status line | One translucent line on top: a dot and STANDBY / CONNECTING / LIVE (with the bitrate while live), the hub link dot (green connected, orange connecting, grey not set up), the clock dot (green healthy, orange degraded, red bad), the battery, and the Settings button. iOS also shows the thermal state when it matters and an icon while an orientation change waits |
-| Live button | A ringed circle on the right edge in landscape: dark at standby, orange while connecting, red while live; a haptic when it goes live or stops |
-| Not connected | A card: "Not connected", "Scan QR code" (the in-app scanner; the system Camera app works too), "Enter manually" |
-| Operator chrome | Left edge: lens buttons (the lenses the camera has, longest on top) above a zoom rocker (speed by deflection). Bottom left: the aids menu (grid, horizon level, safe areas 93 % / 90 %, centre cuts 4:3 and 9:16, focus peaking in red), each a persisted toggle drawn over the preview only, the QR scanner while no hub is connected and not live, and the screen lock (every touch blocked but a slide to unlock; suggested in a toast at Go Live). Bottom right: the microphone meter (RMS bar, falling peak line, clip marker) |
+| Picture | Full bleed, 16:9; tap to focus and expose at that point (`focus_at`, focus back to auto, never the exposure mode); long press to lock focus there (AF-L). Aids drawn over it only |
+| Tally | A 14 pt border, red on program, green on preview; none when off. All chrome stays inside it and the safe areas |
+| 1 Status row | One translucent line on top: a dot and STANDBY / CONNECTING / LIVE (with the bitrate while live), the camera name chip in the middle ("ON AIR · Kamera 2" in red, "PREVIEW · …" in green, the name alone in a dark chip when tally is off; on its own line under the status line on a narrow screen), the hub link dot, the clock dot, the battery, and the Settings button. iOS also shows the thermal state when it matters and an icon while an orientation change waits |
+| 2 Values row | Centred under it, always shown: format ("1080p30"), ISO, shutter, EV (auto, not 0), white balance in K with the tint when not 0 ("5200 K +4"), focus (AF, AF-L, F 0.42). Each value is a button: ISO, shutter and EV choose exposure for the adjust control, K white balance, focus focus, the format opens Settings; the chosen group is underlined. Yellow when manual or locked; the exposure warning colours ISO and follows it ("ISO 26 CLIP" red, "DARK" orange); a value the hub just set (`set`) flashes cyan for a second. On a narrow screen focus goes first, then white balance; never wraps |
+| 3 Message slot | Centred under the values row: operator messages (yellow, 8 s) and toasts (stream errors, hints, 4 s); nothing else shows messages |
+| 4 Left edge | Lens buttons (longest on top) above the zoom rocker, vertically centred; beside it on a landscape phone too low for both |
+| 5 Right edge | The adjust control, always shown, mirroring zoom with the rockers level: a vertical mode switch (`A` over `M`, or `L` when locked or the camera has no manual; the filled segment is the mode, a tap on the other switches, keeping the values), the rocker (the zoom rocker's component and length: speed by the square of the deflection, springs back, letting go stops) and the value. Exposure ramps `ev_bias` in auto, ISO on a log scale otherwise; white balance `wb_temperature`, or `wb_tint` with the K / Tint switch (K each time it is chosen), switching to manual first, and a long press on the mode switch is "white balance once"; focus ramps `focus_position` (up is far), switching to manual first. The group is remembered; exposure until another is chosen. Sets go out at most 10 times a second, within the descriptor's range and step |
+| 6 Bottom row | Left: the aids menu (grid, horizon level, safe areas 93 % / 90 %, centre cuts 4:3 and 9:16, focus peaking in red, each persisted), the QR scanner while no hub is connected and not live, the screen lock. Right: the microphone meter, then the live button in the bottom-right corner (landscape; bottom centre under the row in portrait), at a fixed place. The live button: dark at standby, orange connecting, red live, held to stop with a hint beside it; a haptic when it goes live or stops |
+| Screen lock | Everything stays visible but takes no touches, the rockers hide, and a slide to unlock takes the bottom row's centre (suggested in a toast at Go Live) |
+| Not connected | A centred card: "Not connected", "Scan QR code" (the in-app scanner; the system Camera app works too), "Enter manually", "Not now" |
 
 ## Settings
 
 Same sections, order and words: **Camera name** (the field, the default as
-placeholder), **Control hub** (link state and host, the URL, "Disconnect and
+placeholder), **Exposure** (mains 50 Hz / 60 Hz / Off, the phone's own
+production; disabled with "Set by the control hub" while a hub's production
+applies, and while live), **Control hub** (link state and host, the URL, "Disconnect and
 forget server" with a confirmation), **Stream (SRT)** (the URL, editable only
 while idle; video codec and bitrate; round trip and losses while live),
 **Orientation**, **Clock** (health, synchronised, estimated and maximum
@@ -65,9 +72,10 @@ its own dark (#16181E), so launchers' masks keep the tally dot.
 | Genlock | In every exposure mode | In every exposure mode with `MANUAL_SENSOR` | Camera2 applies a frame duration only with its auto exposure off, which it always is there |
 | `wb_temperature` | Any Kelvin | The nearest AWB preset (2700 to 7500 K) | Camera2 offers presets; colour gains per sensor would need calibration |
 | `wb_tint` | Yes | No | As above |
+| White balance mode switch | `A` / `M` | `A` / `L` (locked keeps what auto found; the rocker still goes to manual, a preset) | Manual white balance is a Camera2 preset, so holding the auto result is locking it |
 | `torch_probe` | Yes | No | A measurement tool (docs/GENLOCK.md); add when Android genlock is measured |
 | `frame_duration` (Debug) | Yes | No | A measurement tool |
-| Protocol 2 (ownership, production, image statistics, live lock) | Yes | Yes | Same core state machine and statistics; tested on the emulator against the hub |
+| Protocol 2 (production, image statistics, live lock) | Yes | Yes | Same core statistics; tested on the emulator against the hub |
 | Microphone meter | Always (the microphone runs with the camera) | While live only | Android opens the microphone for the stream only: holding it at standby costs power and keeps the system's microphone indicator on |
 | Focus peaking source | The streamed frames, 9 per second | The small YUV stream (about 10 frames per second, the same as the statistics) | The same 16:9 picture; nothing extra for the ISP |
 | Image statistics source | Every frame offered, measured up to 4 per second | The small YUV stream, which Camera2 fills on about 10 frames per second (a repeating burst), measured up to 4 per second | Power: the ISP writes the extra stream only on the frames that are sampled |

@@ -4,27 +4,48 @@ import SwiftUI
 /// sets the speed, for a usable zoom move on air. Letting go stops the
 /// zoom where it is.
 struct ZoomRocker: View {
+    var length = Chrome.rocker
     /// Zoom ramp rate in doublings per second (negative zooms out); 0 stops.
     let onRate: (Double) -> Void
 
-    static let height: CGFloat = 180
-    private static let travel: CGFloat = 62
-    /// Rate at full deflection. Speed rises with the square of the
-    /// deflection, so small moves are slow.
+    /// Rate at full deflection.
     private static let maxRate = 2.0
+
+    var body: some View {
+        Rocker(high: "T", low: "W", label: "Zoom", length: length) { onRate($0 * Self.maxRate) }
+    }
+}
+
+/// A spring-loaded vertical rocker (zoom on the left edge, the adjust
+/// control on the right): push up or down; how far sets the speed. Letting
+/// go springs back and reports 0.
+struct Rocker: View {
+    let high: String
+    let low: String
+    /// For VoiceOver.
+    let label: String
+    var length = Chrome.rocker
+    /// Speed from -1 (full down) to 1 (full up). It rises with the square
+    /// of the deflection, so small moves are slow; 0 stops.
+    let onRate: (Double) -> Void
+
     private static let steps = 10
 
     @State private var deflection: CGFloat = 0
     @State private var sentStep = 0
+
+    private var travel: CGFloat {
+        (length - Chrome.control - 10) / 2
+    }
 
     var body: some View {
         ZStack {
             Capsule()
                 .fill(.black.opacity(0.35))
             VStack {
-                Text("T")
+                Text(high)
                 Spacer()
-                Text("W")
+                Text(low)
             }
             .font(.system(size: 13, weight: .semibold, design: .rounded))
             .foregroundStyle(.white.opacity(0.6))
@@ -32,21 +53,21 @@ struct ZoomRocker: View {
             Circle()
                 .fill(.white.opacity(sentStep == 0 ? 0.7 : 0.95))
                 .frame(width: 30, height: 30)
-                .offset(y: -deflection * Self.travel)
+                .offset(y: -deflection * travel)
         }
-        .frame(width: 46, height: Self.height)
+        .frame(width: Chrome.control, height: length)
         .contentShape(Capsule())
         .gesture(
             DragGesture(minimumDistance: 0)
                 .onChanged { value in
-                    deflection = min(max(-value.translation.height / Self.travel, -1), 1)
+                    deflection = min(max(-value.translation.height / travel, -1), 1)
                     let step = Int((deflection * CGFloat(Self.steps)).rounded())
                     guard step != sentStep else {
                         return
                     }
                     sentStep = step
                     let share = Double(abs(step)) / Double(Self.steps)
-                    onRate(step == 0 ? 0 : (step > 0 ? 1 : -1) * Self.maxRate * share * share)
+                    onRate(step == 0 ? 0 : (step > 0 ? 1 : -1) * share * share)
                 }
                 .onEnded { _ in
                     withAnimation(.spring(duration: 0.2)) {
@@ -56,7 +77,7 @@ struct ZoomRocker: View {
                     onRate(0)
                 }
         )
-        .accessibilityLabel("Zoom")
+        .accessibilityLabel(label)
     }
 }
 
@@ -80,7 +101,7 @@ struct LensButtons: View {
                         Text(Self.label(id, fallback: option.label))
                             .font(.system(size: 15, weight: .semibold, design: .rounded))
                             .foregroundStyle(id == current ? .yellow : .white.opacity(0.85))
-                            .frame(width: 46, height: 46)
+                            .frame(width: Chrome.control, height: Chrome.control)
                             .background(.black.opacity(0.35), in: Circle())
                             .overlay(Circle().strokeBorder(.white.opacity(0.25), lineWidth: 1))
                             .contentShape(Circle())

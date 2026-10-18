@@ -114,10 +114,6 @@ targets:
       - TallyCam/Control/CameraName.swift
       # LcpMessages reports the capture calibration.
       - TallyCam/CaptureCalibration.swift
-      # The shared ownership vectors (docs/SHADING.md), read by
-      # OwnershipVectorTests like the core's Rust tests read them.
-      - path: ../core/tests/vectors/lcp_ownership.json
-        buildPhase: resources
     preBuildScripts:
       - name: Build Rust core
         script: '"$PROJECT_DIR/../scripts/build-core-apple.sh" "$PLATFORM_NAME"'

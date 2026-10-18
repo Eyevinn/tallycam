@@ -18,6 +18,7 @@ struct SettingsView: View {
         NavigationStack {
             Form {
                 cameraSection
+                MainsSection(remote: remote, shading: remote.shading, live: controller.state != .idle)
                 connectionSection
                 streamSection
                 orientationSection
@@ -251,6 +252,42 @@ struct SettingsView: View {
         case .healthy: .green
         case .degraded: .orange
         case .bad: .red
+        }
+    }
+}
+
+/// The phone's own production: mains frequency for flicker-free shutters
+/// (off: no mains-lit light, the shutter is free). A hub's production wins
+/// while one applies; not changeable while live.
+private struct MainsSection: View {
+    let remote: RemoteControl
+    @ObservedObject var shading: Shading
+    let live: Bool
+
+    var body: some View {
+        let descriptor = shading.descriptor("mains_hz")
+        let fromHub = descriptor?.readonly == true
+        Section {
+            Picker("Mains", selection: Binding(
+                get: { shading.values["mains_hz"]?.double.map { Int($0) } ?? -1 },
+                set: { remote.localSet(["mains_hz": .int($0)]) }
+            )) {
+                Text("50 Hz").tag(50)
+                Text("60 Hz").tag(60)
+                Text("Off").tag(0)
+            }
+            .pickerStyle(.segmented)
+            .disabled(descriptor == nil || fromHub || live)
+        } header: {
+            Text("Exposure")
+        } footer: {
+            if fromHub {
+                Text("Set by the control hub")
+            } else if live {
+                Text("Stop the stream to change")
+            } else {
+                Text("The shutter follows the mains frequency so mains-powered light does not flicker. Off where no mains-lit light is in the picture (outdoors).")
+            }
         }
     }
 }

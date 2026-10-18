@@ -37,25 +37,9 @@ struct AidsMenu: View {
         .accessibilityLabel("Aids")
     }
 
+    /// Any guide or peaking on.
     private var anyOn: Bool {
         grid || horizon || safeAreas || centreCuts || peaking
-    }
-}
-
-/// A small round translucent button face, shared by the operator's chrome.
-struct ChromeButtonLabel: View {
-    let systemName: String
-    var active = false
-
-    var body: some View {
-        Image(systemName: systemName)
-            .font(.system(size: 20, weight: .medium))
-            .foregroundStyle(active ? .yellow : .white.opacity(0.85))
-            .frame(width: 46, height: 46)
-            .background(.black.opacity(0.35), in: Circle())
-            // Visible over the black bars around the picture too.
-            .overlay(Circle().strokeBorder(.white.opacity(0.25), lineWidth: 1))
-            .contentShape(Circle())
     }
 }
 

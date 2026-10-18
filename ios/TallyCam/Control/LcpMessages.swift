@@ -165,7 +165,7 @@ struct DeviceInfo: Encodable {
 struct HelloMessage: Encodable {
     let type = "hello"
     /// 1: with device keys (`public_key`, then `challenge` and `auth`).
-    /// 2: ownership of exposure, colour and focus, and production settings
+    /// 2: production settings, image statistics and the live lock
     /// (docs/SHADING.md).
     let `protocol` = 2
     let device: DeviceInfo
@@ -284,11 +284,7 @@ enum LcpIncoming {
     case preview(enabled: Bool, fps: Double, width: Int)
     /// Sign and answer with `auth` (see `DeviceKey`).
     case challenge(server: String, nonce: String)
-    /// The remote takes these control groups (docs/SHADING.md).
-    case own(id: JSONValue?, groups: [String], holderId: String, holderLabel: String)
-    /// These control groups go back to auto.
-    case release(id: JSONValue?, groups: [String])
-    /// Production settings: mains frequency and shutter.
+    /// Production settings (docs/SHADING.md): mains frequency and shutter.
     case production(mainsHz: Int, shutter: ShutterPolicy)
     /// Start or stop `image_stats`.
     case stats(enabled: Bool, fps: Double)
@@ -316,16 +312,6 @@ enum LcpIncoming {
                 return nil
             }
             return .challenge(server: server, nonce: nonce)
-        case "own":
-            guard let groups = json["groups"].flatMap(Self.strings),
-                  let holder = json["holder"]?.object, let holderId = holder["id"]?.string
-            else {
-                return nil
-            }
-            return .own(id: id, groups: groups, holderId: String(holderId.prefix(64)),
-                        holderLabel: String((holder["label"]?.string ?? "").prefix(64)))
-        case "release":
-            return json["groups"].flatMap(Self.strings).map { .release(id: id, groups: $0) }
         case "production":
             // Compared as a number: Int(Double) traps on huge values.
             guard let hz = json["mains_hz"]?.double, [0, 50, 60].contains(hz) else {
@@ -343,13 +329,6 @@ enum LcpIncoming {
         default:
             return nil
         }
-    }
-
-    private static func strings(_ value: JSONValue) -> [String]? {
-        guard case let .array(items) = value else {
-            return nil
-        }
-        return items.compactMap { if case let .string(s) = $0 { s } else { nil } }
     }
 }
 

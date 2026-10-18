@@ -2,8 +2,8 @@
 
 private let whenManualExposure: [String: JSONValue] = ["exposure_mode": .string("manual")]
 private let whenAutoExposure: [String: JSONValue] = ["exposure_mode": .string("auto")]
-/// The shutter is a production setting; under a free shutter the owner sets
-/// it in manual (`readonly` otherwise, see `currentDescriptors`).
+/// The shutter is a production setting; under a free shutter the operator or
+/// the hub sets it in manual (`readonly` otherwise, see `currentDescriptors`).
 private let whenFixedShutter: [String: JSONValue] = ["exposure_mode": .string("manual")]
 private let whenManualWhiteBalance: [String: JSONValue] = ["wb_mode": .string("manual")]
 private let whenManualFocus: [String: JSONValue] = ["focus_mode": .string("manual")]
@@ -390,13 +390,13 @@ extension CameraControls {
                     return nil
                 }
                 // The phone's own production; a hub's wins (docs/SHADING.md).
-                guard c.serverShutter == nil else {
+                guard c.serverProduction == nil else {
                     throw ControlError("set by the production on the control server")
                 }
                 guard !c.formatLocked else {
                     throw ControlError("not while live: stop the stream to change it")
                 }
-                c.mainsHz = Int(hz)
+                c.localMainsHz = Int(hz)
                 c.applyProductionShutter()
                 return nil
             }
@@ -615,7 +615,7 @@ extension CameraControls {
                             c.focusManual = false
                         }
                         // The metering point follows only iOS auto exposure; a
-                        // tap never changes the exposure mode or its owner
+                        // tap never changes the exposure mode
                         // (docs/SHADING.md).
                         if device.isExposurePointOfInterestSupported, device.exposureMode == .continuousAutoExposure {
                             device.exposurePointOfInterest = point

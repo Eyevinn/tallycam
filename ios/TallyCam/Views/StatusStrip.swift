@@ -2,12 +2,15 @@ import SwiftUI
 import UIKit
 
 /// One compact, low-contrast line of status along the top edge: live state
-/// and uptime, bitrate, remote link, clock, battery and (only when it
-/// matters) thermal state. The gear opens Settings.
+/// and uptime, bitrate, the camera's name with its tally (where the screen
+/// is wide enough), remote link, clock, battery and (only when it matters)
+/// thermal state. The gear opens Settings.
 struct StatusStrip: View {
     @ObservedObject var controller: StreamController
     @ObservedObject var remote: RemoteControl
     @ObservedObject var capture: Capture
+    /// In the middle of the line; nil when it has a row of its own.
+    var nameChip: TallyChip?
     let onSettings: () -> Void
 
     var body: some View {
@@ -21,6 +24,11 @@ struct StatusStrip: View {
                             .foregroundStyle(adapting ? .yellow : .white.opacity(0.85))
                     }
                     Spacer(minLength: 8)
+                    if let nameChip {
+                        nameChip
+                            .layoutPriority(1)
+                        Spacer(minLength: 8)
+                    }
                     if capture.orientationChangePending {
                         Image(systemName: "rotate.right")
                             .foregroundStyle(.yellow)
@@ -44,7 +52,7 @@ struct StatusStrip: View {
         .lineLimit(1)
         .padding(.leading, 12)
         .padding(.trailing, 2)
-        .frame(height: 32)
+        .frame(height: Chrome.rowHeight)
         .background(.black.opacity(0.35), in: Capsule())
     }
 

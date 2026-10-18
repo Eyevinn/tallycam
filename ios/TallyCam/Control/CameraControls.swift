@@ -87,19 +87,21 @@ final class CameraControls: @unchecked Sendable {
     var autoIsoBias: Float = 0 {
         didSet { autoIsoLoop.setBias(ev: Double(autoIsoBias)) }
     }
-    /// Mains frequency (50 or 60 Hz, 0 for none) for flicker-free shutters.
-    var mainsHz: Int {
-        didSet {
-            UserDefaults.standard.set(mainsHz, forKey: Self.mainsKey)
-            configureLoopShutter()
-        }
+    /// The phone's own mains frequency (50 or 60 Hz, 0 for none), from
+    /// Settings: its own production while no hub sends one.
+    var localMainsHz: Int {
+        didSet { UserDefaults.standard.set(localMainsHz, forKey: Self.mainsKey) }
     }
-    /// The production's shutter as the hub sent it (docs/SHADING.md,
-    /// "Shutter"). Without a hub the phone is its own production: the shutter
-    /// is one mains period, or free when `mainsHz` is 0.
-    private(set) var serverShutter: ShutterPolicy?
-    /// A production that arrived while live, applied when the stream stops.
-    private var pendingProduction: (mainsHz: Int, shutter: ShutterPolicy)?
+    /// The hub's production (docs/SHADING.md, "Shutter"); nil without a hub,
+    /// when the phone is its own production: one mains period, or free when
+    /// its mains is off. Never saved.
+    private(set) var serverProduction: Production?
+    /// A production that arrived while live (nil inside: back to the phone's
+    /// own), applied when the stream stops. A later one replaces it.
+    private var pendingProduction: Production??
+    /// The frame rate the loop's free shutter base was seeded for; nil while
+    /// the shutter is not free.
+    private var freeShutterSeededFps: Int?
     private let autoIsoLoop: AutoIsoLoop
     /// An auto ISO exposure is being applied: no samples until the device has
     /// it, since `iso` and `exposureDuration` lag behind what was commanded.
@@ -143,9 +145,10 @@ final class CameraControls: @unchecked Sendable {
             .flatMap(VideoResolution.init(rawValue:)) ?? .defaultResolution
         // 0 is "off", so tell an unset value from a stored 0.
         let storedMains = UserDefaults.standard.object(forKey: Self.mainsKey) as? Int
-        mainsHz = storedMains.flatMap { [0, 50, 60].contains($0) ? $0 : nil }
+        let mains = storedMains.flatMap { [0, 50, 60].contains($0) ? $0 : nil }
             ?? Int(mainsHzForRegion(region: Locale.current.region?.identifier ?? ""))
-        autoIsoLoop = AutoIsoLoop(mainsHz: mainsHz)
+        localMainsHz = mains
+        autoIsoLoop = AutoIsoLoop(mainsHz: mains)
         genlock.apply = { [weak self] durationNs in
             guard let self else {
                 return
@@ -221,7 +224,8 @@ final class CameraControls: @unchecked Sendable {
             if status.limit != .none {
                 let hint = status.limit == .tooDark ? "too dark: use a longer shutter or more light"
                     : mainsHz == 0 ? "too bright: use less light or an ND filter"
-                    : "too bright even at the shortest flicker-free shutter for mains light; outdoors set mains_hz off"
+                    : "too bright even at the shortest flicker-free shutter for mains light; outdoors set mains off "
+                    + (serverProduction == nil ? "in Settings" : "in the hub's production")
                 onUpdate?(.log(level: "warn", message: String(format: "Auto ISO at ISO %.0f, %@", device.iso, hint)))
             }
         }
@@ -275,13 +279,22 @@ final class CameraControls: @unchecked Sendable {
 
     // MARK: Production shutter
 
-    /// What the shutter follows now.
+    struct Production: Equatable {
+        var mainsHz: Int
+        var shutter: ShutterPolicy
+    }
+
+    /// Mains frequency (50 or 60 Hz, 0 for none) for flicker-free shutters:
+    /// the hub's production's while one applies, else the phone's own.
+    var mainsHz: Int {
+        serverProduction?.mainsHz ?? localMainsHz
+    }
+
+    /// What the shutter follows now: free when the production says so, or
+    /// when it follows mains and mains is off.
     var effectiveShutter: ShutterPolicy {
-        switch serverShutter {
-        case nil: mainsHz == 0 ? .free : .mains
-        case .mains: mainsHz == 0 ? .free : .mains
-        case let policy?: policy
-        }
+        let policy = serverProduction?.shutter ?? .mains
+        return policy == .mains && mainsHz == 0 ? .free : policy
     }
 
     /// The production's exposure duration for the active format, or nil
@@ -325,25 +338,40 @@ final class CameraControls: @unchecked Sendable {
             autoIsoLoop.setFreeShutter(baseNs: 0)
         case .free:
             autoIsoLoop.setMains(hz: 0)
-            let base = device.map { $0.exposureDuration.seconds * 1e9 } ?? 0
-            autoIsoLoop.setFreeShutter(baseNs: base > 0 ? base : 1e9 / 100)
+            // A 180° shutter, half the frame period (1/60 at 30 fps). Not
+            // the device's current shutter, which the loop may already have
+            // shortened; seeded again only when the frame rate changes.
+            let fps = currentFrameRate ?? 30
+            if freeShutterSeededFps != fps {
+                freeShutterSeededFps = fps
+                autoIsoLoop.setFreeShutter(baseNs: 1e9 / Double(fps) / 2)
+            }
+            return
         }
+        freeShutterSeededFps = nil
     }
 
     /// The hub's production settings (nil: none, the phone's own). Kept for
     /// the next stream while live. Returns a warning.
-    func setProduction(mainsHz hz: Int?, shutter: ShutterPolicy?) -> String? {
-        let next = (hz ?? mainsHz, shutter)
+    func setProduction(_ next: Production?) -> String? {
         if formatLocked {
-            if next.0 != mainsHz || next.1 != serverShutter {
-                pendingProduction = next.1.map { (next.0, $0) }
-                return "production shutter changed while live: kept until the stream stops"
+            guard next != serverProduction else {
+                pendingProduction = nil
+                return nil
             }
-            return nil
+            let changed = pendingProduction.map { $0 != next } ?? true
+            pendingProduction = .some(next)
+            return changed ? "production changed while live: kept until the stream stops" : nil
         }
-        serverShutter = shutter
-        if hz != nil, hz != mainsHz {
-            mainsHz = next.0
+        pendingProduction = nil
+        let before = (effectiveShutter, mainsHz)
+        serverProduction = next
+        guard (effectiveShutter, mainsHz) != before else {
+            // Every reconnect sends the production again: no exposure jump
+            // when nothing changed (it would undo auto ISO's steps). Only
+            // `mains_hz`'s read-only state may have changed.
+            publishControlsIfChanged(force: false)
+            return nil
         }
         applyProductionShutter()
         return nil
@@ -506,7 +534,7 @@ final class CameraControls: @unchecked Sendable {
                 ControlDescriptor(id: control.id, label: control.label, group: control.group,
                                   kind: $0, enabledWhen: control.enabledWhen)
                     .readonly(control.id == "shutter" && effectiveShutter != .free
-                        || control.id == "mains_hz" && serverShutter != nil)
+                        || control.id == "mains_hz" && serverProduction != nil)
                     .lockedWhileLive(control.id == "resolution" || control.id == "frame_rate"
                         || control.id == "mains_hz")
             }
@@ -639,7 +667,7 @@ final class CameraControls: @unchecked Sendable {
             return
         }
         pendingProduction = nil
-        _ = setProduction(mainsHz: pending.mainsHz, shutter: pending.shutter)
+        _ = setProduction(pending)
         onUpdate?(.log(level: "info", message: "Production shutter applied after the stream stopped"))
     }
 
@@ -660,8 +688,10 @@ final class CameraControls: @unchecked Sendable {
             throw ControlError("The \(lens.label) lens has no \(resolution.rawValue); stop the stream to switch")
         }
         // Exposure, colour and focus keep their modes and values on the new
-        // lens (the owner set them, docs/SHADING.md).
-        let carried = values().filter { Self.carriedOverLensSwitch.contains($0.key) }
+        // lens (someone set them, docs/SHADING.md); the shutter too when it
+        // is free (an exposure control then).
+        let free = effectiveShutter == .free
+        let carried = values().filter { Self.carriedOverLensSwitch.contains($0.key) || free && $0.key == "shutter" }
         let newInput = try AVCaptureDeviceInput(device: newDevice)
         session.beginConfiguration()
         if let input {
@@ -698,6 +728,8 @@ final class CameraControls: @unchecked Sendable {
         for control in Self.table where carried[control.id] != nil && control.kind(self) != nil {
             _ = try? control.set(self, carried[control.id]!)
         }
+        // ISO and shutter are applied together (ManualExposureRequest).
+        _ = commitExposure()
         if let warning {
             onUpdate?(.log(level: "warn", message: warning))
         }
@@ -864,7 +896,7 @@ final class CameraControls: @unchecked Sendable {
         onUpdate?(.controls(descriptors, Self.commands.map(\.descriptor), values()))
     }
 
-    /// Mode and value controls of the owned groups, in table order.
+    /// Mode and value controls of the exposure, colour and focus groups.
     private static let carriedOverLensSwitch: Set<String> = [
         "exposure_mode", "iso", "ev_bias", "wb_mode", "wb_temperature", "wb_tint", "focus_mode", "focus_position",
     ]

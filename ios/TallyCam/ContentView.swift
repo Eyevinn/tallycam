@@ -1,14 +1,17 @@
 import SwiftUI
 
-/// The shooting screen: full-bleed preview, tally, one status strip on top
-/// and the live button away from where the hands hold the phone (right
-/// edge, vertically centred in landscape; bottom centre in portrait).
+/// The shooting screen: full-bleed preview and tally, and the chrome on
+/// one grid (docs/APPS.md, `Chrome`). Information in the middle, controls
+/// at the sides, under the thumbs. Top: the status line and the camera
+/// values row, with one slot under them for banners and toasts. Left edge:
+/// lenses and zoom. Right edge: the adjust control of the group chosen in
+/// the values row. Bottom: tools left, the microphone meter right, and the live
+/// button in the bottom-right corner (bottom centre in portrait).
 /// Everything else is in Settings.
 struct ContentView: View {
-    /// Width of the tally border plus a margin: chrome stays clear of it.
-    private static let tallyClearance: CGFloat = 22
-    private static let stripHeight: CGFloat = 32
-    /// The group chips' row under the status strip.
+    /// Narrower than this (portrait iPhone), the camera's name gets a row of
+    /// its own under the status line.
+    private static let nameInlineWidth: CGFloat = 560
 
     @StateObject private var capture = Capture()
     @StateObject private var controller = StreamController()
@@ -25,77 +28,40 @@ struct ContentView: View {
     /// The in-app QR scanner is on (only while not live).
     @State private var scanning = false
     @State private var scanHint: String?
+    /// The group the adjust control at the right edge changes; remembered.
+    @AppStorage("adjust.group") private var adjustGroup = ShadingGroup.exposure
+    #if DEBUG
+        @State private var previewBackdrop = false
+    #endif
 
     var body: some View {
         GeometryReader { geometry in
             let landscape = geometry.size.width > geometry.size.height
             let insets = geometry.safeAreaInsets
-            let top = Self.edgePadding(insets.top)
             ZStack {
                 CameraStage(capture: capture, remote: remote, shading: remote.shading)
+                #if DEBUG
+                    if previewBackdrop {
+                        // A stand-in picture, so the translucent chrome shows.
+                        LinearGradient(colors: [Color(white: 0.55), Color(white: 0.3)],
+                                       startPoint: .top, endPoint: .bottom)
+                            .ignoresSafeArea()
+                            .allowsHitTesting(false)
+                    }
+                #endif
                 TallyOverlay(tally: remote.tally)
-                VStack(alignment: .leading, spacing: 6) {
-                    StatusStrip(controller: controller, remote: remote, capture: capture) {
-                        showSettings = true
-                    }
-                    // Chips left, name and tally right; on a narrow screen
-                    // the name goes to its own row, still on the right.
-                    ViewThatFits(in: .horizontal) {
-                        HStack(spacing: 6) {
-                            groupChips
-                            Spacer(minLength: 8)
-                            tallyChip
-                        }
-                        VStack(alignment: .trailing, spacing: 6) {
-                            HStack(spacing: 6) {
-                                groupChips
-                                Spacer(minLength: 0)
-                            }
-                            tallyChip
-                        }
-                    }
-                    .padding(.horizontal, 4)
-                    if let banner = remote.banner {
-                        Banner(text: banner)
-                            .frame(maxWidth: .infinity)
-                            .padding(.horizontal, 20)
-                            .padding(.top, 4)
-                            .transition(.move(edge: .top).combined(with: .opacity))
-                    }
-                }
-                .animation(.easeInOut(duration: 0.2), value: remote.banner)
-                .padding(.top, top)
-                .padding(.leading, Self.edgePadding(insets.leading))
-                .padding(.trailing, Self.edgePadding(insets.trailing))
-                .frame(maxHeight: .infinity, alignment: .top)
-                if !screenLocked {
-                    zoomControls(insets: insets)
-                    operatorButtons(insets: insets)
-                }
-                if capture.hasAudio {
-                    AudioMeter(levels: capture.mic.levels)
-                        .padding(.trailing, Self.edgePadding(insets.trailing) + 4)
-                        .padding(.bottom, Self.edgePadding(insets.bottom) + 4)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
-                }
-                liveButton(landscape: landscape, insets: insets)
-                if let toast {
-                    Toast(text: toast)
-                        .padding(.horizontal, 24)
-                        .padding(.bottom, landscape
-                            ? Self.edgePadding(insets.bottom) + 6
-                            : 20 + LiveButton.size + 18)
-                        .frame(maxHeight: .infinity, alignment: .bottom)
-                        .transition(.opacity.combined(with: .move(edge: .bottom)))
-                }
                 if screenLocked {
-                    ScreenLockLayer(bottomPadding: landscape
-                        ? Self.edgePadding(insets.bottom) + 6
-                        : 20 + LiveButton.size + 18) {
-                        withAnimation(.easeOut(duration: 0.2)) { screenLocked = false }
-                    }
-                    .transition(.opacity)
+                    ScreenLockShield()
+                        .transition(.opacity)
                 }
+                let nameInline = geometry.size.width >= Self.nameInlineWidth
+                chrome(landscape: landscape, nameInline: nameInline,
+                       rocker: Self.rockerLength(height: geometry.size.height, insets: insets,
+                                                 landscape: landscape, nameInline: nameInline))
+                    .padding(.top, Chrome.edge(insets.top))
+                    .padding(.bottom, Chrome.edge(insets.bottom))
+                    .padding(.leading, Chrome.edge(insets.leading))
+                    .padding(.trailing, Chrome.edge(insets.trailing))
                 if scanning {
                     ScanOverlay(hint: scanHint, onCancel: stopScan)
                         .transition(.opacity)
@@ -145,7 +111,13 @@ struct ContentView: View {
         }
         .task {
             remote.start(capture: capture, controller: controller)
+            #if DEBUG
+                applyPreview()
+            #endif
             await capture.start()
+            #if DEBUG
+                applyPreview()
+            #endif
         }
         // Deep link from the control hub's QR code (Provisioning v0).
         .onOpenURL { url in
@@ -153,44 +125,196 @@ struct ContentView: View {
         }
     }
 
-    private var groupChips: some View {
-        HStack(spacing: 6) {
-            GroupChips(remote: remote, shading: remote.shading, interactive: !screenLocked)
-            ExposureWarningLabel(shading: remote.shading)
+    // MARK: Zones
+
+    /// The whole chrome in one stack: the top rows, then the edge columns
+    /// with the centre between them. While the screen is locked everything
+    /// stays in place but only the slide to unlock takes touches.
+    @ViewBuilder
+    private func chrome(landscape: Bool, nameInline: Bool, rocker: CGFloat) -> some View {
+        VStack(spacing: Chrome.zoneGap) {
+            topRows(nameInline: nameInline)
+                .allowsHitTesting(!screenLocked)
+            if landscape {
+                // Left: zoom over the tools. Centre: messages, the slide to
+                // unlock, the meter. Right: the adjust control over the live
+                // button. The bottom row is the live button's height, so
+                // both edge columns centre on the same line.
+                HStack(spacing: Chrome.gap) {
+                    VStack(alignment: .leading, spacing: Chrome.zoneGap) {
+                        levelled(zoomColumn(rocker: rocker))
+                        tools
+                            .frame(height: LiveButton.size, alignment: .bottom)
+                    }
+                    VStack(spacing: Chrome.zoneGap) {
+                        messageSlot
+                            .frame(maxHeight: .infinity, alignment: .top)
+                        ZStack {
+                            unlockSlider
+                            audioMeter
+                                .frame(maxWidth: .infinity, alignment: .trailing)
+                        }
+                        .frame(height: LiveButton.size, alignment: .bottom)
+                    }
+                    .frame(maxWidth: .infinity)
+                    VStack(alignment: .trailing, spacing: Chrome.zoneGap) {
+                        levelled(adjustColumn(rocker: rocker))
+                        liveButton(hintAbove: true)
+                    }
+                }
+            } else {
+                // Mirror images, the two rockers level.
+                HStack(spacing: Chrome.gap) {
+                    levelled(zoomColumn(rocker: rocker))
+                    Spacer(minLength: 0)
+                    levelled(adjustColumn(rocker: rocker))
+                }
+                .overlay(alignment: .top) {
+                    // Between the edge columns, which are centred lower.
+                    messageSlot
+                        .padding(.horizontal, Chrome.control + Chrome.gap)
+                }
+                unlockSlider
+                HStack(alignment: .bottom, spacing: Chrome.gap) {
+                    tools
+                    Spacer(minLength: 0)
+                    audioMeter
+                }
+                liveButton(hintAbove: false)
+            }
+        }
+        .animation(.easeInOut(duration: 0.2), value: adjustGroup)
+        .animation(.easeInOut(duration: 0.2), value: screenLocked)
+        .animation(.easeInOut(duration: 0.2), value: remote.banner)
+    }
+
+    /// The rockers' length: the full one, or what a landscape phone has
+    /// between the top rows and the bottom row.
+    private static func rockerLength(height: CGFloat, insets: EdgeInsets, landscape: Bool,
+                                     nameInline: Bool) -> CGFloat
+    {
+        guard landscape else {
+            return Chrome.rocker
+        }
+        let rows: CGFloat = nameInline ? 2 : 3
+        let top = rows * Chrome.rowHeight + (rows - 1) * Chrome.rowGap
+        let free = height - Chrome.edge(insets.top) - Chrome.edge(insets.bottom) - top
+            - 2 * Chrome.zoneGap - LiveButton.size
+        return max(min(Chrome.rocker, free), 100)
+    }
+
+    /// Status line, then the camera values (the entry to exposure, colour,
+    /// focus and Settings).
+    private func topRows(nameInline: Bool) -> some View {
+        VStack(spacing: Chrome.rowGap) {
+            StatusStrip(controller: controller, remote: remote, capture: capture,
+                        nameChip: nameInline ? nameChip : nil)
+            {
+                showSettings = true
+            }
+            if !nameInline {
+                nameChip
+            }
+            CameraValuesRow(shading: remote.shading, capture: capture, selection: $adjustGroup) {
+                showSettings = true
+            }
         }
     }
 
-    private var tallyChip: some View {
+    private var nameChip: TallyChip {
         TallyChip(tally: remote.tally, cameraName: controller.displayName)
     }
 
-    private var keepAwake: Bool {
-        controller.state != .idle || remote.connected
+    /// An edge column in the full height of its zone, its rocker in the
+    /// middle: zoom and the adjust control level, whatever sits above and
+    /// below them (and the live button stays in its corner while nothing is
+    /// adjusted).
+    private func levelled(_ column: some View) -> some View {
+        ZStack(alignment: Alignment(horizontal: .center, vertical: .rockerCentre)) {
+            Color.clear
+                .frame(width: 0)
+            column
+        }
+        .frame(maxHeight: .infinity)
     }
 
-    /// Lens buttons above the zoom rocker, at the leading edge, vertically
-    /// centred (away from the live button in both orientations).
-    private func zoomControls(insets: EdgeInsets) -> some View {
-        VStack(spacing: 10) {
-            LensButtons(shading: remote.shading) { lens in
-                capture.controls.apply(["lens": .string(lens)]) { _ in }
+    /// Lens buttons above the zoom rocker; beside it, on the inner side,
+    /// where the screen is too low for both (a landscape phone).
+    private func zoomColumn(rocker: CGFloat) -> some View {
+        ViewThatFits(in: .vertical) {
+            VStack(spacing: Chrome.gap) {
+                lensButtons
+                zoomRocker(rocker)
             }
-            ZoomRocker { rate in
-                if rate == 0 {
-                    capture.controls.stopZoomRamp()
-                } else {
-                    capture.controls.rampZoom(rate: rate)
-                }
+            HStack(spacing: Chrome.gap) {
+                zoomRocker(rocker)
+                lensButtons
             }
         }
-        .padding(.leading, Self.edgePadding(insets.leading) + 4)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+        .opacity(screenLocked ? 0 : 1)
+        .allowsHitTesting(!screenLocked)
     }
 
-    /// Aids and screen lock, bottom leading; the QR scanner too while no
-    /// hub is connected and not live.
-    private func operatorButtons(insets: EdgeInsets) -> some View {
-        HStack(spacing: 10) {
+    private var lensButtons: some View {
+        LensButtons(shading: remote.shading) { lens in
+            capture.controls.apply(["lens": .string(lens)]) { _ in }
+        }
+    }
+
+    private func zoomRocker(_ length: CGFloat) -> some View {
+        ZoomRocker(length: length) { rate in
+            if rate == 0 {
+                capture.controls.stopZoomRamp()
+            } else {
+                capture.controls.rampZoom(rate: rate)
+            }
+        }
+        .alignmentGuide(.rockerCentre) { $0[VerticalAlignment.center] }
+    }
+
+    /// The chosen group's mode button, rocker and value, mirroring zoom.
+    /// Hidden (in place) while the screen is locked, as zoom is.
+    private func adjustColumn(rocker: CGFloat) -> some View {
+        AdjustControl(remote: remote, shading: remote.shading, group: adjustGroup, rockerLength: rocker)
+            .id(adjustGroup)
+            .opacity(screenLocked ? 0 : 1)
+            .allowsHitTesting(!screenLocked)
+    }
+
+    /// Operator messages and toasts, centred under the values row, over the
+    /// picture only.
+    private var messageSlot: some View {
+        VStack(spacing: Chrome.rowGap) {
+            if let banner = remote.banner {
+                Banner(text: banner)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+            if let toast {
+                Toast(text: toast)
+                    .transition(.opacity)
+            }
+        }
+    }
+
+    private func liveButton(hintAbove: Bool) -> some View {
+        LiveButton(state: controller.state, hintAbove: hintAbove, onStart: start, onStop: { controller.stop() })
+            .allowsHitTesting(!screenLocked)
+    }
+
+    @ViewBuilder
+    private var unlockSlider: some View {
+        if screenLocked {
+            SlideToUnlock {
+                withAnimation(.easeOut(duration: 0.2)) { screenLocked = false }
+            }
+            .transition(.opacity)
+        }
+    }
+
+    /// Aids and screen lock; the QR scanner too while no hub is connected
+    /// and not live.
+    private var tools: some View {
+        HStack(spacing: Chrome.gap) {
             AidsMenu()
             if !remote.connected, controller.state == .idle, !scanning {
                 Button(action: startScan) {
@@ -199,24 +323,26 @@ struct ContentView: View {
                 .accessibilityLabel("Scan QR code")
             }
             Button {
-                withAnimation(.easeOut(duration: 0.2)) { screenLocked = true }
+                withAnimation(.easeOut(duration: 0.2)) {
+                    screenLocked = true
+                }
             } label: {
                 ChromeButtonLabel(systemName: "lock")
             }
             .accessibilityLabel("Lock screen")
         }
-        .padding(.leading, Self.edgePadding(insets.leading) + 4)
-        .padding(.bottom, Self.edgePadding(insets.bottom) + 4)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+        .allowsHitTesting(!screenLocked)
     }
 
-    private func liveButton(landscape: Bool, insets: EdgeInsets) -> some View {
-        LiveButton(state: controller.state, hintBeside: landscape,
-                   onStart: start, onStop: { controller.stop() })
-            .padding(.trailing, landscape ? Self.edgePadding(insets.trailing) + 4 : 0)
-            .padding(.bottom, landscape ? 0 : 20)
-            .frame(maxWidth: .infinity, maxHeight: .infinity,
-                   alignment: landscape ? .trailing : .bottom)
+    @ViewBuilder
+    private var audioMeter: some View {
+        if capture.hasAudio {
+            AudioMeter(levels: capture.mic.levels)
+        }
+    }
+
+    private var keepAwake: Bool {
+        controller.state != .idle || remote.connected
     }
 
     private func start() {
@@ -267,9 +393,72 @@ struct ContentView: View {
         }
     }
 
-    /// Extra padding inside the safe area so chrome clears the tally border
-    /// on edges without a safe-area inset (landscape top, for example).
-    private static func edgePadding(_ inset: CGFloat) -> CGFloat {
-        max(8, tallyClearance - inset)
+    #if DEBUG
+        /// `-uiPreviewState YES`: made-up controls and values, tally, a banner
+        /// and the exposure control open, to check the layout in the
+        /// simulator (no camera). `-uiPreviewOrientation landscape` or
+        /// `portrait` turns the screen.
+        private func applyPreview() {
+            let defaults = UserDefaults.standard
+            if let orientation = defaults.string(forKey: "uiPreviewOrientation"),
+               let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene
+            {
+                let mask: UIInterfaceOrientationMask = orientation == "portrait" ? .portrait : .landscapeRight
+                scene.requestGeometryUpdate(.iOS(interfaceOrientations: mask)) { _ in }
+            }
+            guard defaults.bool(forKey: "uiPreviewState") else {
+                return
+            }
+            func modes(_ values: [String]) -> ControlKind {
+                .enumeration(values.map { ControlOption(value: .string($0), label: $0) })
+            }
+            let shading = remote.shading
+            shading.update(descriptors: [
+                ControlDescriptor(id: "exposure_mode", label: "Exposure", group: "exposure",
+                                  kind: modes(["auto", "manual", "locked"])),
+                ControlDescriptor(id: "iso", label: "ISO", group: "exposure",
+                                  kind: .range(min: 25, max: 3200, step: 1, scale: "log")),
+                ControlDescriptor(id: "ev_bias", label: "EV", group: "exposure", kind: .range(min: -2, max: 2, step: 0.1)),
+                ControlDescriptor(id: "wb_mode", label: "White balance", group: "white_balance",
+                                  kind: modes(["auto", "manual", "locked"])),
+                ControlDescriptor(id: "wb_temperature", label: "K", group: "white_balance",
+                                  kind: .range(min: 2000, max: 10000, step: 50)),
+                ControlDescriptor(id: "wb_tint", label: "Tint", group: "white_balance",
+                                  kind: .range(min: -150, max: 150, step: 1)),
+                ControlDescriptor(id: "focus_mode", label: "Focus", group: "focus",
+                                  kind: modes(["auto", "manual", "locked"])),
+                ControlDescriptor(id: "focus_position", label: "Focus", group: "focus",
+                                  kind: .range(min: 0, max: 1, step: 0.01)),
+                ControlDescriptor(id: "lens", label: "Lens", group: "lens",
+                                  kind: .enumeration([ControlOption(value: .string("ultra_wide"), label: "Ultra wide 0.5×"),
+                                                      ControlOption(value: .string("wide"), label: "Wide 1×"),
+                                                      ControlOption(value: .string("tele"), label: "Tele 4×")])),
+            ])
+            shading.update(values: [
+                "exposure_mode": .string("auto"), "iso": .number(26), "shutter": .number(100), "ev_bias": .number(0.3),
+                "wb_mode": .string("manual"), "wb_temperature": .number(5200), "wb_tint": .number(4),
+                "focus_mode": .string("auto"), "focus_position": .number(0.42), "lens": .string("wide"),
+            ])
+            shading.preview(warning: "clipping")
+            remote.preview(tally: .program, banner: "Wider please")
+            connectCardDismissed = true
+            previewBackdrop = true
+            adjustGroup = defaults.string(forKey: "uiPreviewGroup").flatMap(ShadingGroup.init(rawValue:)) ?? .exposure
+            shading.hubSet(["wb_temperature"])
+            if defaults.bool(forKey: "uiPreviewToast") {
+                showToast("Lock the screen against stray touches: lock button, bottom left")
+            }
+        }
+    #endif
+}
+
+extension VerticalAlignment {
+    /// The middle of a rocker: zoom and the adjust control line up on it.
+    private enum RockerCentre: AlignmentID {
+        static func defaultValue(in context: ViewDimensions) -> CGFloat {
+            context[VerticalAlignment.center]
+        }
     }
+
+    static let rockerCentre = VerticalAlignment(RockerCentre.self)
 }

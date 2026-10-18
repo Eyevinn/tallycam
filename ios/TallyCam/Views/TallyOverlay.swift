@@ -16,7 +16,7 @@ struct TallyOverlay: View {
 }
 
 /// The camera's name, with PREVIEW or ON AIR in the tally colour: a compact
-/// chip in the top row, so the person at the camera knows which camera this
+/// chip in the status line (its own row on a narrow screen), so the person at the camera knows which camera this
 /// is without it standing in the picture.
 struct TallyChip: View {
     let tally: RemoteControl.Tally
@@ -35,7 +35,7 @@ struct TallyChip: View {
         }
         .foregroundStyle(.white)
         .padding(.horizontal, 12)
-        .padding(.vertical, 6)
+        .frame(height: Chrome.rowHeight - 4)
         .background(tally.color ?? .black.opacity(0.55), in: Capsule())
         .accessibilityElement(children: .combine)
         .allowsHitTesting(false)

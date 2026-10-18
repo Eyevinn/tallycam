@@ -90,7 +90,7 @@ drops focus first, then white balance; it never wraps.
 ```
  ┌─┐
  │A│        mode switch: two segments, tap the other one to switch;
- │M│        the active one is filled (white auto, yellow manual or locked)
+ │M│        the active one is filled (white auto, yellow held)
  └─┘
  ┌─┐
  │+│        rocker: push up for more, down for less
@@ -103,9 +103,11 @@ drops focus first, then white balance; it never wraps.
 - **Mode switch.** A vertical two-segment switch, `A` over `M`, 46 wide with
   two 34 pt segments, the same look as the K/Tint switch. It shows the state,
   not an action: the filled segment is the current mode. Tap the other segment
-  to switch; the values are kept. The second segment reads `L` when the group
-  is locked (set by the hub, or a long press on the picture for focus) or when
-  the camera has no manual mode for it. Moving the rocker in auto switches white balance and focus to
+  to switch; the values are kept. `M` stands for any held mode: a group the
+  hub locked, focus locked by a long press on the picture, and a camera
+  without a manual mode for the group (it locks instead) all show `M`. The
+  difference does not matter to the operator; the rocker turns locked into
+  manual anyway. Moving the rocker in auto switches white balance and focus to
   manual; exposure stays in auto and changes the compensation.
 - **Rocker.** The same component as zoom, same size. About 10 changes per
   second, clamped to the control's range and snapped to its step.

@@ -12,8 +12,9 @@ import SwiftUI
 /// switches them to manual first. A long press on colour's mode button is
 /// "white balance once"; a K / Tint switch above colour's rocker picks
 /// what it ramps (K each time colour is opened). A locked group (from the
-/// hub, or focus locked on the picture) shows L; a tap goes to auto. The operator and the hub may both change the
-/// values; the last change wins (docs/SHADING.md).
+/// hub, or focus locked on the picture) shows M too; a tap on A goes to
+/// auto. The operator and the hub may both change the values; the last
+/// change wins (docs/SHADING.md).
 struct AdjustControl: View {
     let remote: RemoteControl
     @ObservedObject var shading: Shading
@@ -165,9 +166,10 @@ struct AdjustControl: View {
         }
     }
 
-    /// L when the group is locked or the camera has no manual for it.
+    /// M for any held mode: locked and manual both keep the values, and
+    /// the rocker turns locked into manual anyway.
     private var heldLabel: String {
-        mode == "locked" || heldMode == "locked" ? "L" : "M"
+        "M"
     }
 
     private func modeSegment(_ title: String, on: Bool, fill: Color) -> some View {

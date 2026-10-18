@@ -28,6 +28,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.CustomAccessibilityAction
@@ -53,11 +54,12 @@ import kotlin.math.roundToInt
  * - double tap the knob: [onReset].
  * A touch that moves less than [Chrome.tapSlop] is a tap; the knob zone is
  * the knob and 4 dp round it; a double tap is two within 350 ms (as iOS).
- * [accent] is the group's colour: the outline and the knob's ring.
+ * [accent] is the group's colour: the outline and the knob's ring. Not
+ * [enabled] (a read-only control): dimmed, and it takes no touches.
  */
 @Composable
 fun Rocker(high: String, low: String, label: String, length: Dp, accent: Color = Color.White.copy(alpha = 0.25f),
-           onStep: (Int) -> Unit = {}, onReset: () -> Unit = {}, onRate: (Double) -> Unit) {
+           enabled: Boolean = true, onStep: (Int) -> Unit = {}, onReset: () -> Unit = {}, onRate: (Double) -> Unit) {
     val travel = (length - KNOB - 20.dp) / 2
     var deflection by remember { mutableFloatStateOf(0f) }
     var sentStep by remember { mutableIntStateOf(0) }
@@ -72,7 +74,9 @@ fun Rocker(high: String, low: String, label: String, length: Dp, accent: Color =
                 customActions = listOf(CustomAccessibilityAction(high) { step(1); true },
                                        CustomAccessibilityAction(low) { step(-1); true })
             }
-            .pointerInput(length) {
+            .graphicsLayer { alpha = if (enabled) 1f else 0.4f }
+            .pointerInput(length, enabled) {
+                if (!enabled) return@pointerInput
                 val travelPx = travel.toPx()
                 // The knob and 4 dp round it, as iOS.
                 val knobZone = (KNOB / 2 + 4.dp).toPx()

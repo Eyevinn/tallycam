@@ -189,8 +189,11 @@ fun SideControl(model: AppModel, group: String, groups: List<String>, leading: B
                 model.rampZoom(it * MAX_ZOOM_RATE)
             }
         } else {
+            // Read-only where the camera cannot set it (white balance without
+            // manual post-processing, ISO without a manual sensor): dimmed.
+            val settable = ramping?.let { r -> descriptors[r.id]?.optBoolean("readonly") != true } ?: false
             Rocker(highLabel(group, tint), lowLabel(group, tint), "${title(group)} ${ramping?.label ?: ""}", SIDE_HEIGHT,
-                   Chrome.groupColor(group), onStep = ::step, onReset = ::reset) { rate = it }
+                   Chrome.groupColor(group), enabled = settable, onStep = ::step, onReset = ::reset) { rate = it }
         }
     }
     val value = @Composable {

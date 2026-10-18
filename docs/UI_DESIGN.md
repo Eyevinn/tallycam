@@ -70,9 +70,10 @@ with the bottom row above it.
    …", "Not a valid connect code", control errors), and toasts (stream errors and hints, 4 s). Nothing else goes
    there and nothing else shows messages.
 4. **Left edge** and 5. **right edge.** A side control each, mirror images,
-   in the lower part of the screen where the thumbs rest: bottom-aligned
-   just above the bottom row, at the same height on both sides (see "Side
-   control"). The upper part of the picture stays clear. Zoom on the
+   where the thumbs rest: the side control's centre at 65 % of the screen
+   height from the top, moved up only as far as it must to clear the bottom
+   row; the same height on both sides (see "Side control"). The upper part
+   of the picture stays clear. Zoom on the
    left and exposure on the right by default; each side remembers its
    choice.
 6. **Bottom row.** Left: aids menu, QR scan (only while no hub is connected and

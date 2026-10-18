@@ -6,7 +6,6 @@ import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.log2
 import kotlin.math.pow
-import kotlin.math.roundToLong
 
 /*
  * The shooting screen's rules as plain functions, free of Compose, so the
@@ -29,8 +28,15 @@ data class ValueItem(
     val ids: List<String> = emptyList(),
 )
 
-/** Numbers as both apps print them, whatever the phone's language ("0.42", never "0,42"). */
+/**
+ * Numbers as both apps print them, whatever the phone's language ("0.42",
+ * never "0,42"). Java's Formatter rounds the exact value half away from
+ * zero (0.25 → "0.3", -0.5 → "-1"), the rule both apps share.
+ */
 internal fun fmt(pattern: String, vararg args: Any): String = String.format(Locale.ROOT, pattern, *args)
+
+/** Half away from zero (-1.5 → -2, 2.5 → 3), both apps' rule for snapping and rounding. */
+fun roundHalfAway(x: Double): Double = kotlin.math.sign(x) * kotlin.math.floor(kotlin.math.abs(x) + 0.5)
 
 /**
  * The values row (docs/UI_DESIGN.md, "Values"): format, ISO (with CLIP or
@@ -54,7 +60,7 @@ fun valueItems(values: JSONObject, format: String, warning: String?): List<Value
         }
     }
     values.optDouble("shutter", 0.0).takeIf { it > 0 }?.let {
-        list += ValueItem("1/${Math.round(it)}", tone = held, group = "exposure", ids = listOf("shutter"))
+        list += ValueItem("1/${roundHalfAway(it).toLong()}", tone = held, group = "exposure", ids = listOf("shutter"))
     }
     val bias = values.optDouble("ev_bias", 0.0)
     if (!exposureHeld && abs(bias) >= 0.05) list += ValueItem(fmt("%+.1f EV", bias), group = "exposure", ids = listOf("ev_bias"))
@@ -184,7 +190,7 @@ fun rampSet(r: Ramped, group: String, descriptors: Map<String, JSONObject>, raw:
     if (low.isNaN() || high.isNaN() || high <= low) return null
     var value = raw
     val step = d.optDouble("step", 0.0)
-    if (step > 0) value = (value / step).roundToLong() * step
+    if (step > 0) value = roundHalfAway(value / step) * step
     value = value.coerceIn(low, high)
     // Clean decimals: 0.30000000000000004 is 0.3.
     value = Math.round(value * 1e6) / 1e6
@@ -208,7 +214,7 @@ fun tapStep(group: String, values: JSONObject, descriptors: Map<String, JSONObje
     if (group == "zoom") {
         val d = descriptors["zoom"] ?: return null
         val current = base ?: values.optDouble("zoom", 1.0)
-        val zoom = (Math.round(current * 2.0.pow(ZOOM_TAP * direction) * 100) / 100.0)
+        val zoom = (roundHalfAway(current * 2.0.pow(ZOOM_TAP * direction) * 100) / 100.0)
             .coerceIn(d.optDouble("min", 1.0), d.optDouble("max", 1.0))
         return JSONObject().put("zoom", zoom)
     }

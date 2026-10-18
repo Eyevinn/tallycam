@@ -1,5 +1,5 @@
 {
-  "about": "Shared UI vectors for the iOS and Android apps (docs/UI_DESIGN.md): the values row, the side controls' value labels, the rockers' tap steps and double-tap neutral values, and which group each side control runs. Numbers print with a point in every language. `tone`: auto (white), held (yellow, manual), orange, red. The modes are auto and manual; \"locked\" (older hubs) reads as manual. A step's `expect` is the set the app sends (the mode first where it has to change); `base` is a quick tap's last value. A neutral's `expect` is a set, a command, or null (nothing to do). Sides: `left_hidden` / `right_hidden` default false (a side folded into its tab, keeping its group); actions are `choose` (a selector tap), `hide` and `show` (the tab at the side, shown or hidden) and `values_tap`.",
+  "about": "Shared UI vectors for the iOS and Android apps (docs/UI_DESIGN.md): the values row, the side controls' value labels, the rockers' tap steps and double-tap neutral values, and which group each side control runs. Numbers print with a point in every language, and every rounding (printing, snapping to a step) is half away from zero on the exact value: 0.25 → 0.3, -0.25 → -0.3, 0.5 → 1, -1.5 → -2. `tone`: auto (white), held (yellow, manual), orange, red. The modes are auto and manual; \"locked\" (older hubs) reads as manual. A step's `expect` is the set the app sends (the mode first where it has to change); `base` is a quick tap's last value. A neutral's `expect` is a set, a command, or null (nothing to do). Sides: `left_hidden` / `right_hidden` default false (a side folded into its tab, keeping its group); actions are `choose` (a selector tap), `hide` and `show` (the tab at the side, shown or hidden) and `values_tap`.",
   "format": [
     { "width": 1920, "height": 1080, "fps": 30, "expect": "1080p30" },
     { "width": 3840, "height": 2160, "fps": 30, "expect": "4K30" },
@@ -84,6 +84,25 @@
       ]
     },
     {
+      "name": "halves round away from zero",
+      "format": "",
+      "values": { "exposure_mode": "auto", "iso": 100.5, "ev_bias": 0.25, "wb_mode": "manual", "wb_temperature": 5212.5, "wb_tint": 0.5 },
+      "expect": [
+        { "text": "ISO 101", "tone": "auto", "group": "exposure" },
+        { "text": "+0.3 EV", "tone": "auto", "group": "exposure" },
+        { "text": "5213 K +1", "tone": "held", "group": "white_balance" }
+      ]
+    },
+    {
+      "name": "negative halves round away from zero",
+      "format": "",
+      "values": { "exposure_mode": "auto", "ev_bias": -0.25, "wb_mode": "manual", "wb_temperature": 3200, "wb_tint": -0.5 },
+      "expect": [
+        { "text": "-0.3 EV", "tone": "auto", "group": "exposure" },
+        { "text": "3200 K -1", "tone": "held", "group": "white_balance" }
+      ]
+    },
+    {
       "name": "white balance without a temperature (Android's auto)",
       "format": "1080p30",
       "values": { "wb_mode": "auto", "focus_mode": "manual" },
@@ -112,6 +131,10 @@
     { "group": "white_balance", "tint": false, "values": { "wb_mode": "manual", "wb_temperature": 5200 }, "expect": "5200 K" },
     { "group": "white_balance", "tint": true, "values": { "wb_mode": "manual", "wb_temperature": 5200, "wb_tint": -6 }, "expect": "Tint -6" },
     { "group": "white_balance", "tint": true, "values": { "wb_mode": "manual", "wb_tint": 0 }, "expect": "Tint +0" },
+    { "group": "exposure", "tint": false, "values": { "exposure_mode": "auto", "ev_bias": 0.25 }, "expect": "+0.3 EV" },
+    { "group": "exposure", "tint": false, "values": { "exposure_mode": "auto", "ev_bias": -0.25 }, "expect": "-0.3 EV" },
+    { "group": "white_balance", "tint": true, "values": { "wb_mode": "manual", "wb_tint": 0.5 }, "expect": "Tint +1" },
+    { "group": "white_balance", "tint": true, "values": { "wb_mode": "manual", "wb_tint": -0.5 }, "expect": "Tint -1" },
     { "group": "focus", "tint": false, "values": { "focus_mode": "auto", "focus_position": 0.3 }, "expect": "AF" },
     { "group": "focus", "tint": false, "values": { "focus_mode": "manual", "focus_position": 0.42 }, "expect": "F 0.42" }
   ],
@@ -136,6 +159,7 @@
     { "name": "30 fps", "utc_ns": 1792327906500000000, "utc_offset_s": 7200, "fps": 30, "synced": true, "expect": "14:51:46:15" },
     { "name": "not synchronised", "utc_ns": 1792327906500000000, "utc_offset_s": 7200, "fps": 25, "synced": false, "expect": "14:51:46:--" },
     { "name": "past midnight, last frame", "utc_ns": 1792367999990000000, "utc_offset_s": 7200, "fps": 30, "synced": true, "expect": "01:59:59:29" },
+    { "name": "50 fps in integer math", "utc_ns": 1792327906580000000, "utc_offset_s": 7200, "fps": 50, "synced": true, "expect": "14:51:46:29" },
     { "name": "west of UTC", "utc_ns": 1792327906500000000, "utc_offset_s": -18000, "fps": 25, "synced": true, "expect": "07:51:46:12" }
   ],
   "descriptors": {
@@ -158,6 +182,7 @@
     { "name": "K from auto goes manual", "group": "white_balance", "tint": false, "values": { "wb_mode": "auto", "wb_temperature": 5200 }, "direction": -1, "expect": { "wb_temperature": 5100, "wb_mode": "manual" } },
     { "name": "K without a temperature starts mid-range", "group": "white_balance", "tint": false, "values": { "wb_mode": "auto" }, "direction": 1, "expect": { "wb_temperature": 6100, "wb_mode": "manual" } },
     { "name": "tint up", "group": "white_balance", "tint": true, "values": { "wb_mode": "manual", "wb_temperature": 5200, "wb_tint": 4 }, "direction": 1, "expect": { "wb_tint": 5 } },
+    { "name": "a tint half snaps away from zero", "group": "white_balance", "tint": true, "values": { "wb_mode": "manual", "wb_temperature": 5200, "wb_tint": -2.5 }, "direction": 1, "expect": { "wb_tint": -2 } },
     { "name": "focus far", "group": "focus", "tint": false, "values": { "focus_mode": "manual", "focus_position": 0.42 }, "direction": 1, "expect": { "focus_position": 0.44 } },
     { "name": "focus from auto goes manual", "group": "focus", "tint": false, "values": { "focus_mode": "auto", "focus_position": 0.5 }, "direction": -1, "expect": { "focus_position": 0.48, "focus_mode": "manual" } },
     { "name": "focus clamped", "group": "focus", "tint": false, "values": { "focus_mode": "manual", "focus_position": 0.99 }, "direction": 1, "expect": { "focus_position": 1 } },

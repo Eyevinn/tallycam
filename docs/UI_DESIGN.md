@@ -192,7 +192,7 @@ Right side shown; the left one is its mirror image.
 | Exposure, auto | `+` / `−` | `ev_bias` 2 EV/s | 0.3 EV | EV 0 |
 | Exposure, manual | `+` / `−` | `iso` 2 stops/s (log) | 1/3 stop | back to auto |
 | White balance, K | `K+` / `K−` | `wb_temperature` 1500 K/s | 100 K | white balance once |
-| White balance, Tint | `M` / `G` (magenta, green) | `wb_tint` 60/s | 1 | tint 0 (the mode unchanged) |
+| White balance, Tint | `M` / `G` (magenta, green) | `wb_tint` 60/s | 1 | tint 0, in manual white balance (nothing in auto or locked) |
 | Focus | `Far` / `Near` | `focus_position` 0.4/s | 0.02 | back to auto |
 | Zoom | `T` / `W` | 2 doublings/s | 1/4 doubling | the lens's own 1× (no digital zoom) |
 

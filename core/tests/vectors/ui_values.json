@@ -163,7 +163,9 @@
     { "group": "exposure", "tint": false, "values": { "exposure_mode": "manual", "iso": 400 }, "expect": { "set": { "exposure_mode": "auto" } } },
     { "group": "exposure", "tint": false, "values": { "exposure_mode": "locked" }, "expect": { "set": { "exposure_mode": "auto" } } },
     { "group": "white_balance", "tint": false, "values": { "wb_mode": "manual", "wb_temperature": 3200 }, "expect": { "command": "wb_one_shot" } },
-    { "group": "white_balance", "tint": true, "values": { "wb_mode": "auto", "wb_tint": 6 }, "expect": { "set": { "wb_tint": 0 } } },
+    { "group": "white_balance", "tint": true, "values": { "wb_mode": "manual", "wb_tint": 6 }, "expect": { "set": { "wb_tint": 0 } } },
+    { "group": "white_balance", "tint": true, "values": { "wb_mode": "auto", "wb_tint": 6 }, "expect": null },
+    { "group": "white_balance", "tint": true, "values": { "wb_mode": "locked", "wb_tint": 6 }, "expect": null },
     { "group": "focus", "tint": false, "values": { "focus_mode": "manual", "focus_position": 0.4 }, "expect": { "set": { "focus_mode": "auto" } } },
     { "group": "focus", "tint": false, "values": { "focus_mode": "auto" }, "expect": null },
     { "group": "zoom", "tint": false, "values": { "zoom": 3.2 }, "expect": { "set": { "zoom": 1 } } }

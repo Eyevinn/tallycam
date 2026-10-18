@@ -191,14 +191,15 @@ sealed class Neutral {
 
 /**
  * A double tap on the knob: the neutral value (docs/UI_DESIGN.md). EV 0 in
- * auto exposure, else back to auto; white balance once (K) or tint 0 with
- * the mode as it is; focus back to auto; zoom the lens's own 1×.
+ * auto exposure, else back to auto; white balance once (K) or tint 0 (in
+ * manual white balance only); focus back to auto; zoom the lens's own 1×.
  */
 fun neutral(group: String, values: JSONObject, tint: Boolean): Neutral? {
     if (group == "zoom") return Neutral.Set(JSONObject().put("zoom", 1.0))
     val mode = values.optString(modeKey(group), "auto")
     return when {
-        group == "white_balance" && tint -> Neutral.Set(JSONObject().put("wb_tint", 0.0))
+        // Tint 0 only in manual white balance: the camera refuses a tint outside it.
+        group == "white_balance" && tint -> if (mode == "manual") Neutral.Set(JSONObject().put("wb_tint", 0.0)) else null
         group == "white_balance" -> Neutral.Command("wb_one_shot")
         group == "exposure" && mode == "auto" -> Neutral.Set(JSONObject().put("ev_bias", 0.0))
         mode != "auto" -> Neutral.Set(JSONObject().put(modeKey(group), "auto"))

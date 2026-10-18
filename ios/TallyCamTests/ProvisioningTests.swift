@@ -40,6 +40,14 @@ final class ProvisioningTests: XCTestCase {
         }
     }
 
+    func testScannedLink() throws {
+        let scanned = try XCTUnwrap(ProvisioningLink.scannedLink(" \(hubLink)\n"))
+        XCTAssertNotNil(ProvisioningLink(url: scanned, deviceId: deviceId))
+        XCTAssertNotNil(ProvisioningLink.scannedLink("TALLYCAM://connect"))
+        XCTAssertNil(ProvisioningLink.scannedLink("https://example.com"))
+        XCTAssertNil(ProvisioningLink.scannedLink("WIFI:S:venue;T:WPA;P:secret;;"))
+    }
+
     func testStreamId() {
         XCTAssertEqual(ProvisioningLink.streamId(deviceId: deviceId), "cam-3f2a9c1d")
         XCTAssertEqual(ProvisioningLink.streamId(deviceId: "ab"), "cam-ab")

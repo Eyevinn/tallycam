@@ -35,8 +35,8 @@ cannot tell them apart except by `hello.device.platform`.
 | Operator message | A yellow banner under the chip, for 8 s ("Exposure taken over by Shader" when a hub takes a group) |
 | Status line | One translucent line on top: a dot and STANDBY / CONNECTING / LIVE (with the bitrate while live), the hub link dot (green connected, orange connecting, grey not set up), the clock dot (green healthy, orange degraded, red bad), the battery, and the Settings button. iOS also shows the thermal state when it matters and an icon while an orientation change waits |
 | Live button | A ringed circle on the right edge in landscape: dark at standby, orange while connecting, red while live; a haptic when it goes live or stops |
-| Not connected | A card: "Not connected", how to scan the hub's QR code |
-| Operator chrome | Left edge: lens buttons (the lenses the camera has, longest on top) above a zoom rocker (speed by deflection). Bottom left: the aids menu (grid, horizon level, safe areas 93 % / 90 %, centre cuts 4:3 and 9:16, focus peaking in red), each a persisted toggle drawn over the preview only, and the screen lock (every touch blocked but a slide to unlock; suggested in a toast at Go Live). Bottom right: the microphone meter (RMS bar, falling peak line, clip marker) |
+| Not connected | A card: "Not connected", "Scan QR code" (the in-app scanner; the system Camera app works too), "Enter manually" |
+| Operator chrome | Left edge: lens buttons (the lenses the camera has, longest on top) above a zoom rocker (speed by deflection). Bottom left: the aids menu (grid, horizon level, safe areas 93 % / 90 %, centre cuts 4:3 and 9:16, focus peaking in red), each a persisted toggle drawn over the preview only, the QR scanner while no hub is connected and not live, and the screen lock (every touch blocked but a slide to unlock; suggested in a toast at Go Live). Bottom right: the microphone meter (RMS bar, falling peak line, clip marker) |
 
 ## Settings
 
@@ -65,7 +65,6 @@ its own dark (#16181E), so launchers' masks keep the tally dot.
 | Genlock | In every exposure mode | In every exposure mode with `MANUAL_SENSOR` | Camera2 applies a frame duration only with its auto exposure off, which it always is there |
 | `wb_temperature` | Any Kelvin | The nearest AWB preset (2700 to 7500 K) | Camera2 offers presets; colour gains per sensor would need calibration |
 | `wb_tint` | Yes | No | As above |
-| QR scanning | The system Camera app | The system camera, or the in-app scanner | Not every Android camera app opens `tallycam://` links |
 | `torch_probe` | Yes | No | A measurement tool (docs/GENLOCK.md); add when Android genlock is measured |
 | `frame_duration` (Debug) | Yes | No | A measurement tool |
 | Protocol 2 (ownership, production, image statistics, live lock) | Yes | Yes | Same core state machine and statistics; tested on the emulator against the hub |

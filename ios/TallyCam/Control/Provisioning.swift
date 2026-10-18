@@ -53,6 +53,17 @@ struct ProvisioningLink: Equatable {
         }
     }
 
+    /// The text of a scanned QR code as a TallyCam link, or nil when the
+    /// code is something else (a web address, a Wi-Fi code).
+    static func scannedLink(_ text: String) -> URL? {
+        guard let url = URL(string: text.trimmingCharacters(in: .whitespacesAndNewlines)),
+              url.scheme?.lowercased() == scheme
+        else {
+            return nil
+        }
+        return url
+    }
+
     /// "cam-" and the first 8 characters of the device id, lowercased.
     static func streamId(deviceId: String) -> String {
         let compact = deviceId.filter { $0.isLetter || $0.isNumber }.lowercased()

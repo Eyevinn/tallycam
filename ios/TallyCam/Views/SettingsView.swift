@@ -6,6 +6,8 @@ struct SettingsView: View {
     @ObservedObject var remote: RemoteControl
     @ObservedObject var controller: StreamController
     @ObservedObject var capture: Capture
+    /// Closes Settings and starts the in-app QR scanner.
+    let onScan: () -> Void
     @Environment(\.dismiss) private var dismiss
 
     @State private var confirmForget = false
@@ -74,6 +76,12 @@ struct SettingsView: View {
                     initialControlUrl = remote.url
                     remote.reconnect()
                 }
+            Button {
+                onScan()
+            } label: {
+                Label("Scan QR code", systemImage: "qrcode.viewfinder")
+            }
+            .disabled(controller.state != .idle)
             if !remote.isUnconfigured {
                 Button("Disconnect and forget server", role: .destructive) {
                     confirmForget = true
@@ -92,8 +100,9 @@ struct SettingsView: View {
         } header: {
             Text("Control hub")
         } footer: {
-            Label("To connect, scan the QR code in the control hub with the iPhone Camera app.",
-                  systemImage: "qrcode.viewfinder")
+            Text(controller.state == .idle
+                ? "To connect, scan the QR code in the control hub here or with the Camera app."
+                : "Stop the stream to scan here; the Camera app works while live.")
         }
     }
 

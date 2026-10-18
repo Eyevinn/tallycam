@@ -17,6 +17,7 @@ final class Capture: ObservableObject {
     let outputs = CaptureOutputs()
     let mic = MicCapture()
     let controls: CameraControls
+    private let qrScanner = QrScanner()
     @Published var status = "Starting camera"
     /// Why there is no camera picture (no access, no camera), if so.
     @Published private(set) var cameraError: String?
@@ -80,6 +81,18 @@ final class Capture: ObservableObject {
             if let error {
                 log.info("Tap to focus failed: \(error, privacy: .public)")
             }
+        }
+    }
+
+    /// Looks for QR codes in the camera picture; `onCode` gets each new one
+    /// on the main queue. Nil stops.
+    func scanQrCodes(onCode: (@MainActor (String) -> Void)?) {
+        let qrScanner = qrScanner
+        let handler: ((String) -> Void)? = onCode.map { onCode in
+            { code in MainActor.assumeIsolated { onCode(code) } }
+        }
+        sessionQueue.async {
+            qrScanner.setScanning(handler != nil, onCode: handler)
         }
     }
 
@@ -204,6 +217,7 @@ final class Capture: ObservableObject {
         let videoOutput = videoOutput
         let outputs = outputs
         let controls = controls
+        let qrScanner = qrScanner
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             sessionQueue.async {
                 session.beginConfiguration()
@@ -226,6 +240,7 @@ final class Capture: ObservableObject {
                 if session.canAddOutput(videoOutput) {
                     session.addOutput(videoOutput)
                 }
+                qrScanner.attach(to: session)
                 controls.attach(device: device, input: videoInput, frameRate: 30)
                 session.commitConfiguration()
                 session.startRunning()

@@ -3,6 +3,7 @@ import SwiftUI
 /// Shown once, centred, while no control hub is set up. Dismissible; the
 /// same instructions stay in Settings.
 struct ConnectCard: View {
+    let onScan: () -> Void
     let onSettings: () -> Void
     let onDismiss: () -> Void
 
@@ -12,22 +13,29 @@ struct ConnectCard: View {
                 .font(.system(size: 36, weight: .light))
             Text("Not connected")
                 .font(.headline)
-            Text("Scan the QR code in the control hub with the Camera app.")
+            Text("Scan the QR code in the control hub, here or with the Camera app.")
                 .font(.subheadline)
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.white.opacity(0.8))
+            Button(action: onScan) {
+                Label("Scan QR code", systemImage: "qrcode.viewfinder")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .foregroundStyle(.black)
+            .tint(.white)
+            .padding(.top, 4)
             HStack(spacing: 12) {
                 Button("Enter manually", action: onSettings)
                     .buttonStyle(.bordered)
                     .foregroundStyle(.white)
                 Button(action: onDismiss) {
-                    Text("OK").frame(minWidth: 44)
+                    Text("Not now").frame(minWidth: 44)
                 }
-                .buttonStyle(.borderedProminent)
-                .foregroundStyle(.black)
+                .buttonStyle(.bordered)
+                .foregroundStyle(.white)
             }
             .tint(.white)
-            .padding(.top, 4)
         }
         .foregroundStyle(.white)
         .padding(22)

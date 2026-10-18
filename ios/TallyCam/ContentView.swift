@@ -22,6 +22,9 @@ struct ContentView: View {
     @State private var toastTask: Task<Void, Never>?
     /// Touches blocked except the slide to unlock; not persisted.
     @State private var screenLocked = false
+    /// The in-app QR scanner is on (only while not live).
+    @State private var scanning = false
+    @State private var scanHint: String?
 
     var body: some View {
         GeometryReader { geometry in
@@ -93,8 +96,13 @@ struct ContentView: View {
                     }
                     .transition(.opacity)
                 }
-                if remote.isUnconfigured, !connectCardDismissed, !showSettings, !screenLocked {
-                    ConnectCard(onSettings: { showSettings = true },
+                if scanning {
+                    ScanOverlay(hint: scanHint, onCancel: stopScan)
+                        .transition(.opacity)
+                }
+                if remote.isUnconfigured, !connectCardDismissed, !showSettings, !screenLocked, !scanning {
+                    ConnectCard(onScan: startScan,
+                                onSettings: { showSettings = true },
                                 onDismiss: { withAnimation { connectCardDismissed = true } })
                         .padding(24)
                         .transition(.opacity.combined(with: .scale(scale: 0.95)))
@@ -107,7 +115,10 @@ struct ContentView: View {
         // While live, edge swipes need a second swipe (no accidental app switch).
         .defersSystemGestures(on: controller.state == .idle ? [] : .all)
         .sheet(isPresented: $showSettings) {
-            SettingsView(remote: remote, controller: controller, capture: capture)
+            SettingsView(remote: remote, controller: controller, capture: capture) {
+                showSettings = false
+                startScan()
+            }
         }
         // A camera on a tripod must not lock itself: stay awake while live
         // or while a control server can reach it.
@@ -176,10 +187,17 @@ struct ContentView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
     }
 
-    /// Aids and screen lock, bottom leading.
+    /// Aids and screen lock, bottom leading; the QR scanner too while no
+    /// hub is connected and not live.
     private func operatorButtons(insets: EdgeInsets) -> some View {
         HStack(spacing: 10) {
             AidsMenu()
+            if !remote.connected, controller.state == .idle, !scanning {
+                Button(action: startScan) {
+                    ChromeButtonLabel(systemName: "qrcode.viewfinder")
+                }
+                .accessibilityLabel("Scan QR code")
+            }
             Button {
                 withAnimation(.easeOut(duration: 0.2)) { screenLocked = true }
             } label: {
@@ -210,6 +228,31 @@ struct ContentView: View {
             // Suggested, not forced: a camera on a tripod may need its controls.
             showToast("Lock the screen against stray touches: lock button, bottom left")
         }
+    }
+
+    /// Scans with the camera's own session until a TallyCam code is seen,
+    /// then provisions as the deep link from the Camera app does. Not while
+    /// live: the stream's session stays as it is.
+    private func startScan() {
+        guard controller.state == .idle else {
+            showToast("Stop the stream to scan a QR code")
+            return
+        }
+        scanHint = nil
+        withAnimation(.easeOut(duration: 0.2)) { scanning = true }
+        capture.scanQrCodes { code in
+            guard let link = ProvisioningLink.scannedLink(code) else {
+                scanHint = "Not a TallyCam code"
+                return
+            }
+            stopScan()
+            remote.provision(from: link, controller: controller)
+        }
+    }
+
+    private func stopScan() {
+        capture.scanQrCodes(onCode: nil)
+        withAnimation(.easeIn(duration: 0.2)) { scanning = false }
     }
 
     private func showToast(_ text: String) {

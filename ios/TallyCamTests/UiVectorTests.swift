@@ -89,10 +89,7 @@ final class UiVectorTests: XCTestCase {
         guard case let .array(order)? = try vectors()["drop_order"] else {
             return XCTFail("no drop_order")
         }
-        // The vector may list only the start of the order (the steps both
-        // apps share so far); the app's order begins with it.
-        let expected = order.compactMap(\.string)
-        XCTAssertEqual(Array(UiRules.dropOrder.map(\.rawValue).prefix(expected.count)), expected)
+        XCTAssertEqual(UiRules.dropOrder.map(\.rawValue), order.compactMap(\.string))
     }
 
     func testAdjustValue() throws {

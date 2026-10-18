@@ -159,7 +159,7 @@ enum UiRules {
 
     /// What the top bar (and a narrow values row) leaves out when it does
     /// not fit, in this order; it never wraps. Only after all of these is
-    /// the camera name shortened; the timecode stays whole.
+    /// the camera name shortened.
     static let dropOrder: [DropStep] = [.focus, .whiteBalance, .tallyLabel, .evBias, .shutter]
 
     /// `items` without what the first `count` steps of `dropOrder` leave out
@@ -269,7 +269,7 @@ enum UiRules {
         return h > 0 ? fmt("%d:%02d:%02d", h, m, s) : fmt("%02d:%02d", m, s)
     }
 
-    /// The top bar's time-of-day timecode, "14:51:46:12": local time from
+    /// The time-of-day timecode badge, "14:51:46:12": local time from
     /// UTC ns (the disciplined clock's), frames at `fps`; "--" frames when
     /// the clock is not synchronised (or no frame rate).
     static func timecode(utcNs: Int64, fps: Int, timeZone: TimeZone = .current, synced: Bool) -> String {

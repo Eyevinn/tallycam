@@ -186,7 +186,10 @@ struct ContentView: View {
                         messageSlot
                             .frame(maxHeight: .infinity, alignment: .top)
                         ZStack {
-                            unlockSlider
+                            HStack(spacing: Chrome.gap) {
+                                unlockSlider
+                                timecode
+                            }
                             audioMeter
                                 .frame(maxWidth: .infinity, alignment: .trailing)
                         }
@@ -209,6 +212,8 @@ struct ContentView: View {
                 unlockSlider
                 HStack(alignment: .bottom, spacing: Chrome.gap) {
                     tools
+                    Spacer(minLength: 0)
+                    timecode
                     Spacer(minLength: 0)
                     audioMeter
                 }
@@ -257,10 +262,21 @@ struct ContentView: View {
                     .padding(.horizontal, LiveButton.size + 3 * Chrome.gap + 12)
                     .frame(maxHeight: .infinity, alignment: .top)
             }
-            unlockSlider
-                .frame(maxHeight: .infinity, alignment: .bottom)
-                .padding(.bottom, landscape ? 0 : SideMetrics.rocker + Chrome.gap + SideMetrics.rowsHeight + Chrome.gap)
+            // The timecode at the bottom centre (between the side controls in
+            // landscape, just above them in portrait), the slide to unlock
+            // over it while the screen is locked.
+            VStack(spacing: Chrome.gap) {
+                unlockSlider
+                timecode
+            }
+            .frame(maxHeight: .infinity, alignment: .bottom)
+            .padding(.bottom, landscape ? 0 : SideMetrics.rocker + Chrome.gap + SideMetrics.rowsHeight + Chrome.gap)
         }
+    }
+
+    /// The time-of-day timecode badge (docs/UI_DESIGN.md, zone 1).
+    private var timecode: some View {
+        Timecode(fps: capture.format.frameRate, health: remote.clock?.health)
     }
 
     /// The message band above the side controls in portrait: two lines of

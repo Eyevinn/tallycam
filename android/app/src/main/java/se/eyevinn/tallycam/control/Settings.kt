@@ -1,6 +1,7 @@
 package se.eyevinn.tallycam.control
 
 import android.content.Context
+import kotlin.math.roundToLong
 
 /** What the phone keeps across launches, in SharedPreferences. */
 class Settings(context: Context) {
@@ -47,4 +48,23 @@ class Settings(context: Context) {
     var bitrateKbps: Int
         get() = prefs.getInt("bitrateKbps", 0)
         set(value) = prefs.edit().putInt("bitrateKbps", value).apply()
+
+    /** Soft genlock (docs/GENLOCK.md): off until turned on, then kept. */
+    var genlock: Boolean
+        get() = prefs.getBoolean("genlockEnabled", false)
+        set(value) = prefs.edit().putBoolean("genlockEnabled", value).apply()
+
+    /** Where frames land after each grid point, µs: a per-model calibration, so kept. */
+    var genlockOffsetUs: Double
+        get() = clampedGenlockOffsetUs(prefs.getLong("genlockOffsetNs", 0) / 1000.0)
+        set(value) = prefs.edit().putLong("genlockOffsetNs", (clampedGenlockOffsetUs(value) * 1000).roundToLong()).apply()
+
+    companion object {
+        /** The advertised range of `genlock_offset_us`, ±µs. */
+        const val GENLOCK_OFFSET_MAX_US = 50000.0
+
+        /** Within ±[GENLOCK_OFFSET_MAX_US]; not finite is 0. */
+        fun clampedGenlockOffsetUs(us: Double): Double =
+            if (us.isFinite()) us.coerceIn(-GENLOCK_OFFSET_MAX_US, GENLOCK_OFFSET_MAX_US) else 0.0
+    }
 }

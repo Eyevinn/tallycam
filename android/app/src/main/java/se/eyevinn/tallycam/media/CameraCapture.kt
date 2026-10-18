@@ -27,8 +27,10 @@ import android.util.Range
 import android.util.Size
 import android.view.Surface
 import se.eyevinn.tallycam.core.Hot
+import se.eyevinn.tallycam.control.Settings as Prefs
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.Executor
+import kotlin.math.roundToLong
 
 /**
  * A back camera through Camera2: a preview Surface, a small YUV reader for
@@ -133,7 +135,11 @@ class CameraCapture(context: Context) {
     /** Run once the session no longer uses the surfaces it dropped (camera thread). */
     private val afterConfigure = mutableListOf<() -> Unit>()
 
-    @Volatile var settings = Settings()
+    /** Genlock on/off and its offset (a per-model calibration) are kept across launches. */
+    private val prefs = Prefs(context)
+
+    @Volatile var settings = Settings(genlock = prefs.genlock,
+                                      genlockOffsetNs = (prefs.genlockOffsetUs * 1000).roundToLong())
         private set
 
     @Volatile var measured = Measured(null, null, null, null)
@@ -159,6 +165,14 @@ class CameraCapture(context: Context) {
     /** At most every this many ns a JPEG goes to `onThumbnail`; 0 for none. */
     @Volatile var thumbnailIntervalNs = 0L
 
+    /**
+     * Width of the preview JPEGs, 16 to 4096 (the height keeps the aspect
+     * ratio). The frames are scaled down to it, never up, so the session
+     * is not rebuilt for it.
+     */
+    @Volatile var thumbnailWidth = 480
+        set(value) { field = value.coerceIn(16, 4096) }
+
     /** Receives preview JPEGs (on the preview thread); null stops them. */
     @Volatile var onThumbnail: ((ByteArray, Int, Int) -> Unit)? = null
     private var lastThumbNs = 0L
@@ -168,6 +182,8 @@ class CameraCapture(context: Context) {
     /** Reused NV21 frame; busy while the preview thread compresses it. */
     private var nv21 = ByteArray(0)
     private val nv21Busy = java.util.concurrent.atomic.AtomicBoolean(false)
+    /** Reused scaled NV21 frame (preview thread, while [nv21Busy]). */
+    private var scaledNv21 = ByteArray(0)
     /** Every Nth result updates [measured] (read four times a second). */
     private var resultCount = 0
     /** Two status arrays, alternated, so a reader never sees one being written. */
@@ -318,7 +334,7 @@ class CameraCapture(context: Context) {
 
     /** [refit]: fit the shutter whatever changed (another lens has other ranges). */
     private fun change(refit: Boolean = false, change: (Settings) -> Settings) {
-        synchronized(this) {
+        val (old, new) = synchronized(this) {
             val before = settings
             val after = change(before)
             // Only when what the shutter follows changed: a zoom tick or a
@@ -331,7 +347,10 @@ class CameraCapture(context: Context) {
                 fitKey(before.copy(exposureMode = after.exposureMode)) == fitKey(after)
             val fit = refit || (fitKey(after) != fitKey(before) && !leftAutoOnly)
             settings = if (fit) fitShutter(after) else after
+            before to settings
         }
+        if (new.genlock != old.genlock) prefs.genlock = new.genlock
+        if (new.genlockOffsetNs != old.genlockOffsetNs) prefs.genlockOffsetUs = new.genlockOffsetNs / 1000.0
     }
 
     /** What [fitShutter] depends on: the production, the frame rate (and genlock's room) and the exposure mode. */
@@ -473,6 +492,9 @@ class CameraCapture(context: Context) {
         session = null
         device?.close()
         device = null
+        // No more frames: the core's loops start over when the camera opens again.
+        freeGenlock()
+        freeAutoIso()
         runAfterConfigure()
     }
 
@@ -710,11 +732,7 @@ class CameraCapture(context: Context) {
         val active = s.genlock && hasManualSensor
         if (!active) {
             if (genlockLoop != 0L) {
-                Hot.genlockFree(genlockLoop)
-                genlockLoop = 0
-                genlockKey = null
-                genlockDurationNs = 0
-                genlockStatus = null
+                freeGenlock()
                 repeat()
             }
             return
@@ -743,6 +761,27 @@ class CameraCapture(context: Context) {
             genlockDurationNs = duration.toLong()
             repeat()
         }
+    }
+
+    /** Camera thread: frees the genlock loop, if any; the next frame makes a new one. */
+    private fun freeGenlock() {
+        if (genlockLoop == 0L) return
+        Hot.genlockFree(genlockLoop)
+        genlockLoop = 0
+        genlockKey = null
+        genlockDurationNs = 0
+        genlockStatus = null
+    }
+
+    /** Camera thread: frees the auto ISO loop, if any; auto exposure makes a new one. */
+    private fun freeAutoIso() {
+        autoIsoOn = false
+        if (autoIso == 0L) return
+        Hot.autoIsoFree(autoIso)
+        autoIso = 0
+        autoIsoSetup = null
+        // The new loop has no bias yet.
+        autoIsoBias = Double.NaN
     }
 
     private fun thumbSize(): Size {
@@ -778,9 +817,16 @@ class CameraCapture(context: Context) {
             if (nv21.size != w * h * 3 / 2) nv21 = ByteArray(w * h * 3 / 2)
             Yuv.toNv21(image, nv21)
             val frame = nv21
+            val (sw, sh) = Yuv.scaledSize(w, h, thumbnailWidth)
             previewHandler.post {
                 try {
-                    sink(Yuv.compress(frame, w, h), w, h)
+                    if (sw == w && sh == h) {
+                        sink(Yuv.compress(frame, w, h), w, h)
+                    } else {
+                        if (scaledNv21.size != sw * sh * 3 / 2) scaledNv21 = ByteArray(sw * sh * 3 / 2)
+                        Yuv.scale(frame, w, h, scaledNv21, sw, sh)
+                        sink(Yuv.compress(scaledNv21, sw, sh), sw, sh)
+                    }
                 } finally {
                     nv21Busy.set(false)
                 }
@@ -800,7 +846,7 @@ class CameraCapture(context: Context) {
         val s = settings
         val on = s.exposureMode == ExposureMode.AUTO && hasManualSensor
         if (!on) {
-            autoIsoOn = false
+            freeAutoIso()
             return
         }
         if (autoIso == 0L) autoIso = Hot.autoIsoNew(0)
@@ -1026,6 +1072,49 @@ internal object Yuv {
             for (col in 0 until w / 2) {
                 out[o++] = vBuf.get(vBase + col * v.pixelStride)
                 out[o++] = uBuf.get(uBase + col * u.pixelStride)
+            }
+        }
+    }
+
+    /**
+     * The size a w x h frame scales to at `width`: even (NV21 has 2x2
+     * chroma), the aspect ratio kept, never larger than the frame.
+     */
+    fun scaledSize(w: Int, h: Int, width: Int): Pair<Int, Int> {
+        val dw = (width and 1.inv()).coerceIn(2, w)
+        if (dw == w) return w to h
+        val dh = (((dw.toLong() * h + w / 2) / w).toInt() and 1.inv()).coerceIn(2, h)
+        return dw to dh
+    }
+
+    /** Scales an NV21 frame down (box filter, each output pixel the mean of the ones it covers). */
+    fun scale(src: ByteArray, sw: Int, sh: Int, dst: ByteArray, dw: Int, dh: Int) {
+        scalePlane(src, 0, sw, sh, dst, 0, dw, dh, 1)
+        scalePlane(src, sw * sh, sw / 2, sh / 2, dst, dw * dh, dw / 2, dh / 2, 2)
+    }
+
+    /** One plane of `channels` interleaved bytes a pixel (2 for NV21's V U), at the offsets given. */
+    private fun scalePlane(src: ByteArray, srcOff: Int, sw: Int, sh: Int,
+                           dst: ByteArray, dstOff: Int, dw: Int, dh: Int, channels: Int) {
+        var o = dstOff
+        for (y in 0 until dh) {
+            val y0 = y * sh / dh
+            val y1 = maxOf(y0 + 1, (y + 1) * sh / dh)
+            for (x in 0 until dw) {
+                val x0 = x * sw / dw
+                val x1 = maxOf(x0 + 1, (x + 1) * sw / dw)
+                val n = (y1 - y0) * (x1 - x0)
+                for (c in 0 until channels) {
+                    var sum = 0
+                    for (sy in y0 until y1) {
+                        var i = srcOff + (sy * sw + x0) * channels + c
+                        for (sx in x0 until x1) {
+                            sum += src[i].toInt() and 0xff
+                            i += channels
+                        }
+                    }
+                    dst[o++] = ((sum + n / 2) / n).toByte()
+                }
             }
         }
     }

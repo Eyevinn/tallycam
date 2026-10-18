@@ -8,6 +8,7 @@ import se.eyevinn.tallycam.media.CameraCapture.FocusMode
 import se.eyevinn.tallycam.media.CameraCapture.Shutter
 import se.eyevinn.tallycam.media.CameraCapture.WhiteBalanceMode
 import kotlin.math.roundToInt
+import kotlin.math.roundToLong
 
 /**
  * The camera controls (docs/PROTOCOL.md, "Controls in the iOS prototype"),
@@ -87,7 +88,8 @@ class CameraControls(
             // Genlock needs Camera2's auto exposure off, which it is with a
             // manual sensor in every mode (docs/GENLOCK.md).
             list += Controls.bool("genlock", "Genlock", "image")
-            list += Controls.range("genlock_offset_us", "Genlock offset", "image", -50000.0, 50000.0, 10.0, "µs")
+            list += Controls.range("genlock_offset_us", "Genlock offset", "image", -Settings.GENLOCK_OFFSET_MAX_US,
+                                   Settings.GENLOCK_OFFSET_MAX_US, 10.0, "µs")
             shutters().takeIf { it.isNotEmpty() }?.let { shutters ->
                 // A production setting: set only under a free shutter, in manual.
                 val shutter = enumControl("shutter", "Shutter", "exposure", options(*shutters.map { it to "1/$it" }.toTypedArray()))
@@ -202,6 +204,8 @@ class CameraControls(
             }
             "frame_rate" -> {
                 val fps = number()?.toInt()?.takeIf { it in c.frameRates } ?: return "expected " + c.frameRates.joinToString(" or ")
+                // The rate it has is no change, live or not (as on iOS).
+                if (fps == s.frameRate) return null
                 if (isLive()) return NOT_WHILE_LIVE
                 c.update { it.copy(frameRate = fps, exposureNs = it.exposureNs.coerceAtMost(1_000_000_000L / fps)) }
                 null
@@ -248,8 +252,9 @@ class CameraControls(
             }
             "genlock_offset_us" -> {
                 val us = number() ?: return "expected a number"
-                val clamped = us.coerceIn(-50000.0, 50000.0)
-                c.update { it.copy(genlockOffsetNs = (clamped * 1000).toLong()) }
+                val clamped = Settings.clampedGenlockOffsetUs(us)
+                // Kept across launches by the camera (Settings).
+                c.update { it.copy(genlockOffsetNs = (clamped * 1000).roundToLong()) }
                 if (clamped == us) null else "clamped to $clamped"
             }
             "mains_hz" -> {
@@ -348,8 +353,11 @@ class CameraControls(
         val hz = mainsHz?.takeIf { it == 50 || it == 60 || it == 0 } ?: ownMainsHz
         if (isLive() && !stopped) {
             if (hz != s.mainsHz || shutter != serverShutter) {
-                pendingProduction = mainsHz to shutter
-                return "production shutter changed while live: kept until the stream stops"
+                // Warn once per pending production, not on every repeat of it (as on iOS).
+                val next = mainsHz to shutter
+                val changed = next != pendingProduction
+                pendingProduction = next
+                return if (changed) "production shutter changed while live: kept until the stream stops" else null
             }
             pendingProduction = null
             return null

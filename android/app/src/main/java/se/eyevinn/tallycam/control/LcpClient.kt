@@ -17,6 +17,9 @@ import java.util.concurrent.TimeUnit
  * keeps the link alive with WebSocket pings. Callbacks run on the main
  * thread.
  */
+/** Bytes queued on the socket above which [LcpClient.sendDroppable] drops (about 4 previews). */
+private const val DROPPABLE_QUEUE_BYTES = 256L * 1024
+
 class LcpClient(private val listener: Listener) {
     interface Listener {
         fun onOpen()
@@ -53,6 +56,18 @@ class LcpClient(private val listener: Listener) {
 
     /** False when not connected. */
     fun send(message: JSONObject): Boolean = socket?.send(message.toString()) ?: false
+
+    /**
+     * For messages a newer one replaces (previews): dropped, false, while
+     * more than [DROPPABLE_QUEUE_BYTES] wait to go out. OkHttp closes the
+     * socket once 16 MiB are queued, so a slow link would otherwise turn
+     * into a reconnect loop.
+     */
+    fun sendDroppable(message: JSONObject): Boolean {
+        val socket = socket ?: return false
+        if (socket.queueSize() > DROPPABLE_QUEUE_BYTES) return false
+        return socket.send(message.toString())
+    }
 
     /** Admitted: the next reconnect starts from a short delay again. */
     fun resetBackoff() {

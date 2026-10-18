@@ -221,7 +221,7 @@ final class CameraControls: @unchecked Sendable {
             if status.limit != .none {
                 let hint = status.limit == .tooDark ? "too dark: use a longer shutter or more light"
                     : mainsHz == 0 ? "too bright: use less light or an ND filter"
-                    : "too bright: the shutter is held flicker-free for mains light; outdoors set mains_hz off"
+                    : "too bright even at the shortest flicker-free shutter for mains light; outdoors set mains_hz off"
                 onUpdate?(.log(level: "warn", message: String(format: "Auto ISO at ISO %.0f, %@", device.iso, hint)))
             }
         }

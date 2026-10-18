@@ -67,13 +67,14 @@ import kotlin.math.roundToInt
 /**
  * The operator's framing and focus aids, each a persisted toggle, as on
  * iOS (ios/TallyCam/Views/Aids.swift). Drawn over the preview only, never
- * into the stream (docs/SHADING.md).
+ * into the stream (docs/SHADING.md). Grid and horizon level are on until
+ * first turned off, the others off (docs/UI_DESIGN.md).
  */
 class Aids(context: Context) {
     private val prefs = context.getSharedPreferences("aids", Context.MODE_PRIVATE)
 
-    var grid by mutableStateOf(prefs.getBoolean("grid", false)); private set
-    var horizon by mutableStateOf(prefs.getBoolean("horizon", false)); private set
+    var grid by mutableStateOf(prefs.getBoolean("grid", true)); private set
+    var horizon by mutableStateOf(prefs.getBoolean("horizon", true)); private set
     var safeAreas by mutableStateOf(prefs.getBoolean("safeAreas", false)); private set
     var centreCuts by mutableStateOf(prefs.getBoolean("centreCuts", false)); private set
     var peaking by mutableStateOf(prefs.getBoolean("peaking", false)); private set

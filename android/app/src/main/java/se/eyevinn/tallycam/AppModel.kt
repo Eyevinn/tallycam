@@ -244,14 +244,37 @@ class AppModel(private val context: Context) : LcpClient.Listener, LiveStream.Li
      */
     fun focusAt(x: Float, y: Float) {
         camera.focusAt(x, y)
+        // A tap releases an AE/AF lock: exposure back to auto too.
+        if (aeAfLocked) {
+            aeAfLocked = false
+            if (shading.values.optString("exposure_mode") != "auto") localSet(JSONObject().put("exposure_mode", "auto"))
+        }
         main.postDelayed({ publishState() }, 100)
     }
 
-    /** Long press: focus at a point, then lock it there. */
+    /**
+     * Touch and hold: AE/AF lock there, as in Apple's camera apps
+     * (docs/UI_DESIGN.md, "Picture"): focus at the point and lock it (AF-L),
+     * and hold the exposure at the values it has (manual, or locked without
+     * a manual sensor). A tap anywhere releases both ([focusAt]).
+     */
     fun focusLockAt(x: Float, y: Float) {
         camera.focusAt(x, y)
-        main.postDelayed({ localSet(JSONObject().put("focus_mode", "locked")) }, 700)
+        main.postDelayed({
+            val options = shading.descriptors["exposure_mode"]?.optJSONArray("options")
+            val offered = (0 until (options?.length() ?: 0)).map { options?.optJSONObject(it)?.optString("value") }
+            val held = if ("manual" in offered) "manual" else "locked"
+            val set = JSONObject().put("focus_mode", "locked")
+            if (options != null && shading.values.optString("exposure_mode") == "auto") {
+                set.put("exposure_mode", held)
+                aeAfLocked = true
+            }
+            localSet(set)
+        }, 700)
     }
+
+    /** Exposure was held by an AE/AF lock (not by the operator's switch): a tap releases it. */
+    private var aeAfLocked = false
 
     /** The preview is gone (app in the background): the camera stays only while streaming. */
     fun detachPreview(released: () -> Unit) = camera.detachPreview(released)
@@ -379,7 +402,7 @@ class AppModel(private val context: Context) : LcpClient.Listener, LiveStream.Li
                 "preview" -> Tally.PREVIEW
                 else -> Tally.OFF
             }
-            "preview" -> setPreview(message.optBoolean("enabled"), message.optDouble("fps", 1.0))
+            "preview" -> setPreview(message.optBoolean("enabled"), message.optDouble("fps", 1.0), message.optInt("width", 480))
             "set" -> applySet(message.opt("id"), message.optJSONObject("values") ?: JSONObject())
             "command" -> runCommand(message.opt("id"), message.optString("name"), message.optJSONObject("args"))
             "production" -> {
@@ -431,7 +454,7 @@ class AppModel(private val context: Context) : LcpClient.Listener, LiveStream.Li
         client.send(JSONObject()
             .put("type", "hello")
             // 2: production settings, image statistics and the live lock.
-            .put("protocol", 2)
+            .put("protocol", 3)
             .put("public_key", k.identity.publicKey)
             .put("device", device)
             .put("controls", Controls.array(controls))
@@ -589,18 +612,21 @@ class AppModel(private val context: Context) : LcpClient.Listener, LiveStream.Li
         if (admitted) client.send(JSONObject().put("type", "log").put("level", level).put("message", message))
     }
 
-    private fun setPreview(enabled: Boolean, fps: Double) {
+    private fun setPreview(enabled: Boolean, fps: Double, width: Int) {
         if (!enabled) {
             camera.onThumbnail = null
             return
         }
         camera.thumbnailIntervalNs = (1e9 / fps.coerceIn(0.1, 10.0)).toLong()
+        camera.thumbnailWidth = width
         camera.onThumbnail = { jpeg, w, h ->
             val msg = JSONObject().put("type", "preview")
                 .put("jpeg", Base64.encodeToString(jpeg, Base64.NO_WRAP)).put("width", w).put("height", h)
-            main.post { if (admitted) client.send(msg) }
+            // Dropped while the link is behind: previews never queue up.
+            main.post { if (admitted) client.sendDroppable(msg) }
         }
     }
+
 
     // MARK: Shading (docs/SHADING.md)
 

@@ -278,7 +278,7 @@ private fun ZoomColumn(model: AppModel, rocker: Dp, height: Dp, locked: Boolean,
     // Hidden while the screen is locked.
     val hasZoom = model.camera.zoomRange != null && !locked
     val lensHeight = Chrome.control * lenses + 6.dp * (lenses - 1).coerceAtLeast(0)
-    val rockerView = @Composable { if (hasZoom) ZoomRocker(rocker) { model.rampZoom(it) } }
+    val rockerView = @Composable { if (hasZoom) ZoomRocker(model, rocker) }
     if (lenses == 0 || lensHeight + Chrome.gap + rocker <= height) {
         Column(modifier, verticalArrangement = Arrangement.spacedBy(Chrome.gap)) {
             LensButtons(model)
@@ -331,7 +331,7 @@ private fun PreviewView(model: AppModel, modifier: Modifier) {
             .pointerInput(Unit) {
                 detectTapGestures(
                     onTap = { p -> model.focusAt(p.x / size.width, p.y / size.height) },
-                    // Long press: focus there and lock it (docs/SHADING.md).
+                    // Touch and hold: AE/AF lock there; a tap releases it (docs/UI_DESIGN.md).
                     onLongPress = { p -> model.focusLockAt(p.x / size.width, p.y / size.height) },
                 )
             },

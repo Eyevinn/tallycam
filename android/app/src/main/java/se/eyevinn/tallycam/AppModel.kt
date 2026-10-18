@@ -586,8 +586,13 @@ class AppModel(private val context: Context) : LcpClient.Listener, LiveStream.Li
         "stream_url" -> when {
             value !is String || !value.startsWith("srt://") -> "expected an srt:// URL"
             else -> {
-                settings.srtUrl = withPassphraseKept(value)
-                if (streamState == LiveStream.State.IDLE) null else "applies the next time the stream starts"
+                when (val url = SrtPassphrase.restore(value, settings.srtUrl)) {
+                    null -> "give the passphrase for a new target"
+                    else -> {
+                        settings.srtUrl = url
+                        if (streamState == LiveStream.State.IDLE) null else "applies the next time the stream starts"
+                    }
+                }
             }
         }
         "srt_latency_ms" -> {
@@ -824,14 +829,6 @@ class AppModel(private val context: Context) : LcpClient.Listener, LiveStream.Li
     /** The SRT destination's host:port, for telling the operator when the hub moves it. */
     private fun streamHost(): String? = runCatching { android.net.Uri.parse(settings.srtUrl) }.getOrNull()
         ?.takeIf { !it.host.isNullOrEmpty() }?.let { if (it.port > 0) "${it.host}:${it.port}" else it.host }
-
-    /** A stream URL whose passphrase came back redacted ("***") keeps the passphrase it had. */
-    private fun withPassphraseKept(url: String): String {
-        if (!url.contains(Regex("(?i)passphrase=\\*\\*\\*"))) return url
-        val kept = Regex("(?i)passphrase=([^&]*)").find(settings.srtUrl)?.groupValues?.get(1)
-        return if (kept != null) url.replace(Regex("(?i)passphrase=\\*\\*\\*"), "passphrase=" + Regex.escapeReplacement(kept))
-               else url.replace(Regex("(?i)[?&]passphrase=\\*\\*\\*"), "")
-    }
 
     /** The video codecs this phone encodes (H.264, and HEVC where it has an encoder). */
     val videoCodecs: List<Pair<String, String>> by lazy {

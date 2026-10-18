@@ -88,6 +88,7 @@ drops focus first, then white balance; it never wraps.
 ## Adjust control
 
 ```
+ EXP        which group the control adjusts (EXP, WB, FOCUS)
  ┌─┐
  │A│        mode switch: two segments, tap the other one to switch;
  │M│        the active one is filled (white auto, yellow held)
@@ -95,8 +96,8 @@ drops focus first, then white balance; it never wraps.
  ┌─┐
  │+│        rocker: push up for more, down for less
  │●│        speed rises with the square of the deflection
- │−│        release: stops and springs back
- └─┘
+ │−│        release: stops and springs back; tap an end: one step
+ └─┘        double tap the knob: back to the neutral value
  +0.3 EV    what the rocker changes, and its value
 ```
 
@@ -109,15 +110,32 @@ drops focus first, then white balance; it never wraps.
   difference does not matter to the operator; the rocker turns locked into
   manual anyway. Moving the rocker in auto switches white balance and focus to
   manual; exposure stays in auto and changes the compensation.
-- **Rocker.** The same component as zoom, same size. About 10 changes per
-  second, clamped to the control's range and snapped to its step.
+- **Caption.** The group's short name above the switch (`EXP`, `WB`,
+  `FOCUS`), so the rocker's job is never a guess.
+- **Rocker.** The same component as zoom, same size, with the direction
+  written at its ends. Three gestures, the same on every rocker:
+  - **Drag** for a move: speed rises with the square of the deflection, about
+    10 changes per second, clamped to the range and snapped to the step;
+    letting go stops it and the knob springs back.
+  - **Tap an end** for one step, for fine trimming on air.
+  - **Double tap the knob** for the neutral value.
+- **Haptics.** A light tick on each step and each tap, a firmer one when a
+  value reaches the end of its range.
+- **While adjusting** the value label grows and turns bright, and the value
+  in the values row follows.
 
-| Group | Rocker changes | Full speed |
-|---|---|---|
-| Exposure, auto | `ev_bias` | 2 EV/s |
-| Exposure, manual | `iso`, log scale | 2 stops/s |
-| White balance | `wb_temperature`, or `wb_tint` with the K/Tint switch above the rocker (K each time it opens) | 1500 K/s, 60/s |
-| Focus | `focus_position`, up is far | 0.4/s |
+| Group | Ends | Drag, full speed | Tap step | Double tap |
+|---|---|---|---|---|
+| Exposure, auto | `+` / `−` | `ev_bias` 2 EV/s | 0.3 EV | EV 0 |
+| Exposure, manual | `+` / `−` | `iso` 2 stops/s (log) | 1/3 stop | back to auto |
+| White balance, K | `K+` / `K−` | `wb_temperature` 1500 K/s | 100 K | white balance once |
+| White balance, Tint | `M` / `G` (magenta, green) | `wb_tint` 60/s | 1 | tint 0 |
+| Focus | `Far` / `Near` | `focus_position` 0.4/s | 0.02 | back to auto |
+| Zoom (left edge) | `T` / `W` | 2 doublings/s | 1/4 doubling | the lens's own 1× (no digital zoom) |
+
+The K/Tint switch sits above the WB rocker and is back on K each time white
+balance is chosen. The zoom rocker shows the zoom factor (`2.3×`) beside its
+knob while it moves; the lens buttons follow the active lens.
 
 - **White balance once:** long press on the mode switch.
 - The shutter is shown, not adjusted: it is the production's (docs/SHADING.md,
@@ -125,8 +143,13 @@ drops focus first, then white balance; it never wraps.
 
 ## Picture
 
-- Tap: focus and expose at that point.
-- Long press: lock focus there (AF-L).
+- Tap: focus and expose at that point (and release an AE/AF lock).
+- Touch and hold: lock focus and exposure there (AE/AF lock, as in Apple's
+  camera apps): focus shows `AF-L`, exposure goes to `M` at the values it
+  had. A tap anywhere releases both back to auto.
+- iPhone 16 and later: the Camera Control button offers zoom and exposure
+  (EV in auto, ISO in manual) as app controls; the same values as the
+  rockers.
 - Aids drawn over the picture only: grid, horizon level, safe areas, centre
   cuts, focus peaking.
 
@@ -138,8 +161,32 @@ drops focus first, then white balance; it never wraps.
   "Enter manually", "Not now". The QR button stays in the bottom row.
 - **Scanning.** A viewfinder square, the instruction and Cancel over the
   picture.
+- **Joining a hub.** A connect link (scanned in the app or opened from the
+  Camera app) for a different control server than the current one, or when
+  none is set, asks first: "Join <hub host>?", with "Control hub:
+  <host[:port]>" and "Stream to: <SRT host[:port]>" ("Stream: unchanged" when
+  the link has none; while live, "The stream URL applies on the next Go
+  Live"), and Join / Cancel. A link for the hub already in use applies
+  without asking. A restored or recreated screen never asks again.
 - **Live.** Settings that cannot change mid-stream (format, mains) are disabled
   with a note; the values row and the rockers work as always.
+
+## Settings
+
+A full-screen sheet, "Settings" with Done (Android's back does the same).
+Sections in this order: who the camera is, where it connects and streams,
+the production, then diagnostics. Footers are full sentences; a disabled
+row's footer says why instead of the usual text.
+
+| Section | Rows | Footer |
+|---|---|---|
+| **Camera name** | Text field, the default name (model and the start of the id) as placeholder | "How the hub and Strom show this camera. The operator can rename it too; empty uses the model." |
+| **Control hub** | Link dot and state (Connected, Reconnecting, Not set up) with the host; the URL field (`ws://host:8090/lcp/v0/device`), reconnecting when submitted or on Done if changed; "Scan QR code" (disabled while live); "Disconnect and forget server" (only when a hub is set; asks "Forget the control hub?", "The phone disconnects from the hub. Scan its QR code to connect again.", Forget server / Cancel) | Idle: "To connect, scan the QR code in the control hub here or with the Camera app." Live: "Stop the stream to scan here; the Camera app works while live." |
+| **Stream (SRT)** | The URL field (disabled while live); Video: codec and bitrate ("H.264, 6000 kbit/s", "(auto)" when not set); Adaptive bitrate switch; while live: Encoder now (with adaptive bitrate), Round trip, Retransmitted / dropped | Idle: "Set by the QR code. Edit only if you know the address." Live: "Stop the stream to change the address." Then always: "Adaptive bitrate lowers the video bitrate when the network cannot carry it, and raises it again up to the bitrate set." |
+| **Exposure** | Mains: 50 Hz / 60 Hz / Off, segmented. Disabled while a hub's production applies (showing the hub's value) and while live. Left out when the camera has no mains control | "The shutter follows the mains frequency so mains-lit light does not flicker. Off outdoors, where the shutter is free." Set by the hub: "Set by the control hub." Live: "Stop the stream to change." |
+| **Orientation** | Auto / Landscape / Portrait, segmented (where the app can stream portrait); Picture: lens, size and frame rate | "Auto follows how the phone is held." While a change waits: "The stream keeps its geometry while live; the new setting applies when it stops." |
+| **Clock** | Health (dot and word), Synchronised, Estimated error, Maximum error, Reference ("name (address)"), Stratum, Sources reachable ("3 of 4"), then the findings as small text; "Clock not running" without a clock | "The phone's own NTP-disciplined clock, used to timestamp frames." |
+| **About** | App version ("0.2.0 (12)"), Camera name, Model, the OS and its version ("iOS", "Android"), Stream id, Device key (first 16 hex characters in groups of 4, monospaced; the hub's camera page shows the same) | None |
 
 ## Look
 

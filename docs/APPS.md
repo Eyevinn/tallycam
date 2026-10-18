@@ -45,16 +45,7 @@ grid (iOS `Chrome`, Android the same names):
 
 ## Settings
 
-Same sections, order and words: **Camera name** (the field, the default as
-placeholder), **Exposure** (mains 50 Hz / 60 Hz / Off, the phone's own
-production; disabled with "Set by the control hub" while a hub's production
-applies, and while live), **Control hub** (link state and host, the URL, "Disconnect and
-forget server" with a confirmation), **Stream (SRT)** (the URL, editable only
-while idle; video codec and bitrate; round trip and losses while live),
-**Orientation**, **Clock** (health, synchronised, estimated and maximum
-error, reference, stratum, sources reachable, findings), **About** (app
-version, camera name, model, OS version, stream id, the device key's first
-16 hex characters).
+Defined in docs/UI_DESIGN.md, "Settings"; differences in the table below.
 
 ## Icon
 

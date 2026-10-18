@@ -47,6 +47,32 @@ when auto ISO is at a limit (too bright, too dark).
 - Timecode (the phone's disciplined clock) and, when local recording comes,
   storage remaining.
 
+## How others adjust
+
+- **Filmic Pro.** Version 6 had arc sliders under the thumbs (exposure on
+  one side, focus on the other). Version 7 replaced them with two vertical
+  sliders: the left one for ISO, shutter, both, or zoom (selectable), the
+  right one for focus distance.
+- **Final Cut Camera (Apple).** Exposure is automatic with an EV
+  compensation dial; manual has ISO, shutter speed and shutter angle.
+  Manual focus is a dial; a double tap on the dial resets it. Touch and
+  hold a subject locks focus and exposure (a yellow AE/AF Lock), a tap
+  anywhere releases it.
+- **Blackmagic Camera.** A single tap on a value in the top bar opens its
+  adjustment; manual focus is a slider, with tap to focus.
+- **iPhone Camera Control (iPhone 16 and later).** A light press shows one
+  control (zoom or exposure), a slide on the button changes it, a double
+  light press picks another control. Apps can add their own controls
+  (AVFoundation's capture controls). Reviewers find the slide imprecise and
+  easy to hit by accident.
+
+What TallyCam takes from them: two vertical controls under the thumbs
+(Filmic Pro 7), the value as the way in (Blackmagic), double tap to reset
+and touch and hold for AE/AF lock (Final Cut Camera). It keeps a rate
+rocker instead of a position slider: a slider jumps where the thumb lands,
+a rocker only ever moves the value smoothly, which is what a live picture
+needs (the broadcast zoom rocker works the same way).
+
 ## Sources
 
 - [Blackmagic Camera](https://www.blackmagicdesign.com/products/blackmagiccamera)
@@ -56,3 +82,10 @@ when auto ISO is at a limit (too bright, too dark).
 - [SKAARHOJ RCP Pro](https://skaarhoj.com/product/rcp-pro)
 - [Cyanview](https://cyanview.com/)
 - [Cyanview tally](https://support.cyanview.com/docs/Configuration/Tally)
+- [Filmic Pro v7 redesigned UI (CineD)](https://www.cined.com/filmic-pro-v7-launched-redesigned-ui-custom-function-button-and-more/)
+- [Filmic Pro v6 (learnaboutfilm)](https://learnaboutfilm.com/?p=10084)
+- [Final Cut Camera: exposure and white balance (Apple)](https://support.apple.com/guide/final-cut-camera/deve37e999e1/ios)
+- [Final Cut Camera: camera settings (Apple)](https://support.apple.com/guide/final-cut-camera/dev0eb85c508)
+- [Blackmagic Camera tech specs](https://blackmagicdesign.com/products/blackmagiccamera/techspecs)
+- [Use the Camera Control on iPhone (Apple)](https://support.apple.com/en-afri/guide/iphone/iph0c397b154/ios)
+- [Enhancing your app experience with the Camera Control (Apple Developer)](https://developer.apple.com/tutorials/data/documentation/avfoundation/enhancing-your-app-experience-with-the-camera-control.md)

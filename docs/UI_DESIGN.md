@@ -70,16 +70,27 @@ with the bottom row above it.
    …", "Not a valid connect code", control errors), and toasts (stream errors and hints, 4 s). Nothing else goes
    there and nothing else shows messages.
 4. **Left edge** and 5. **right edge.** A side control each, mirror images,
-   where the thumbs rest: the side control's centre at 65 % of the screen
-   height from the top, moved up only as far as it must to clear the bottom
-   row; the same height on both sides (see "Side control"). The upper part
+   where the thumbs rest, the same height on both sides (see "Side
+   control"). **Phones:** in the bottom-left and bottom-right corners,
+   against the bottom edge. **iPad:** the centre at 65 % of the screen height
+   from the top, moved up only as far as it must to clear the bottom row. The upper part
    of the picture stays clear. Zoom on the
    left and exposure on the right by default; each side remembers its
    choice.
-6. **Bottom row.** Left: aids menu, QR scan (only while no hub is connected and
-   not live), screen lock. Right: microphone meter, then (landscape) the live
-   button in the bottom-right corner, at a fixed place that never moves. The
-   live button is dark at standby, orange connecting, red live; a tap starts,
+6. **Tools and the live button.** The tools are the aids menu, QR scan (only
+   while no hub is connected and not live) and the screen lock.
+   - **iPad:** a bottom row as before: tools left; microphone meter, then
+     (landscape) the live button in the bottom-right corner.
+   - **Phone, landscape:** the corners belong to the side controls. The
+     tools stand in a column at the left edge above the left side control;
+     the live button at the right edge above the right side control, at a
+     fixed place; the microphone meter at the bottom centre between the side
+     controls.
+   - **Phone, portrait:** the tools in a row at the left under the top rows;
+     the live button centred just above the side controls; the meter beside
+     it.
+
+   The live button is dark at standby, orange connecting, red live; a tap starts,
    a hold stops (with a filling ring and a "Hold to stop" hint), with a
    haptic when it goes live or stops.
 

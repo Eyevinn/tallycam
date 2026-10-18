@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{ConnectInfo, FromRef, Path, Query, State};
-use axum::http::{header, HeaderMap, StatusCode};
+use axum::http::{header, HeaderMap, StatusCode, Uri};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
@@ -143,8 +143,8 @@ impl AppState {
         }
     }
 
-    fn operator_header_ok(&self, headers: &HeaderMap) -> bool {
-        self.host_ok(headers)
+    fn operator_header_ok(&self, headers: &HeaderMap, uri: &Uri) -> bool {
+        self.host_ok(headers, uri)
             && self.operator_ok(
                 headers
                     .get(OPERATOR_TOKEN_HEADER)
@@ -155,11 +155,11 @@ impl AppState {
     /// Without a token, only requests to a name this hub is known by: a DNS
     /// rebinding page (its own name, resolved to this hub) gets nowhere.
     /// With a token the page has no token, so nothing to check.
-    fn host_ok(&self, headers: &HeaderMap) -> bool {
+    fn host_ok(&self, headers: &HeaderMap, uri: &Uri) -> bool {
         if self.operator_token.is_some() {
             return true;
         }
-        let Some(host) = request_host(headers) else {
+        let Some(host) = request_host_of(headers, uri) else {
             return false;
         };
         host_is_local_or_known(&host, &self.provisioning)
@@ -285,9 +285,10 @@ struct InviteResponse {
 async fn api_invite(
     State(state): State<AppState>,
     headers: HeaderMap,
+    uri: Uri,
     Query(q): Query<ConnectQuery>,
 ) -> Response {
-    if !state.operator_header_ok(&headers) {
+    if !state.operator_header_ok(&headers, &uri) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
     let (hub, p) = (&state.hub, &state.provisioning);
@@ -322,9 +323,10 @@ async fn api_invite(
 async fn api_forget_device(
     State(state): State<AppState>,
     headers: HeaderMap,
+    uri: Uri,
     Path(id): Path<String>,
 ) -> StatusCode {
-    if !state.operator_header_ok(&headers) {
+    if !state.operator_header_ok(&headers, &uri) {
         return StatusCode::UNAUTHORIZED;
     }
     if state.hub.forget(&id) {
@@ -400,16 +402,31 @@ pub struct DeviceConnection {
 }
 
 /// The host a request reached this server by: the first `X-Forwarded-Host`
-/// (a proxy that rewrites `Host`), else `Host`.
+/// (a proxy that rewrites `Host`), else `Host`. Over HTTP/2 there is no
+/// `Host`, only `:authority`: use [`request_host_of`] with the request URI.
 pub fn request_host(headers: &HeaderMap) -> Option<String> {
+    request_host_of(headers, &Uri::default())
+}
+
+/// [`request_host`], and without either header the URI's authority (the
+/// `:authority` of an HTTP/2 request, where browsers send no `Host`).
+pub fn request_host_of(headers: &HeaderMap, uri: &Uri) -> Option<String> {
     headers
         .get("x-forwarded-host")
         .and_then(|h| h.to_str().ok())
         .and_then(|h| h.split(',').next())
         .map(str::trim)
         .filter(|h| !h.is_empty())
-        .or_else(|| headers.get(header::HOST).and_then(|h| h.to_str().ok()))
+        .or_else(|| host_header(headers, uri))
         .map(str::to_string)
+}
+
+/// `Host`, or the URI's authority (HTTP/2).
+fn host_header<'a>(headers: &'a HeaderMap, uri: &'a Uri) -> Option<&'a str> {
+    headers
+        .get(header::HOST)
+        .and_then(|h| h.to_str().ok())
+        .or_else(|| uri.authority().map(|a| a.as_str()))
 }
 
 /// `ws` with the hub's message size limit ([`MAX_MESSAGE_BYTES`]).
@@ -424,8 +441,9 @@ async fn device_ws(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Query(q): Query<DeviceQuery>,
     headers: axum::http::HeaderMap,
+    uri: Uri,
 ) -> impl IntoResponse {
-    let host = request_host(&headers);
+    let host = request_host_of(&headers, &uri);
     let conn = DeviceConnection {
         addr,
         token: q.token,
@@ -445,14 +463,15 @@ async fn control_ws(
     Query(q): Query<TokenQuery>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
+    uri: Uri,
 ) -> Response {
     // A page on another site must not drive the cameras through the
     // operator's browser (browsers send no CORS check for WebSockets).
-    if !same_origin(&headers) {
+    if !same_origin_of(&headers, &uri) {
         warn!("Controller from {addr} refused: cross-origin upgrade");
         return StatusCode::FORBIDDEN.into_response();
     }
-    if !state.host_ok(&headers) {
+    if !state.host_ok(&headers, &uri) {
         warn!("Controller from {addr} refused: unknown Host (DNS rebinding?)");
         return StatusCode::FORBIDDEN.into_response();
     }
@@ -492,6 +511,12 @@ async fn control_ws(
 /// through the operator's browser. An embedding server applies it to its
 /// own controller route.
 pub fn same_origin(headers: &HeaderMap) -> bool {
+    same_origin_of(headers, &Uri::default())
+}
+
+/// [`same_origin`], also over HTTP/2, where the host is the URI's
+/// authority rather than a `Host` header.
+pub fn same_origin_of(headers: &HeaderMap, uri: &Uri) -> bool {
     let Some(origin) = headers.get(header::ORIGIN) else {
         return true;
     };
@@ -509,9 +534,7 @@ pub fn same_origin(headers: &HeaderMap) -> bool {
         .filter_map(|h| h.to_str().ok())
         .flat_map(|h| h.split(','))
         .map(str::trim);
-    headers
-        .get(header::HOST)
-        .and_then(|h| h.to_str().ok())
+    host_header(headers, uri)
         .into_iter()
         .chain(forwarded)
         .any(|h| h.eq_ignore_ascii_case(origin_host))
@@ -901,6 +924,34 @@ fn handle_controller_text(hub: &Hub, guard: &ControllerGuard, text: &str) -> Opt
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn http2_requests_take_the_host_from_the_uri() {
+        // HTTP/2 has no Host header: hyper puts :authority in the URI.
+        let uri: Uri = "https://strom.example.com:8082/api/cameras/device"
+            .parse()
+            .unwrap();
+        let none = HeaderMap::new();
+        assert_eq!(
+            request_host_of(&none, &uri).as_deref(),
+            Some("strom.example.com:8082")
+        );
+        assert_eq!(request_host(&none), None);
+        let mut origin = HeaderMap::new();
+        origin.insert(
+            header::ORIGIN,
+            "https://strom.example.com:8082".parse().unwrap(),
+        );
+        assert!(same_origin_of(&origin, &uri));
+        assert!(!same_origin(&origin), "without the URI no host to match");
+        // A Host header, when there is one, still wins over the URI.
+        let mut host = HeaderMap::new();
+        host.insert(header::HOST, "lan.local:8082".parse().unwrap());
+        assert_eq!(
+            request_host_of(&host, &uri).as_deref(),
+            Some("lan.local:8082")
+        );
+    }
 
     #[test]
     fn controller_upgrades_are_same_origin_only() {

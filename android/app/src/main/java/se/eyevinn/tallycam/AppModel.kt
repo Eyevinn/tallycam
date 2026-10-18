@@ -84,7 +84,7 @@ class AppModel(private val context: Context) : LcpClient.Listener, LiveStream.Li
     var ownMainsHz by mutableStateOf(50)
         private set
 
-    /** A hub's production applies: mains is set there, not in Settings. */
+    /** A hub's production applies: Settings says the hub sets mains (the phone may still change it). */
     var hubProduction by mutableStateOf(false)
         private set
 
@@ -196,7 +196,7 @@ class AppModel(private val context: Context) : LcpClient.Listener, LiveStream.Li
     /** The mains frequencies this camera can follow (50, 60, 0 for off). */
     val mainsOptions: List<Int> get() = cameraControls.mainsOptions()
 
-    /** Settings' Mains: refused while live or while a hub's production applies. */
+    /** Settings' Mains: refused while live; under a hub production it holds until the hub sends a new one. */
     fun setOwnMains(hz: Int) {
         cameraControls.apply("mains_hz", hz)?.let { showBanner(it.capitalizedFirst()) }
         publishState()

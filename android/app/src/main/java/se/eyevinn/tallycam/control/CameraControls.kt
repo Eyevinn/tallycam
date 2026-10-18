@@ -32,14 +32,24 @@ class CameraControls(
 
     /**
      * The phone's own mains frequency (Settings, saved). A hub's production
-     * replaces it while it applies, without being saved; forgetting the hub
-     * returns to this one.
+     * replaces it while it applies, without being saved, until the phone
+     * changes mains again; forgetting the hub returns to this one.
      */
     var ownMainsHz: Int = 50
         private set
 
     /** A production that came while live, applied when the stream stops. */
     private var pendingProduction: Pair<Int?, Shutter?>? = null
+
+    /**
+     * Mains is never locked by the hub; the last write wins (docs/SHADING.md,
+     * "Mains on the phone"). The phone's choice under a hub production, kept
+     * until the hub sends a different production.
+     */
+    private var mainsOverride: Int? = null
+
+    /** The last production received (mains, shutter), to tell a new one from a repeat. */
+    private var lastProduction: Pair<Int?, Shutter?>? = null
 
     private fun whenMode(control: String, vararg modes: String) = JSONObject().put(control,
         if (modes.size == 1) modes[0] else JSONArray(modes.toList()))
@@ -99,12 +109,10 @@ class CameraControls(
             }
         }
         mainsOptions().takeIf { it.size > 1 }?.let { hz ->
-            // A production setting: not while live, and the hub's wins while it applies.
-            val mains = enumControl("mains_hz", "Mains frequency", "exposure",
-                                    options(*hz.map { it to if (it == 0) "Off" else "$it Hz" }.toTypedArray()))
+            // A production setting: not while live; the phone and the hub both set it, the last write wins.
+            list += enumControl("mains_hz", "Mains frequency", "exposure",
+                                options(*hz.map { it to if (it == 0) "Off" else "$it Hz" }.toTypedArray()))
                 .put("locked_while_live", true)
-            if (serverShutter != null) mains.put("readonly", true)
-            list += mains
         }
         c.evRange?.let { (range, step) ->
             list += Controls.range("ev_bias", "Exposure bias", "exposure", (range.lower * step).toDouble(),
@@ -261,12 +269,14 @@ class CameraControls(
                 val hz = number()?.takeIf { it == 50.0 || it == 60.0 || it == 0.0 }?.toInt()
                     ?: return "expected 50, 60 or 0 (off)"
                 if (hz !in mainsOptions()) return "not supported by this camera"
-                if (hz == s.mainsHz && serverShutter == null) return null
-                // The phone's own production; a hub's wins (docs/SHADING.md).
-                if (serverShutter != null) return "set by the production on the control server"
+                if (hz == s.mainsHz) return null
                 if (isLive()) return NOT_WHILE_LIVE
-                setMainsHz(hz)
+                // Saved as the phone's own; under a hub production it holds
+                // until the hub sends a different one.
+                ownMainsHz = hz
                 saveMainsHz(hz)
+                if (serverShutter != null) mainsOverride = hz
+                applyProduction(hz, serverShutter ?: Shutter.Mains)
                 null
             }
             "ev_bias" -> {
@@ -349,8 +359,15 @@ class CameraControls(
      */
     fun setProduction(mainsHz: Int?, shutter: Shutter?, stopped: Boolean = false): String? {
         val s = camera.settings
+        // A different production (or none again) replaces the phone's own
+        // choice; a repeat of the same one keeps it.
+        val production = mainsHz to shutter
+        if (production != lastProduction) {
+            lastProduction = production
+            mainsOverride = null
+        }
         // No mains in the message: the phone's own.
-        val hz = mainsHz?.takeIf { it == 50 || it == 60 || it == 0 } ?: ownMainsHz
+        val hz = mainsOverride ?: mainsHz?.takeIf { it == 50 || it == 60 || it == 0 } ?: ownMainsHz
         if (isLive() && !stopped) {
             if (hz != s.mainsHz || shutter != serverShutter) {
                 // Warn once per pending production, not on every repeat of it (as on iOS).
@@ -366,7 +383,7 @@ class CameraControls(
         val wasServer = serverShutter != null
         serverShutter = shutter
         val changed = applyProduction(hz, shutter ?: Shutter.Mains)
-        // `readonly` of mains_hz follows whether a hub production applies.
+        // The shutter's `readonly` and options follow whether a hub production applies.
         if (!changed && wasServer != (shutter != null)) camera.onControlsChanged?.invoke()
         return null
     }

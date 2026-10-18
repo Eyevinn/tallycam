@@ -144,17 +144,18 @@ fun SettingsScreen(model: AppModel, onScan: () -> Unit, onDone: () -> Unit) {
                         Labeled("Retransmitted / dropped", "${s.retransmits} / ${s.dropped}")
                     }
                 }
-                // Mains: the phone's own production (docs/SHADING.md, "Shutter").
+                // Mains (docs/SHADING.md, "Shutter"): the phone and the hub
+                // both set it, the last write wins; not while live.
                 val mainsOptions = model.mainsOptions
                 if (mainsOptions.size > 1) {
-                    val editable = !model.hubProduction && !live
                     Section("Exposure", when {
-                        model.hubProduction -> "Set by the control hub."
                         live -> "Stop the stream to change."
+                        model.hubProduction -> "The control hub sets this for all cameras; a change here applies to this camera until the hub changes it."
                         else -> "The shutter follows the mains frequency so mains-lit light does not flicker. Off outdoors, where the shutter is free."
                     }, width) {
+                        // The mains in use: the phone's, or the hub production's.
                         Segmented(mainsOptions.map { it to if (it == 0) "Off" else "$it Hz" },
-                                  if (model.hubProduction) model.shading.values.optInt("mains_hz", model.ownMainsHz) else model.ownMainsHz, editable) { model.setOwnMains(it) }
+                                  model.shading.values.optInt("mains_hz", model.ownMainsHz), enabled = !live) { model.setOwnMains(it) }
                     }
                 }
                 // Orientation: Android streams landscape only for now (docs/APPS.md).

@@ -124,10 +124,13 @@ is not a whole number of light pulses flickers. So:
   When free, the shutter can be set per camera in manual exposure, and the
   auto ISO loop holds a 180° shutter (half the frame period: 1/60 at 30
   fps), shortening it only once ISO is at its minimum.
-- **Mains on the phone.** Without a hub production the phone uses its own
-  mains setting, saved in its Settings (default from the region). A hub's
-  `production.mains_hz` overrides it without overwriting the saved value;
-  forgetting the server returns the phone to its own.
+- **Mains on the phone.** The hub never locks mains: the phone and the hub
+  both set it and the last write wins. The mains in use is the phone's
+  change if it made one since the last production change, else the hub
+  production's `mains_hz`, else the phone's own saved setting (default from
+  the region). A change on the phone is saved as its own and holds until
+  the hub sends a different production (a repeat of the same one keeps it);
+  forgetting the server returns the phone to its own. Only live blocks it.
 - **Changed live, applied after.** The hub accepts a new `production` at any
   time. A phone that is live keeps its current mains and shutter until the
   stream stops, then applies the new ones (and logs that it waits). The hub

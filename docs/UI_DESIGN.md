@@ -87,13 +87,12 @@ images of each other. Tools and the live button: see 6.
      (portrait).
    - **Phones (both orientations):** the bottom corners belong to the side
      controls, so everything else goes to the upper corners, just under the
-     top rows: the tools in the upper-left corner (a column in landscape, a
-     row in portrait), the live button in the upper-right corner at a fixed
+     top rows: the tools in a row in the upper-left corner, the live button in the upper-right corner at a fixed
      place with the microphone meter beside it on the inner side. The middle
      of the screen stays clear. In portrait the side controls are too wide
      side by side with their value beside them, so the value and K / Tint sit
-     above each block. The landscape tools column uses 6 pt gaps so it and
-     the side control fit one above the other.
+     above each block. (A tools column does not fit above the side control
+     and its tab on a landscape phone, hence the row.)
    - **Screen lock on a phone:** the slide to unlock sits at the bottom edge
      between the side controls in landscape, just above them in portrait.
 

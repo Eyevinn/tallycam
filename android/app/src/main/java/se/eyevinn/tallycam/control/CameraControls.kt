@@ -282,13 +282,10 @@ class CameraControls(
                 val hz = number()?.takeIf { it == 50.0 || it == 60.0 || it == 0.0 }?.toInt()
                     ?: return "expected 50, 60 or 0 (off)"
                 if (hz !in mainsOptions()) return "not supported by this camera"
-                if (hz == s.mainsHz) return null
-                if (isLive()) return NOT_WHILE_LIVE
-                // Saved as the phone's own; under a hub production it holds
-                // until the hub sends a different one.
-                ownMainsHz = hz
-                saveMainsHz(hz)
-                if (serverShutter != null) mainsOverride = hz
+                if (isLive()) return if (hz == s.mainsHz) null else NOT_WHILE_LIVE
+                // From the hub, for this camera: an override for this
+                // session only, never saved; a new production clears it.
+                mainsOverride = hz
                 applyProduction(hz, serverShutter ?: Shutter.Mains)
                 null
             }
@@ -361,7 +358,24 @@ class CameraControls(
     fun setMainsHz(hz: Int) {
         if (hz != 50 && hz != 60 && hz != 0) return
         ownMainsHz = hz
-        if (serverShutter == null) applyProduction(hz, Shutter.Mains)
+        if (serverShutter == null && mainsOverride == null) applyProduction(hz, Shutter.Mains)
+    }
+
+    /**
+     * The operator's mains choice on the phone (Settings): saved as the
+     * phone's own, and the override of the hub's production until the hub
+     * sends a different one, also when it equals what applies. Null when it
+     * applied, else why not.
+     */
+    fun applyOwnMains(hz: Int): String? {
+        if (hz != 50 && hz != 60 && hz != 0) return "expected 50, 60 or 0 (off)"
+        if (hz !in mainsOptions()) return "not supported by this camera"
+        if (isLive() && hz != camera.settings.mainsHz) return NOT_WHILE_LIVE
+        ownMainsHz = hz
+        saveMainsHz(hz)
+        mainsOverride = hz
+        if (!isLive()) applyProduction(hz, serverShutter ?: Shutter.Mains)
+        return null
     }
 
     /** With a manual sensor the app sets the shutter itself: every frequency works. */

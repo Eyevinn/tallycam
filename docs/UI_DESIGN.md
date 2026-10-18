@@ -70,7 +70,9 @@ with the bottom row above it.
    …", "Not a valid connect code", control errors), and toasts (stream errors and hints, 4 s). Nothing else goes
    there and nothing else shows messages.
 4. **Left edge** and 5. **right edge.** A side control each, mirror images,
-   vertically centred at the same height (see "Side control"). Zoom on the
+   in the lower part of the screen where the thumbs rest: bottom-aligned
+   just above the bottom row, at the same height on both sides (see "Side
+   control"). The upper part of the picture stays clear. Zoom on the
    left and exposure on the right by default; each side remembers its
    choice.
 6. **Bottom row.** Left: aids menu, QR scan (only while no hub is connected and
@@ -158,14 +160,13 @@ Right side shown; the left one is its mirror image.
   sides and on zoom.
 - **Sizes: easy to hit without looking.** Every cell is at least 44 pt high
   and 46 pt wide (Android 48 dp), the whole selector and mode switch about
-  100 pt wide; they never shrink below that. **The rocker is as big as the
-  screen allows:** 56 pt wide and as tall as the space between the top rows
-  and the bottom row (leaving room for the value and K / Tint rows under
-  it), never shorter than the selector and mode row beside it; both sides
-  the same. Where that stack does not fit (a landscape phone: about 197 pt
-  between the rows), the value and the K / Tint row move beside the block on
-  its inner side, centred on the rocker, and the rocker takes the full
-  height. Lens buttons share the mode row's width (at least 30 pt wide each,
+  100 pt wide; they never shrink below that. **The rocker has a fixed, moderate
+  size:** 56 pt wide and exactly as tall as the selector and mode row beside
+  it (about 150 pt), the same on every screen, phone or iPad, both sides
+  alike; it never grows to fill the screen. The block and the rocker are
+  bottom-aligned. The value and the K / Tint row sit beside the block on its
+  inner side, level with the mode row, so the whole side control is no
+  taller than the rocker. Lens buttons share the mode row's width (at least 30 pt wide each,
   full height); the A | M cells stay full size. **Nothing moves
   when a group changes:** every slot has a fixed size worked out from the
   screen once, and the K / Tint row is kept (empty) for every group.

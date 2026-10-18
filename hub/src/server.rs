@@ -40,7 +40,7 @@ pub const CONTROLLER_DEAD_AFTER: Duration = Duration::from_secs(30);
 pub const AUTH_TIMEOUT: Duration = Duration::from_secs(10);
 /// A phone socket must be admitted within this of opening, whatever it
 /// sends meanwhile (pings do not extend it).
-pub const ADMIT_TIMEOUT: Duration = Duration::from_secs(20);
+pub const ADMIT_TIMEOUT: Duration = Duration::from_secs(10);
 /// Phone sockets not yet admitted, at most, per hub; more are closed at
 /// once. An embedding server with several hubs caps the total itself.
 pub const MAX_UNADMITTED: usize = 64;
@@ -48,6 +48,13 @@ pub const MAX_UNADMITTED: usize = 64;
 /// (axum's default is 64 MiB). An embedding server that upgrades sockets
 /// itself applies it with [`limit_upgrade`].
 pub const MAX_MESSAGE_BYTES: usize = 8 << 20;
+/// Longest message a phone may send before it is admitted (a `hello` with
+/// its controls, an `auth`): an unknown client can not make the hub parse
+/// megabytes.
+pub const MAX_UNADMITTED_MESSAGE_BYTES: usize = 256 << 10;
+/// Subprotocol prefix a browser uses to send the operator token
+/// (`tallycam.token.<token>`), so it is not in the URL (proxy logs).
+pub const TOKEN_PROTOCOL_PREFIX: &str = "tallycam.token.";
 /// Longest device id, in bytes.
 pub const MAX_DEVICE_ID_BYTES: usize = 256;
 /// Bad text frames logged per admitted phone socket; the rest at debug.
@@ -137,12 +144,70 @@ impl AppState {
     }
 
     fn operator_header_ok(&self, headers: &HeaderMap) -> bool {
-        self.operator_ok(
-            headers
-                .get(OPERATOR_TOKEN_HEADER)
-                .and_then(|v| v.to_str().ok()),
-        )
+        self.host_ok(headers)
+            && self.operator_ok(
+                headers
+                    .get(OPERATOR_TOKEN_HEADER)
+                    .and_then(|v| v.to_str().ok()),
+            )
     }
+
+    /// Without a token, only requests to a name this hub is known by: a DNS
+    /// rebinding page (its own name, resolved to this hub) gets nowhere.
+    /// With a token the page has no token, so nothing to check.
+    fn host_ok(&self, headers: &HeaderMap) -> bool {
+        if self.operator_token.is_some() {
+            return true;
+        }
+        let Some(host) = request_host(headers) else {
+            return false;
+        };
+        host_is_local_or_known(&host, &self.provisioning)
+    }
+}
+
+/// An IP address, `localhost`, a `.local` name, or a host of one of the
+/// hub's advertised control URLs (its LAN addresses, `--public-url`).
+fn host_is_local_or_known(host: &str, provisioning: &Provisioning) -> bool {
+    let host = crate::device_key::normalize_host(host);
+    let name = match host.strip_prefix('[') {
+        Some(v6) => {
+            return v6
+                .split(']')
+                .next()
+                .is_some_and(|a| a.parse::<std::net::Ipv6Addr>().is_ok())
+        }
+        None => host.rsplit_once(':').map_or(host.as_str(), |(h, _)| h),
+    };
+    if name.parse::<std::net::Ipv4Addr>().is_ok() || name == "localhost" || name.ends_with(".local")
+    {
+        return true;
+    }
+    provisioning.info().targets.iter().any(|t| {
+        crate::device_key::auth_host(&t.control_url)
+            .is_some_and(|known| known == host || known.split(':').next() == Some(name))
+    })
+}
+
+/// Security headers for the hub's own pages: no framing (clickjacking), no
+/// sniffing, no referrer, and a CSP as a backstop for injected markup.
+fn page(html: String) -> Response {
+    (
+        [
+            (header::X_FRAME_OPTIONS, "DENY"),
+            (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+            (header::REFERRER_POLICY, "no-referrer"),
+            (header::CACHE_CONTROL, "no-store"),
+            (
+                header::CONTENT_SECURITY_POLICY,
+                "default-src 'self'; img-src 'self' data:; connect-src 'self' ws: wss:; \
+                 script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; \
+                 frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
+            ),
+        ],
+        Html(html),
+    )
+        .into_response()
 }
 
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
@@ -183,17 +248,17 @@ pub fn router_with(hub: Arc<Hub>, provisioning: Provisioning, options: ServerOpt
         })
 }
 
-async fn clapper() -> impl IntoResponse {
-    Html(CLAPPER_HTML)
+async fn clapper() -> Response {
+    page(CLAPPER_HTML.to_string())
 }
 
-async fn join() -> impl IntoResponse {
-    Html(JOIN_HTML)
+async fn join() -> Response {
+    page(JOIN_HTML.to_string())
 }
 
 /// The operator page. With invites required, "Add a camera" shows a fresh
 /// invite instead of the plain deep link.
-async fn index(State(state): State<AppState>) -> impl IntoResponse {
+async fn index(State(state): State<AppState>) -> Response {
     let mut config = serde_json::json!({ "devicesUrl": "/api/devices" });
     if state.hub.invite_required() {
         config["inviteUrl"] = "/api/invite".into();
@@ -202,7 +267,7 @@ async fn index(State(state): State<AppState>) -> impl IntoResponse {
         // The page takes the token from its URL fragment (never sent here).
         config["operatorToken"] = true.into();
     }
-    Html(operator_page(&config))
+    page(operator_page(&config))
 }
 
 /// A one-time invite, the shape the operator page expects from `inviteUrl`.
@@ -270,7 +335,13 @@ async fn api_forget_device(
 }
 
 async fn api_info(State(p): State<Arc<Provisioning>>) -> impl IntoResponse {
-    ([(header::CACHE_CONTROL, "no-store")], Json(p.info()))
+    // Public (the join flow reads it): an SRT passphrase given in the
+    // template stays on the hub.
+    let mut info = p.info();
+    for t in &mut info.targets {
+        t.srt_url = crate::hub::redact_srt_url(&t.srt_url);
+    }
+    ([(header::CACHE_CONTROL, "no-store")], Json(info))
 }
 
 #[derive(Deserialize)]
@@ -381,13 +452,35 @@ async fn control_ws(
         warn!("Controller from {addr} refused: cross-origin upgrade");
         return StatusCode::FORBIDDEN.into_response();
     }
-    if !state.operator_ok(q.token.as_deref()) {
+    if !state.host_ok(&headers) {
+        warn!("Controller from {addr} refused: unknown Host (DNS rebinding?)");
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    // The page sends the token as a subprotocol, older clients in the query.
+    let protocol = headers
+        .get_all(header::SEC_WEBSOCKET_PROTOCOL)
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .flat_map(|v| v.split(','))
+        .map(str::trim)
+        .find(|p| p.starts_with(TOKEN_PROTOCOL_PREFIX))
+        .map(str::to_string);
+    let given = protocol
+        .as_deref()
+        .map(|p| &p[TOKEN_PROTOCOL_PREFIX.len()..])
+        .or(q.token.as_deref());
+    if !state.operator_ok(given) {
         warn!("Controller from {addr} refused: no or wrong operator token");
         return StatusCode::UNAUTHORIZED.into_response();
     }
     let hub = state.hub;
-    limit_upgrade(ws)
-        .on_upgrade(move |socket| controller_session(socket, hub, addr))
+    let ws = limit_upgrade(ws);
+    // Echo the protocol, or the browser fails the handshake.
+    let ws = match protocol {
+        Some(p) => ws.protocols([p]),
+        None => ws,
+    };
+    ws.on_upgrade(move |socket| controller_session(socket, hub, addr))
         .into_response()
 }
 
@@ -537,6 +630,13 @@ pub async fn device_session_for(socket: WebSocket, hub: Arc<Hub>, connection: De
             Message::Close(_) => break,
             _ => continue, // ping/pong/binary: only liveness
         };
+        if !matches!(phase, Phase::Admitted { .. }) && text.len() > MAX_UNADMITTED_MESSAGE_BYTES {
+            debug!(
+                "Device socket {conn} from {addr}: {} bytes before admission, closing",
+                text.len()
+            );
+            break;
+        }
         let msg: DeviceMessage = match serde_json::from_str(text.as_str()) {
             Ok(m) => m,
             Err(e) if !matches!(phase, Phase::Admitted { .. }) => {
@@ -694,7 +794,14 @@ pub async fn controller_session(socket: WebSocket, hub: Arc<Hub>, addr: SocketAd
     info!("Controller connected from {addr}");
     let (mut sink, mut stream) = socket.split();
     let (snapshot, mut events, guard) = hub.controller_joined();
-    if sink.send(Message::Text(snapshot.into())).await.is_err() {
+    if !matches!(
+        timeout(
+            CONTROLLER_DEAD_AFTER,
+            sink.send(Message::Text(snapshot.into()))
+        )
+        .await,
+        Ok(Ok(()))
+    ) {
         return;
     }
     let mut ping = interval(PING_INTERVAL);
@@ -727,14 +834,18 @@ pub async fn controller_session(socket: WebSocket, hub: Arc<Hub>, addr: SocketAd
                     info!("Controller {addr} silent, dropping it");
                     break;
                 }
-                if sink.send(Message::Ping(Default::default())).await.is_err() {
+                // A controller that stops reading is dropped, not waited for.
+                if !matches!(timeout(CONTROLLER_DEAD_AFTER, sink.send(Message::Ping(Default::default()))).await, Ok(Ok(()))) {
                     break;
                 }
                 None
             }
         };
         if let Some(out) = out {
-            if sink.send(Message::Text(out.into())).await.is_err() {
+            if !matches!(
+                timeout(CONTROLLER_DEAD_AFTER, sink.send(Message::Text(out.into()))).await,
+                Ok(Ok(()))
+            ) {
                 break;
             }
         }

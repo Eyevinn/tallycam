@@ -55,6 +55,54 @@ pub const DEVICE_QUEUE: usize = 256;
 /// Devices the hub lists, at most; a new one beyond is refused
 /// ([`AdmitError::TooManyDevices`]).
 pub const MAX_DEVICES: usize = 1024;
+/// Longest control value kept (as JSON), bytes; a longer one is dropped.
+const MAX_VALUE_BYTES: usize = 16 << 10;
+/// Longest preview (base64 JPEG) kept and forwarded, bytes.
+const MAX_PREVIEW_BYTES: usize = 1 << 20;
+/// Widest preview a controller may ask for, pixels.
+const MAX_PREVIEW_WIDTH: u32 = 4096;
+/// Longest device name shown and stored, characters.
+const MAX_NAME_CHARS: usize = 128;
+/// Longest extra `hello.device` fields kept (as JSON), bytes: they are
+/// stored and sent in every snapshot.
+const MAX_INFO_EXTRA_BYTES: usize = 4 << 10;
+
+fn value_fits(v: &Value) -> bool {
+    match v {
+        Value::String(s) => s.len() <= MAX_VALUE_BYTES,
+        Value::Null | Value::Bool(_) | Value::Number(_) => true,
+        _ => serde_json::to_string(v).is_ok_and(|j| j.len() <= MAX_VALUE_BYTES),
+    }
+}
+
+/// A phone's self-description as the hub keeps it: names without control
+/// characters (they reach logs and pages) and within bounds, extra fields
+/// only while small.
+fn bound_device_info(info: &mut DeviceInfo) {
+    for field in [
+        &mut info.name,
+        &mut info.model,
+        &mut info.platform,
+        &mut info.os_version,
+        &mut info.app_version,
+    ] {
+        if field.chars().any(char::is_control) || field.chars().count() > MAX_NAME_CHARS {
+            *field = field
+                .chars()
+                .filter(|c| !c.is_control())
+                .take(MAX_NAME_CHARS)
+                .collect();
+        }
+    }
+    if serde_json::to_string(&info.extra).map_or(true, |j| j.len() > MAX_INFO_EXTRA_BYTES) {
+        warn!(
+            "Device {}: extra hello fields over {MAX_INFO_EXTRA_BYTES} bytes, dropped",
+            info.id
+        );
+        info.extra.clear();
+    }
+}
+
 /// Control values kept per device, at most; new keys beyond are dropped.
 pub(crate) const MAX_STATE_KEYS: usize = 512;
 
@@ -506,10 +554,11 @@ impl Hub {
         &self,
         inner: &mut MutexGuard<'_, Inner>,
         conn: u64,
-        hello: Hello,
+        mut hello: Hello,
         key: Option<Option<String>>,
         link: Option<(DeviceTx, Option<String>)>,
     ) {
+        bound_device_info(&mut hello.device);
         let controllers = inner.controllers.len();
         let production = inner.production.clone();
         let id = hello.device.id.clone();
@@ -614,6 +663,10 @@ impl Hub {
             DeviceMessage::State { values } => {
                 let mut kept = Values::new();
                 for (k, v) in values {
+                    if !value_fits(&v) {
+                        debug!("Device {device}: state {k} over {MAX_VALUE_BYTES} bytes, dropped");
+                        continue;
+                    }
                     if entry.state.len() < MAX_STATE_KEYS || entry.state.contains_key(&k) {
                         entry.state.insert(k.clone(), v.clone());
                         kept.insert(k, v);
@@ -624,11 +677,18 @@ impl Hub {
                     values: redact::for_controllers(&kept),
                 }
             }
-            DeviceMessage::Status(status) => {
+            DeviceMessage::Status(mut status) => {
+                // Status is flattened into `device_status`: a `device` (or
+                // `type`) of its own would name another camera there.
+                status.extra.retain(|k, _| k != "device" && k != "type");
                 entry.status = Some(status.clone());
                 ControllerEvent::DeviceStatus { device, status }
             }
             DeviceMessage::Preview(preview) => {
+                if preview.jpeg.len() > MAX_PREVIEW_BYTES {
+                    debug!("Device {device}: preview over {MAX_PREVIEW_BYTES} bytes, dropped");
+                    return;
+                }
                 entry.preview = Some(preview.clone());
                 ControllerEvent::DevicePreview { device, preview }
             }
@@ -838,8 +898,14 @@ impl Hub {
             } => {
                 let pref = PreviewPref {
                     enabled,
-                    fps: fps.filter(|f| *f > 0.0).unwrap_or(entry.preview_pref.fps),
-                    width: width.filter(|w| *w > 0).unwrap_or(entry.preview_pref.width),
+                    fps: fps
+                        .filter(|f| f.is_finite() && *f > 0.0)
+                        .map(|f| f.clamp(0.1, 10.0))
+                        .unwrap_or(entry.preview_pref.fps),
+                    width: width
+                        .filter(|w| *w > 0)
+                        .map(|w| w.clamp(16, MAX_PREVIEW_WIDTH))
+                        .unwrap_or(entry.preview_pref.width),
                 };
                 entry.preview_pref = pref;
                 entry.send(entry.preview_command(watched));
@@ -867,7 +933,7 @@ impl Hub {
                     return Err(format!("device '{}' is offline", req.device));
                 }
                 if let ServerToDevice::Set { values, .. } = &mut msg {
-                    redact::restore(values, &entry.state);
+                    redact::restore(values, &entry.state)?;
                 }
                 if !entry.send(msg) {
                     return Err(format!("device '{}' connection closed", req.device));
@@ -876,6 +942,11 @@ impl Hub {
             }
         }
     }
+}
+
+/// An SRT URL with its passphrase as `***`, for what the hub shows or logs.
+pub fn redact_srt_url(url: &str) -> String {
+    redact::hide(url).unwrap_or_else(|| url.to_string())
 }
 
 #[cfg(test)]

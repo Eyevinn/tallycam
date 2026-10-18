@@ -519,19 +519,24 @@ const CONFIG = Object.assign({
   operatorToken: false,
 }, window.TALLYCAM_CONFIG || {});
 
-// The fragment as the page was opened: the view (#f=online&s=name...), a
-// camera to open (#<device id>), or the operator token (removed below).
-const INITIAL_HASH = location.hash;
+// The fragment as the page was opened, without any operator token: the
+// view (#f=online&s=name...) or a camera to open (#<device id>).
+const HASH_PARTS = location.hash.slice(1).split("&").filter(Boolean);
+const HASH_TOKEN = HASH_PARTS.find(p => p.startsWith("token="));
+const INITIAL_HASH = (rest => rest ? "#" + rest : "")(HASH_PARTS.filter(p => !p.startsWith("token=")).join("&"));
+// The token leaves the address bar (and history) at once; the rest of the
+// fragment stays.
+if (HASH_TOKEN !== undefined) {
+  try { history.replaceState(null, "", location.pathname + location.search + INITIAL_HASH); } catch (e) { /* sandboxed */ }
+}
 
 const OPERATOR_TOKEN = (() => {
   if (!CONFIG.operatorToken) return null;
-  const m = location.hash.match(/token=([^&]+)/);
-  if (m) {
+  if (HASH_TOKEN && HASH_TOKEN.length > "token=".length) {
     // Kept decoded, as it is used: a reload reads it back from storage.
-    let token = m[1];
+    let token = HASH_TOKEN.slice("token=".length);
     try { token = decodeURIComponent(token); } catch (e) { /* malformed escape: use as is */ }
     try { sessionStorage.setItem("operatorToken", token); } catch (e) { /* private mode */ }
-    history.replaceState(null, "", location.pathname + location.search);
     return token;
   }
   try { return sessionStorage.getItem("operatorToken"); } catch (e) { return null; }
@@ -572,6 +577,17 @@ function el(tag, attrs, ...children) {
     e.append(c instanceof Node ? c : document.createTextNode(String(c)));
   }
   return e;
+}
+
+// Values a device reports that become CSS classes: only the known ones, so a
+// device cannot put arbitrary classes on the page. Anything else gets
+// `fallback` (a class with no style of its own, or a neutral one).
+const STREAM_STATES = new Set(["idle", "connecting", "live", "error"]);
+const LOG_LEVELS = new Set(["debug", "info", "warn", "error"]);
+const THERMAL_STATES = new Set(["nominal", "fair", "serious", "critical"]);
+const CLOCK_HEALTH = new Set(["healthy", "degraded", "bad"]);
+function known(set, v, fallback) {
+  return typeof v === "string" && set.has(v) ? v : fallback;
 }
 
 function same(a, b) {
@@ -1034,8 +1050,8 @@ function updateCardEl(d, c) {
   const sstate = st && st.state;
   if (d.online && sstate && sstate !== "idle") {
     c.badge.style.display = "";
-    c.badge.className = "badge " + sstate;
-    c.badge.textContent = sstate.toUpperCase();
+    c.badge.className = "badge " + known(STREAM_STATES, sstate, "other");
+    c.badge.textContent = String(sstate).toUpperCase();
     c.badge.title = st.error || "";
   } else {
     c.badge.style.display = "none";
@@ -1083,7 +1099,7 @@ function statusBits(d) {
     out.push(el("span", { class: pct < 20 ? "chip low" : "" },
       "BAT ", el("b", {}, pct + "%"), s.battery.charging ? " chg" : ""));
   }
-  if (s.thermal) out.push(el("span", { class: "chip " + s.thermal }, s.thermal));
+  if (s.thermal) out.push(el("span", { class: "chip " + known(THERMAL_STATES, s.thermal, "other") }, s.thermal));
   const st = s.stream;
   if (st) {
     if (st.state === "live") {
@@ -1156,7 +1172,7 @@ function clockBit(c) {
     parts.push(" st" + (c.stratum ?? 0));
   }
   parts.push(" " + (c.selected ?? 0) + "*" + (c.combined ?? 0) + "+");
-  return el("span", { class: "chip clk-" + level, title }, ...parts);
+  return el("span", { class: "chip clk-" + known(CLOCK_HEALTH, level, "other"), title }, ...parts);
 }
 
 // The phone's send pipeline latency (status.stream.latency): p50 / p95 / max
@@ -1604,7 +1620,7 @@ function appendLogLine(e) {
   if (!panel || !panel.logEl) return;
   const log = panel.logEl;
   const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 20;
-  log.append(el("div", { class: "l " + e.level }, el("span", { class: "t" }, e.t), e.text));
+  log.append(el("div", { class: "l " + known(LOG_LEVELS, e.level, "info") }, el("span", { class: "t" }, e.t), e.text));
   while (log.childElementCount > LOG_MAX) log.firstElementChild.remove();
   if (atBottom) log.scrollTop = log.scrollHeight;
 }
@@ -2260,7 +2276,8 @@ function updateRow(d, r) {
   const st = s && s.stream;
   r.stream.replaceChildren();
   if (st && st.state && st.state !== "idle") {
-    r.stream.append(el("span", { class: "badge " + st.state, title: st.error || "" }, st.state.toUpperCase()));
+    r.stream.append(el("span", { class: "badge " + known(STREAM_STATES, st.state, "other"), title: st.error || "" },
+      String(st.state).toUpperCase()));
     if (st.state === "live" && typeof st.bitrate_kbps === "number") r.stream.append(" " + (st.bitrate_kbps / 1000).toFixed(1) + " Mb/s");
   } else if (d.online) {
     r.stream.append(el("span", { class: "muted" }, st ? "idle" : "-"));
@@ -2272,11 +2289,11 @@ function updateRow(d, r) {
   } else {
     r.battery.replaceChildren();
   }
-  r.thermal.replaceChildren(s && s.thermal ? el("span", { class: "chip " + s.thermal }, s.thermal) : "");
+  r.thermal.replaceChildren(s && s.thermal ? el("span", { class: "chip " + known(THERMAL_STATES, s.thermal, "other") }, s.thermal) : "");
   const c = s && s.clock;
   if (c) {
     const level = c.health || (c.synced ? "healthy" : "bad");
-    r.clock.replaceChildren(el("span", { class: "chip clk-" + level, title: clockSummaryText(c) }, level));
+    r.clock.replaceChildren(el("span", { class: "chip clk-" + known(CLOCK_HEALTH, level, "other"), title: clockSummaryText(c) }, level));
   } else {
     r.clock.replaceChildren();
   }
@@ -2882,8 +2899,8 @@ function updateShadeCard(d) {
   const st = d.status && d.status.stream;
   if (d.online && st && st.state && st.state !== "idle") {
     sh.badge.style.display = "";
-    sh.badge.className = "badge " + st.state;
-    sh.badge.textContent = st.state.toUpperCase();
+    sh.badge.className = "badge " + known(STREAM_STATES, st.state, "other");
+    sh.badge.textContent = String(st.state).toUpperCase();
     // Why it failed or is reconnecting, as on the Cameras view.
     sh.badge.title = st.error || "";
   } else {
@@ -3062,10 +3079,21 @@ function setConn(state, text) {
   document.getElementById("conn-dot").parentElement.title = text;
 }
 
+// A WebSocket subprotocol must be an HTTP token (RFC 6455, RFC 7230 tchar).
+const SUBPROTOCOL_TOKEN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+
 function connect() {
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
-  const query = OPERATOR_TOKEN ? "?token=" + encodeURIComponent(OPERATOR_TOKEN) : "";
-  ws = new WebSocket(proto + "//" + location.host + CONFIG.controlPath + query);
+  const url = proto + "//" + location.host + CONFIG.controlPath;
+  // The operator token goes in Sec-WebSocket-Protocol (tallycam.token.<token>,
+  // echoed by the hub), not the URL, so it stays out of access logs. A token
+  // that is not a valid subprotocol (one set with --operator-token) falls
+  // back to ?token=.
+  if (OPERATOR_TOKEN && SUBPROTOCOL_TOKEN.test(OPERATOR_TOKEN)) {
+    ws = new WebSocket(url, ["tallycam.token." + OPERATOR_TOKEN]);
+  } else {
+    ws = new WebSocket(url + (OPERATOR_TOKEN ? "?token=" + encodeURIComponent(OPERATOR_TOKEN) : ""));
+  }
   setConn("", "connecting");
   ws.onopen = () => { backoff = 500; watchSent = undefined; setConn("on", "hub connected"); updateProductionBar(); };
   ws.onmessage = ev => {
@@ -3092,8 +3120,16 @@ function connect() {
 
 let hubInfo = null;
 let targetIndex = 0;
+// Bumped when the Add dialog closes, so an invite that arrives after that is
+// dropped instead of shown.
+let inviteGen = 0;
 
+// With invites (CONFIG.inviteUrl) each call creates a one-time invite, so it
+// is only called when the Add dialog opens: never at page load, and the
+// invite is only shown in the dialog and dropped when it closes.
 async function loadInfo() {
+  const gen = inviteGen;
+  let info;
   try {
     if (CONFIG.inviteUrl) {
       // One target: a fresh one-time invite with its own QR code.
@@ -3102,22 +3138,41 @@ async function loadInfo() {
       const inv = await r.json();
       let label = inv.control_url;
       try { label = new URL(inv.control_url).host; } catch (e) { /* keep the URL */ }
-      hubInfo = { targets: [{ label, control_url: inv.control_url, srt_url: inv.srt_url || null,
-                              deep_link: inv.deep_link, qr_svg: inv.qr_svg,
-                              expires_in_secs: inv.expires_in_secs }] };
+      info = { targets: [{ label, control_url: inv.control_url, srt_url: inv.srt_url || null,
+                           deep_link: inv.deep_link, qr_svg: inv.qr_svg,
+                           expires_in_secs: inv.expires_in_secs }] };
     } else {
       const r = await fetch(CONFIG.infoUrl, { cache: "no-store" });
       if (!r.ok) throw new Error("HTTP " + r.status);
-      hubInfo = await r.json();
+      info = await r.json();
     }
   } catch (e) {
-    hubInfo = { error: String(e.message || e), targets: [] };
+    info = { error: String(e.message || e), targets: [] };
   }
+  if (CONFIG.inviteUrl && (gen !== inviteGen || document.getElementById("modal").hidden)) return;
+  hubInfo = info;
   if (targetIndex >= hubInfo.targets.length) targetIndex = 0;
   renderAddCards();
 }
 
+// The "no cameras yet" card when the hub uses invites: the steps and a
+// button that creates the invite, instead of a live code nobody asked for.
+function buildInvitePrompt() {
+  return el("div", { class: "add" },
+    el("div", { class: "qr" },
+      el("div", { class: "noqr" },
+        el("button", { type: "button", class: "btn on", onclick: openAdd }, "Show a code and link"))),
+    el("div", { class: "info" },
+      el("h2", {}, "Add a camera"),
+      el("p", {}, "No cameras yet."),
+      el("ol", {},
+        el("li", {}, "Install TallyCam on the phone."),
+        el("li", {}, "Show a code and link here: each admits one new phone and expires after a while."),
+        el("li", {}, "Scan the code with the phone's camera, or send it the link, and open it in TallyCam."))));
+}
+
 function buildAddCard(closable) {
+  if (CONFIG.inviteUrl && !closable) return buildInvitePrompt();
   const info = hubInfo;
   const targets = info ? info.targets : [];
   const t = targets[targetIndex];
@@ -3254,13 +3309,22 @@ function renderAddCards() {
 
 function openAdd() {
   const modal = document.getElementById("modal");
+  // A new invite each time: never the one shown (and maybe used) before.
+  if (CONFIG.inviteUrl) hubInfo = null;
   modal.hidden = false;
   modal.replaceChildren(buildAddCard(true));
   loadInfo();
 }
 
 function closeAdd() {
-  document.getElementById("modal").hidden = true;
+  const modal = document.getElementById("modal");
+  modal.hidden = true;
+  if (CONFIG.inviteUrl) {
+    // The invite leaves the page with the dialog.
+    inviteGen++;
+    hubInfo = null;
+    modal.replaceChildren();
+  }
 }
 
 document.getElementById("add-camera").addEventListener("click", openAdd);
@@ -3286,7 +3350,8 @@ document.querySelector("header h1").textContent = CONFIG.title;
 if (CONFIG.clapperUrl) document.getElementById("clapper").href = CONFIG.clapperUrl;
 else document.getElementById("clapper").remove();
 renderAddCards();
-loadInfo();
+// Addresses only (GET); an invite is created when the Add dialog opens.
+if (!CONFIG.inviteUrl) loadInfo();
 initTools();
 setView(storageGet("tallycamView") || "cameras");
 connect();

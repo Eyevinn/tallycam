@@ -1556,3 +1556,26 @@ fn a_challenge_passed_on_by_another_server_is_refused() {
     };
     assert!(hub.admit(&h, Some(direct), None).is_ok());
 }
+
+#[test]
+fn a_device_can_not_speak_for_another_in_its_status() {
+    let hub = Hub::new();
+    let _phone = connect_phone(&hub, "attacker");
+    let conn = CONNS.with(|c| c.borrow()["attacker"]);
+    let mut events = hub.subscribe();
+    let status: Status = serde_json::from_value(serde_json::json!({
+        "device": "victim", "type": "x", "stream": { "state": "live" }
+    }))
+    .unwrap();
+    hub.device_message(conn, "attacker", DeviceMessage::Status(status));
+    let frame = events.try_recv().unwrap();
+    let json: Value = serde_json::from_str(&frame.json).unwrap();
+    assert_eq!(json["device"], "attacker");
+    assert_eq!(json["type"], "device_status");
+    assert_eq!(
+        frame.json.matches("\"device\"").count(),
+        1,
+        "{}",
+        frame.json
+    );
+}

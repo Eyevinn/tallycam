@@ -19,6 +19,10 @@
     font-weight: 600; padding: 14px; border-radius: 10px; font-size: 18px; }
   ol { color: var(--muted); padding-left: 20px; margin: 16px 0 0; }
   .bad { color: #e5534b; }
+  [hidden] { display: none !important; }
+  dl { margin: 0 0 16px; display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; }
+  dt { color: var(--muted); }
+  dd { margin: 0; overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 15px; }
 </style>
 </head>
 <body>
@@ -33,6 +37,10 @@
   <div class="card">
     <h1>Join as a camera</h1>
     <p id="lead">This phone becomes a camera in the production.</p>
+    <dl id="where" hidden>
+      <dt>Hub</dt><dd id="hub-host"></dd>
+      <dt id="srt-label" hidden>Video to</dt><dd id="srt-host" hidden></dd>
+    </dl>
     <a class="open" id="open" hidden>Open in TallyCam</a>
     <ol id="steps">
       <li>Install TallyCam on this phone.</li>
@@ -44,9 +52,36 @@
 <script>
 "use strict";
 const SCHEME = "tallycam:";
-const link = decodeURIComponent(location.hash.slice(1));
+let link = "";
+try { link = decodeURIComponent(location.hash.slice(1)); } catch (e) { /* malformed escape: incomplete */ }
 const open = document.getElementById("open");
-if (link.toLowerCase().startsWith(SCHEME + "//")) {
+
+// host[:port] of a URL like ws://host:port/path or srt://host:port?..., or "".
+function hostOf(url) {
+  const m = /^[a-z][a-z0-9+.-]*:\/\/([^\/?#]*)/i.exec(url || "");
+  return m ? m[1].replace(/^.*@/, "") : "";
+}
+
+// The hosts the link points at (tallycam://connect?control=...&srt=...).
+function targets(link) {
+  const q = link.indexOf("?");
+  if (q < 0) return null;
+  let p;
+  try { p = new URLSearchParams(link.slice(q + 1).split("#")[0]); } catch (e) { return null; }
+  const hub = hostOf(p.get("control"));
+  return hub ? { hub, srt: hostOf(p.get("srt")) } : null;
+}
+
+const where = link.toLowerCase().startsWith(SCHEME + "//") ? targets(link) : null;
+if (where) {
+  // As text, so the person sees where the link points before the app opens.
+  document.getElementById("hub-host").textContent = where.hub;
+  if (where.srt) {
+    document.getElementById("srt-host").textContent = where.srt;
+    document.getElementById("srt-label").hidden = false;
+    document.getElementById("srt-host").hidden = false;
+  }
+  document.getElementById("where").hidden = false;
   open.href = link;
   open.hidden = false;
   // Straight into the app where it is installed; the button stays for

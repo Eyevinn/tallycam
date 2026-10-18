@@ -150,10 +150,25 @@ impl JsonFileStore {
         let Ok(json) = serde_json::to_vec_pretty(&contents) else {
             return;
         };
-        // Write a sibling file and rename, so a crash never leaves half a file.
-        let tmp = self.path.with_extension("json.tmp");
-        if let Err(e) = std::fs::write(&tmp, json).and_then(|()| std::fs::rename(&tmp, &self.path))
-        {
+        // Write a new sibling file and rename, so a crash never leaves half
+        // a file. A random name created new (never a planted symlink), and
+        // readable by this user only.
+        let tmp = self
+            .path
+            .with_extension(format!("json.{}.tmp", crate::hub::random_token()));
+        let written = (|| {
+            use std::io::Write;
+            let mut options = std::fs::OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+            let mut file = options.open(&tmp)?;
+            file.write_all(&json)?;
+            file.sync_all()?;
+            std::fs::rename(&tmp, &self.path)
+        })();
+        if let Err(e) = written {
+            let _ = std::fs::remove_file(&tmp);
             warn!("Cannot write device store {}: {e}", self.path.display());
         }
     }

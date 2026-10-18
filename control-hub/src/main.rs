@@ -12,7 +12,7 @@ use tallycam_hub::hub::DEFAULT_PREVIEW_FPS;
 use tallycam_hub::protocol::{ShutterPolicy, CONTROL_PATH, DEVICE_PATH};
 use tallycam_hub::provision::{FixedSrt, Provisioning};
 use tallycam_hub::{Hub, JsonFileStore};
-use tracing::info;
+use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
 const DEFAULT_LISTEN: &str = "0.0.0.0:8090";
@@ -129,6 +129,13 @@ fn parse_args() -> Result<Args, String> {
         None => None,
     };
     let shutter = shutter.as_deref().map(parse_shutter).transpose()?;
+    // An empty token would let an empty header or `?token=` through.
+    if operator_token
+        .as_deref()
+        .is_some_and(|t| t.trim().is_empty())
+    {
+        return Err("--operator-token must not be empty".into());
+    }
     let listen = listen.unwrap_or_else(|| DEFAULT_LISTEN.to_string());
     let listen = listen
         .parse()
@@ -226,7 +233,11 @@ async fn main() {
     info!("LCP control hub listening on http://{addr}");
     info!("Devices connect to ws://<host>{DEVICE_PATH}, operator UIs to ws://<host>{CONTROL_PATH}");
     for target in provisioning.info().targets {
-        info!("Advertising {} and {}", target.control_url, target.srt_url);
+        info!(
+            "Advertising {} and {}",
+            target.control_url,
+            tallycam_hub::hub::redact_srt_url(&target.srt_url)
+        );
     }
     // With invites the hub is meant to be closed: the operator page, invites,
     // forgetting devices and camera control then need a token.
@@ -249,6 +260,13 @@ async fn main() {
         for origin in origins {
             info!("Operator page: {origin}/#token={token}");
         }
+    }
+    if operator_token.is_none() {
+        warn!(
+            "Open hub: anyone who can reach {addr} can join a camera, control every camera \
+             and send its picture anywhere. For anything but a closed test network use \
+             --invites (an operator token and device keys), behind TLS (docs/SECURITY.md)."
+        );
     }
     let options = tallycam_hub::server::ServerOptions { operator_token };
     let app = tallycam_hub::server::router_with(Arc::new(hub), provisioning, options);

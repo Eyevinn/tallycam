@@ -14,6 +14,7 @@ use tallycam_hub::Provisioning;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::time::timeout;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
 
@@ -952,6 +953,89 @@ async fn operator_token_guards_invites_forget_and_control() {
     let mut ctl = connect(addr, &format!("{CONTROL_PATH}?token=s3cret")).await;
     let snap = wait_for(&mut ctl, 5, "snapshot", |m| m["type"] == "snapshot").await;
     assert_eq!(snap["devices"], json!([]));
+
+    // The page's way: the token as a subprotocol, echoed back, not in the URL.
+    let mut req = format!("ws://{addr}{CONTROL_PATH}")
+        .into_client_request()
+        .unwrap();
+    req.headers_mut().insert(
+        "sec-websocket-protocol",
+        "tallycam.token.s3cret".parse().unwrap(),
+    );
+    let (mut ctl, resp) = connect_async(req).await.unwrap();
+    assert_eq!(
+        resp.headers()["sec-websocket-protocol"],
+        "tallycam.token.s3cret"
+    );
+    wait_for(&mut ctl, 5, "snapshot", |m| m["type"] == "snapshot").await;
+    let mut req = format!("ws://{addr}{CONTROL_PATH}")
+        .into_client_request()
+        .unwrap();
+    req.headers_mut().insert(
+        "sec-websocket-protocol",
+        "tallycam.token.wrong".parse().unwrap(),
+    );
+    assert!(connect_async(req).await.is_err(), "a wrong token");
+}
+
+/// An open hub (no token) takes controllers only by a name it is known by
+/// (an address, localhost, its advertised hosts): a DNS rebinding page,
+/// served from its own name, gets nowhere. Its pages carry security headers,
+/// and a phone may not send a huge first message.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_open_hub_refuses_rebinding_and_sets_page_headers() {
+    let addr = start_hub().await;
+    for (host, ok) in [
+        (addr.to_string(), true),
+        (format!("localhost:{}", addr.port()), true),
+        (format!("studio-cam.local:{}", addr.port()), true),
+        (format!("evil.example:{}", addr.port()), false),
+    ] {
+        let mut req = format!("ws://{addr}{CONTROL_PATH}")
+            .into_client_request()
+            .unwrap();
+        req.headers_mut().insert("host", host.parse().unwrap());
+        req.headers_mut()
+            .insert("origin", format!("http://{host}").parse().unwrap());
+        assert_eq!(connect_async(req).await.is_ok(), ok, "{host}");
+    }
+
+    let (status, head, _) = http_get_head(addr, "/").await;
+    assert_eq!(status, 200);
+    for want in [
+        "x-frame-options: deny",
+        "x-content-type-options: nosniff",
+        "frame-ancestors 'none'",
+    ] {
+        assert!(head.to_ascii_lowercase().contains(want), "{want}: {head}");
+    }
+
+    let mut ws = connect(addr, tallycam_hub::protocol::DEVICE_PATH).await;
+    let huge = format!(
+        r#"{{"type":"hello","protocol":4,"device":{{"id":"x","pad":"{}"}}}}"#,
+        "x".repeat(300 << 10)
+    );
+    ws.send(Message::Text(huge.into())).await.unwrap();
+    expect_closed(&mut ws).await;
+}
+
+/// GET `path`: status and the raw response head.
+async fn http_get_head(addr: SocketAddr, path: &str) -> (u16, String, String) {
+    let mut s = TcpStream::connect(addr).await.unwrap();
+    s.write_all(
+        format!("GET {path} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n").as_bytes(),
+    )
+    .await
+    .unwrap();
+    let mut raw = Vec::new();
+    timeout(Duration::from_secs(5), s.read_to_end(&mut raw))
+        .await
+        .unwrap()
+        .unwrap();
+    let raw = String::from_utf8_lossy(&raw).to_string();
+    let (head, body) = raw.split_once("\r\n\r\n").unwrap();
+    let status = head.split(' ').nth(1).unwrap().parse().unwrap();
+    (status, head.to_string(), body.to_string())
 }
 
 /// A socket that has not said a valid hello is closed on its first bad

@@ -312,17 +312,25 @@ class CameraCapture(context: Context) {
      * sees them) and applies them with the next request.
      */
     fun update(change: (Settings) -> Settings) {
-        change(change)
+        change(change = change)
         handler.post { repeat() }
     }
 
-    private fun change(change: (Settings) -> Settings) {
+    /** [refit]: fit the shutter whatever changed (another lens has other ranges). */
+    private fun change(refit: Boolean = false, change: (Settings) -> Settings) {
         synchronized(this) {
             val before = settings
             val after = change(before)
             // Only when what the shutter follows changed: a zoom tick or a
-            // focus must not undo the auto ISO loop's shorter shutter.
-            settings = if (fitKey(after) != fitKey(before)) fitShutter(after) else after
+            // focus must not undo the auto ISO loop's shorter shutter. Nor
+            // must leaving auto: locked and manual start from what auto had
+            // (1/100 at the lowest ISO); entering auto starts from the
+            // production shutter again.
+            val leftAutoOnly = after.exposureMode != before.exposureMode &&
+                after.exposureMode != ExposureMode.AUTO &&
+                fitKey(before.copy(exposureMode = after.exposureMode)) == fitKey(after)
+            val fit = refit || (fitKey(after) != fitKey(before) && !leftAutoOnly)
+            settings = if (fit) fitShutter(after) else after
         }
     }
 
@@ -403,7 +411,7 @@ class CameraCapture(context: Context) {
             device?.close()
             device = null
             cameraId = id
-            change { it.copy(zoom = 1f, meteringPoint = null) }
+            change(refit = true) { it.copy(zoom = 1f, meteringPoint = null) }
             // Also without a preview (streaming in the background).
             if (texture != null || encoderSurface != null) openDevice()
             onControlsChanged?.invoke()
@@ -836,8 +844,10 @@ class CameraCapture(context: Context) {
         // Frames still exposed with the values before the last command
         // would make the loop correct twice.
         if (autoIsoWaitUntilNs != 0L) {
-            val arrived = kotlin.math.abs(frameIso - autoIsoWaitIso) <= maxOf(1, autoIsoWaitIso / 50) &&
-                kotlin.math.abs(frameExposureNs - autoIsoWaitExposureNs) <= autoIsoWaitExposureNs / 50
+            // Within what sensors round to: gain steps, and a line time
+            // (tens of µs) that is more than 2 % of a short shutter.
+            val arrived = kotlin.math.abs(frameIso - autoIsoWaitIso) <= maxOf(2, autoIsoWaitIso / 25) &&
+                kotlin.math.abs(frameExposureNs - autoIsoWaitExposureNs) <= maxOf(autoIsoWaitExposureNs / 50, 50_000L)
             if (!arrived && now < autoIsoWaitUntilNs) return
             autoIsoWaitUntilNs = 0L
         }

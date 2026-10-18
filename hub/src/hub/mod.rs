@@ -27,6 +27,7 @@ use crate::store::{DeviceStore, NoStore, StoredDevice};
 
 mod admission;
 mod calls;
+mod redact;
 mod shading;
 #[cfg(test)]
 mod tests;
@@ -38,8 +39,12 @@ use calls::PendingCall;
 use shading::{clamp_stats_fps, StatsPref};
 pub use shading::{default_production, DEFAULT_STATS_FPS, SHADING_PROTOCOL};
 
-/// Channel to one connected phone.
-pub type DeviceTx = mpsc::UnboundedSender<ServerToDevice>;
+/// Channel to one connected phone, holding at most [`DEVICE_QUEUE`]
+/// messages: a phone that stops reading loses messages instead of growing
+/// the hub's memory (and its socket is closed, see `server.rs`).
+pub type DeviceTx = mpsc::Sender<ServerToDevice>;
+/// Messages queued for one phone, at most.
+pub const DEVICE_QUEUE: usize = 256;
 
 /// One controller event, typed for an embedding server that maps it to its
 /// own events, and as JSON for LCP controllers. Cloning is cheap.
@@ -143,7 +148,7 @@ impl DeviceEntry {
             info: self.info.clone(),
             controls: self.controls.clone(),
             commands: self.commands.clone(),
-            state: self.state.clone(),
+            state: redact::for_controllers(&self.state),
             status: self.status.clone(),
             preview: self.preview.clone(),
             tally: self.tally,
@@ -175,7 +180,14 @@ impl DeviceEntry {
 
     fn send(&self, msg: ServerToDevice) -> bool {
         match &self.conn {
-            Some(c) => c.tx.send(msg).is_ok(),
+            Some(c) => match c.tx.try_send(msg) {
+                Ok(()) => true,
+                Err(mpsc::error::TrySendError::Full(_)) => {
+                    debug!("Device {}: queue full, message dropped", self.info.id);
+                    false
+                }
+                Err(mpsc::error::TrySendError::Closed(_)) => false,
+            },
             None => false,
         }
     }
@@ -282,12 +294,16 @@ impl Hub {
 
     /// A hub that lists the devices in `store` (offline) from the start and
     /// saves every device that says hello. The production starts as the
-    /// store kept it, or [`default_production`].
+    /// store kept it, or [`default_production`] when it kept none or one
+    /// [`Hub::set_production`] would refuse (an edited state file).
     pub fn with_store(store: Arc<dyn DeviceStore>) -> Self {
         let (events, _) = broadcast::channel(EVENT_CAPACITY);
         let mut inner = Inner::default();
         if let Some(production) = store.load_production() {
-            inner.production = production;
+            match shading::check_production(&production) {
+                Ok(()) => inner.production = production,
+                Err(e) => warn!("Ignoring the stored production: {e}"),
+            }
         }
         for StoredDevice { info, public_key } in store.load() {
             let id = info.id.clone();
@@ -526,7 +542,10 @@ impl Hub {
                 for (k, v) in &values {
                     entry.state.insert(k.clone(), v.clone());
                 }
-                ControllerEvent::DeviceState { device, values }
+                ControllerEvent::DeviceState {
+                    device,
+                    values: redact::for_controllers(&values),
+                }
             }
             DeviceMessage::Status(status) => {
                 entry.status = Some(status.clone());
@@ -695,7 +714,9 @@ impl Hub {
     }
 
     /// The latest control values a phone reported (`state`), empty for an
-    /// unknown device.
+    /// unknown device. Unredacted (the SRT passphrase included, unlike in
+    /// snapshots and events): for the embedding server's own use, never to
+    /// be passed on to an API or a controller as is.
     pub fn device_state(&self, device: &str) -> Values {
         self.lock()
             .devices
@@ -747,11 +768,14 @@ impl Hub {
             ServerToDevice::Challenge { .. } | ServerToDevice::Production(_) => {
                 Err("not a controller request".into())
             }
-            msg @ (ServerToDevice::Set { .. }
+            mut msg @ (ServerToDevice::Set { .. }
             | ServerToDevice::Command { .. }
             | ServerToDevice::Message { .. }) => {
                 if entry.conn.is_none() {
                     return Err(format!("device '{}' is offline", req.device));
+                }
+                if let ServerToDevice::Set { values, .. } = &mut msg {
+                    redact::restore(values, &entry.state);
                 }
                 if !entry.send(msg) {
                     return Err(format!("device '{}' connection closed", req.device));

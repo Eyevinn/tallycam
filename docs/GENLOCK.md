@@ -174,9 +174,11 @@ later (`second mod 34`), so the flash edge crosses a whole frame every 34 s.
   on the iPad.
 - **With the sweep**, the iPad moved to the later frame at a flash offset of
   about 10 to 17 ms and the iPhone at 20 to 26 ms, over three cycles: 8, 16
-  and 9 ms apart. The display moves the flash in 8.3 ms steps, so: **for the
-  same capture stamp the iPad exposes about 11 ms (±4 ms) earlier than the
-  iPhone.**
+  and 9 ms apart. These differences sit at the display's 8.3 ms refresh
+  step, so they **do not establish an offset between the models**: an iPad
+  exposing earlier for the same capture stamp is not proven. Display
+  scan-out plus rolling-shutter geometry (where the display sits in each
+  picture) explain them as well.
 
 **Calibration attempt:** with the genlock target held still and the flash
 fixed, sweeping both cameras' target offset 0 to 34 ms in 1 ms steps showed
@@ -189,11 +191,21 @@ probably the largest error: if the display sits at different heights in the
 two pictures, identical cameras see it at different times, by up to the
 readout time (10 to 30 ms).
 
-So genlock aligns the stamps to a fraction of a millisecond, but a capture
-stamp does not mean the same instant on every model (where in the readout the
-stamp sits, rolling-shutter speed, where the subject is in the frame). That
-is a per-model property, not a genlock error, and a fixed offset per model
-and format corrects it.
+The fixed-flash runs also disagreed with each other, and the 7 ms correction
+did not move the disagreement band (8.6 ms, about one refresh), which points
+at the display rather than the cameras.
+
+So genlock aligns the stamps to a fraction of a millisecond, but whether a
+capture stamp means the same instant on every model is still open. If it
+does not, one fixed delay per model will not model it: the right model is a
+first-row offset per model and format plus the readout time, which makes the
+offset depend on the row (where the subject is in the frame). It is a
+per-model property, not a genlock error.
+
+Next measurements, in order: swap the two cameras' positions in front of the
+display clapper (a geometry effect follows the position, a model offset
+follows the camera), then mains-flicker bands on a lit sheet, then a GPS-PPS
+driven LED.
 
 Open:
 

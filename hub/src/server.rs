@@ -6,6 +6,7 @@
 //! [`device_session`] or [`controller_session`].
 
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -21,7 +22,9 @@ use tokio::sync::{broadcast, mpsc};
 use tokio::time::{interval, timeout, MissedTickBehavior};
 use tracing::{debug, info, warn};
 
-use crate::hub::{check_hello_key, AdmitError, Challenge, Hub, Proof, DEFAULT_INVITE_TTL};
+use crate::hub::{
+    check_hello_key, AdmitError, Challenge, Hub, Proof, DEFAULT_INVITE_TTL, DEVICE_QUEUE,
+};
 use crate::protocol::{ControllerEvent, ControllerInput, DeviceMessage, CONTROL_PATH, DEVICE_PATH};
 use crate::protocol::{Hello, ServerToDevice};
 use crate::provision::{deep_link, qr_svg, with_invite_token, Provisioning};
@@ -34,6 +37,41 @@ pub const DEVICE_DEAD_AFTER: Duration = Duration::from_secs(10);
 pub const CONTROLLER_DEAD_AFTER: Duration = Duration::from_secs(30);
 /// A phone that was sent a `challenge` must answer with `auth` within this.
 pub const AUTH_TIMEOUT: Duration = Duration::from_secs(10);
+/// A phone socket must be admitted within this of opening, whatever it
+/// sends meanwhile (pings do not extend it).
+pub const ADMIT_TIMEOUT: Duration = Duration::from_secs(20);
+/// Phone sockets not yet admitted, at most, across the process; more are
+/// closed at once.
+pub const MAX_UNADMITTED: usize = 64;
+/// Bad text frames logged per admitted phone socket; the rest at debug.
+const BAD_FRAMES_LOGGED: u32 = 3;
+
+/// Phone sockets open and not yet admitted.
+static UNADMITTED: AtomicUsize = AtomicUsize::new(0);
+
+/// Counts one socket in [`UNADMITTED`] until admitted or dropped.
+struct Unadmitted(bool);
+
+impl Unadmitted {
+    /// `None` when [`MAX_UNADMITTED`] sockets are already waiting.
+    fn take() -> Option<Self> {
+        let before = UNADMITTED.fetch_add(1, Ordering::Relaxed);
+        let slot = Self(true);
+        (before < MAX_UNADMITTED).then_some(slot)
+    }
+
+    fn admitted(&mut self) {
+        if std::mem::take(&mut self.0) {
+            UNADMITTED.fetch_sub(1, Ordering::Relaxed);
+        }
+    }
+}
+
+impl Drop for Unadmitted {
+    fn drop(&mut self) {
+        self.admitted();
+    }
+}
 
 const INDEX_HTML: &str = include_str!("../web/index.html");
 /// The digital clapper: flash and beep at whole seconds, to film for A/V sync.
@@ -360,8 +398,14 @@ pub async fn device_session_for(socket: WebSocket, hub: Arc<Hub>, connection: De
     let DeviceConnection { addr, token, host } = connection;
     let conn = hub.new_connection_id();
     debug!("Device socket {conn} opened from {addr}");
+    let Some(mut unadmitted) = Unadmitted::take() else {
+        debug!("Device socket {conn} from {addr}: {MAX_UNADMITTED} sockets waiting for admission, closing");
+        return;
+    };
+    let admit_by = tokio::time::Instant::now() + ADMIT_TIMEOUT;
+    let mut bad_frames = 0u32;
     let (mut sink, mut stream) = socket.split();
-    let (tx, mut rx) = mpsc::unbounded_channel();
+    let (tx, mut rx) = mpsc::channel(DEVICE_QUEUE);
     // The hub holds the only strong sender once the phone is admitted. When
     // a newer connection replaces this one (or the device is forgotten), the
     // hub drops it, `rx` ends, and the writer closes the socket.
@@ -375,12 +419,14 @@ pub async fn device_session_for(socket: WebSocket, hub: Arc<Hub>, connection: De
                 msg = rx.recv() => {
                     let Some(msg) = msg else { break };
                     let Ok(json) = serde_json::to_string(&msg) else { continue };
-                    if sink.send(Message::Text(json.into())).await.is_err() {
+                    // A phone that does not read (its TCP window stays
+                    // full) is dropped, rather than kept by its pings.
+                    if !matches!(timeout(DEVICE_DEAD_AFTER, sink.send(Message::Text(json.into()))).await, Ok(Ok(()))) {
                         return;
                     }
                 }
                 _ = ping.tick() => {
-                    if sink.send(Message::Ping(Default::default())).await.is_err() {
+                    if !matches!(timeout(DEVICE_DEAD_AFTER, sink.send(Message::Ping(Default::default()))).await, Ok(Ok(()))) {
                         return;
                     }
                 }
@@ -391,10 +437,13 @@ pub async fn device_session_for(socket: WebSocket, hub: Arc<Hub>, connection: De
 
     let mut phase = Phase::Hello;
     loop {
+        let now = tokio::time::Instant::now();
         let wait = match &phase {
-            Phase::Challenged { deadline, .. } => DEVICE_DEAD_AFTER
-                .min(deadline.saturating_duration_since(tokio::time::Instant::now())),
-            _ => DEVICE_DEAD_AFTER,
+            Phase::Challenged { deadline, .. } => {
+                DEVICE_DEAD_AFTER.min(deadline.min(&admit_by).saturating_duration_since(now))
+            }
+            Phase::Hello => DEVICE_DEAD_AFTER.min(admit_by.saturating_duration_since(now)),
+            Phase::Admitted { .. } => DEVICE_DEAD_AFTER,
         };
         let next = tokio::select! {
             _ = &mut writer => break,
@@ -402,7 +451,13 @@ pub async fn device_session_for(socket: WebSocket, hub: Arc<Hub>, connection: De
         };
         let frame = match next {
             Err(_) if matches!(phase, Phase::Challenged { .. }) => {
-                info!("Device socket {conn} from {addr}: no auth within {AUTH_TIMEOUT:?}, closing");
+                info!("Device socket {conn} from {addr}: no auth in time, closing");
+                break;
+            }
+            Err(_) if matches!(phase, Phase::Hello) => {
+                info!(
+                    "Device socket {conn} from {addr}: no hello within {ADMIT_TIMEOUT:?}, closing"
+                );
                 break;
             }
             Err(_) => {
@@ -419,8 +474,20 @@ pub async fn device_session_for(socket: WebSocket, hub: Arc<Hub>, connection: De
         };
         let msg: DeviceMessage = match serde_json::from_str(text.as_str()) {
             Ok(m) => m,
+            Err(e) if !matches!(phase, Phase::Admitted { .. }) => {
+                // A phone's first message is a valid hello.
+                debug!(
+                    "Device socket {conn} from {addr}: bad message before admission, closing: {e}"
+                );
+                break;
+            }
             Err(e) => {
-                warn!("Device socket {conn}: bad message: {e}");
+                bad_frames += 1;
+                if bad_frames <= BAD_FRAMES_LOGGED {
+                    warn!("Device socket {conn}: bad message: {e}");
+                } else {
+                    debug!("Device socket {conn}: bad message {bad_frames}: {e}");
+                }
                 continue;
             }
         };
@@ -513,6 +580,7 @@ pub async fn device_session_for(socket: WebSocket, hub: Arc<Hub>, connection: De
         // The hub now holds the only strong sender: when a newer connection
         // replaces this one, the channel ends and the writer closes.
         tx = None;
+        unadmitted.admitted();
         phase = Phase::Admitted { id, key };
     }
 
@@ -530,7 +598,7 @@ async fn refuse(
     device: &str,
     addr: SocketAddr,
     reason: AdmitError,
-    tx: Option<mpsc::UnboundedSender<ServerToDevice>>,
+    tx: Option<mpsc::Sender<ServerToDevice>>,
     writer: &mut tokio::task::JoinHandle<()>,
 ) {
     warn!("Device socket {conn}: refused {device} from {addr}: {reason}");

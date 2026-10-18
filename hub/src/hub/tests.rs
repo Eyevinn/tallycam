@@ -109,7 +109,7 @@ fn stored_devices_are_listed_offline_and_hello_saves_changes() {
     assert!(!devices[0].online);
     assert_eq!(devices[0].tally, TallyState::Off);
 
-    let (tx, _rx) = mpsc::unbounded_channel();
+    let (tx, _rx) = mpsc::channel(DEVICE_QUEUE);
     join(
         &hub,
         hub.new_connection_id(),
@@ -121,9 +121,9 @@ fn stored_devices_are_listed_offline_and_hello_saves_changes() {
         "unchanged info is not saved"
     );
 
-    let (tx2, _rx2) = mpsc::unbounded_channel();
+    let (tx2, _rx2) = mpsc::channel(DEVICE_QUEUE);
     join(&hub, hub.new_connection_id(), hello("cam2", "Cam 2"), tx2);
-    let (tx3, _rx3) = mpsc::unbounded_channel();
+    let (tx3, _rx3) = mpsc::channel(DEVICE_QUEUE);
     join(
         &hub,
         hub.new_connection_id(),
@@ -147,7 +147,7 @@ fn set_tally_reaches_phone_and_subscribers_once_per_change() {
     let hub = Hub::new();
     assert!(hub.set_tally("nope", TallyState::Program).is_err());
 
-    let (tx, mut phone) = mpsc::unbounded_channel();
+    let (tx, mut phone) = mpsc::channel(DEVICE_QUEUE);
     join(&hub, hub.new_connection_id(), hello("cam1", "Cam 1"), tx);
     // hello brings the phone up to date: tally, then preview.
     assert!(matches!(
@@ -203,7 +203,7 @@ fn tally_set_while_offline_is_sent_on_connect() {
     let hub = Hub::with_store(store);
     hub.set_tally("cam1", TallyState::Preview).unwrap();
 
-    let (tx, mut phone) = mpsc::unbounded_channel();
+    let (tx, mut phone) = mpsc::channel(DEVICE_QUEUE);
     join(&hub, hub.new_connection_id(), hello("cam1", "Cam 1"), tx);
     assert!(matches!(
         phone.try_recv(),
@@ -214,8 +214,8 @@ fn tally_set_while_offline_is_sent_on_connect() {
 }
 
 /// A connected phone that answers with what `answer` returns.
-fn connect_phone(hub: &Hub, id: &str) -> mpsc::UnboundedReceiver<ServerToDevice> {
-    let (tx, mut rx) = mpsc::unbounded_channel();
+fn connect_phone(hub: &Hub, id: &str) -> mpsc::Receiver<ServerToDevice> {
+    let (tx, mut rx) = mpsc::channel(DEVICE_QUEUE);
     let conn = hub.new_connection_id();
     join(hub, conn, hello(id, id), tx);
     // Drain what hello sends (tally, preview).
@@ -388,7 +388,7 @@ fn legacy_devices_are_admitted_only_while_invites_are_off() {
     let key = crate::device_key::generate();
     let keyed = keyed_hello(&key, "Cam K");
     let ticket = admit_ticket(&hub, &keyed, &key, None).unwrap();
-    let (tx, _rx) = mpsc::unbounded_channel();
+    let (tx, _rx) = mpsc::channel(DEVICE_QUEUE);
     hub.device_join(hub.new_connection_id(), keyed.clone(), ticket, tx, None)
         .unwrap();
     let impostor = hello(&keyed.device.id, "Impostor");
@@ -419,7 +419,7 @@ fn an_invite_binds_the_key_and_the_key_is_enough_later() {
     let token = hub.create_invite(DEFAULT_INVITE_TTL);
     assert_eq!(token.len(), 32);
     let ticket = admit_ticket(&hub, &h, &key, Some(&token)).unwrap();
-    let (tx, _rx) = mpsc::unbounded_channel();
+    let (tx, _rx) = mpsc::channel(DEVICE_QUEUE);
     hub.device_join(hub.new_connection_id(), h.clone(), ticket, tx, None)
         .unwrap();
     let saved = store.saved.lock().unwrap().clone();
@@ -461,7 +461,7 @@ fn a_known_device_needs_its_key() {
     let h = keyed_hello(&key, "Cam 1");
     let token = hub.create_invite(DEFAULT_INVITE_TTL);
     let ticket = admit_ticket(&hub, &h, &key, Some(&token)).unwrap();
-    let (tx, _rx) = mpsc::unbounded_channel();
+    let (tx, _rx) = mpsc::channel(DEVICE_QUEUE);
     hub.device_join(hub.new_connection_id(), h.clone(), ticket, tx, None)
         .unwrap();
 
@@ -501,7 +501,7 @@ fn a_signature_works_for_one_challenge_only() {
     let h = keyed_hello(&key, "Cam 1");
     let token = hub.create_invite(DEFAULT_INVITE_TTL);
     let ticket = admit_ticket(&hub, &h, &key, Some(&token)).unwrap();
-    let (tx, _rx) = mpsc::unbounded_channel();
+    let (tx, _rx) = mpsc::channel(DEVICE_QUEUE);
     hub.device_join(hub.new_connection_id(), h.clone(), ticket, tx, None)
         .unwrap();
 
@@ -569,7 +569,7 @@ fn forget_closes_the_connection_and_drops_the_key() {
     let id = h.device.id.clone();
     let token = hub.create_invite(DEFAULT_INVITE_TTL);
     let ticket = admit_ticket(&hub, &h, &key, Some(&token)).unwrap();
-    let (tx, mut phone) = mpsc::unbounded_channel();
+    let (tx, mut phone) = mpsc::channel(DEVICE_QUEUE);
     hub.device_join(hub.new_connection_id(), h.clone(), ticket, tx, None)
         .unwrap();
     while phone.try_recv().is_ok() {}
@@ -608,7 +608,7 @@ fn a_resent_hello_never_changes_the_bound_key() {
     let id = h.device.id.clone();
     let ticket = admit_ticket(&hub, &h, &key, None).unwrap();
     let conn = hub.new_connection_id();
-    let (tx, _rx) = mpsc::unbounded_channel();
+    let (tx, _rx) = mpsc::channel(DEVICE_QUEUE);
     hub.device_join(conn, h.clone(), ticket, tx, None).unwrap();
     let bound = hub.lock().devices[&id].public_key.clone();
     assert_eq!(bound, h.public_key);
@@ -637,7 +637,7 @@ fn a_device_forgotten_after_admission_cannot_join() {
     let h = keyed_hello(&key, "Cam 1");
     let token = hub.create_invite(DEFAULT_INVITE_TTL);
     let ticket = admit_ticket(&hub, &h, &key, Some(&token)).unwrap();
-    let (tx, _rx) = mpsc::unbounded_channel();
+    let (tx, _rx) = mpsc::channel(DEVICE_QUEUE);
     hub.device_join(hub.new_connection_id(), h.clone(), ticket, tx, None)
         .unwrap();
 
@@ -645,7 +645,7 @@ fn a_device_forgotten_after_admission_cannot_join() {
     let ticket = admit_ticket(&hub, &h, &key, None).unwrap();
     assert!(hub.forget(&h.device.id));
     let saved_before = store.saved.lock().unwrap().len();
-    let (tx, _rx) = mpsc::unbounded_channel();
+    let (tx, _rx) = mpsc::channel(DEVICE_QUEUE);
     assert_eq!(
         hub.device_join(hub.new_connection_id(), h.clone(), ticket, tx, None),
         Err(AdmitError::NoInvite)
@@ -749,7 +749,7 @@ fn exposure_colour_and_focus_are_plain_controls() {
 #[test]
 fn protocol_1_devices_get_no_shading() {
     let hub = Hub::new();
-    let (tx, mut phone) = mpsc::unbounded_channel();
+    let (tx, mut phone) = mpsc::channel(DEVICE_QUEUE);
     let conn = hub.new_connection_id();
     join(&hub, conn, hello_v1("old", "Old app"), tx);
     CONNS.with(|c| c.borrow_mut().insert("old".into(), conn));
@@ -794,7 +794,7 @@ fn production_is_sent_on_admission_and_accepted_while_live() {
         ControllerEvent::Production(p) if p.mains_hz == 60
     ));
 
-    let (tx, mut phone) = mpsc::unbounded_channel();
+    let (tx, mut phone) = mpsc::channel(DEVICE_QUEUE);
     let conn = hub.new_connection_id();
     join(&hub, conn, hello("cam1", "Cam 1"), tx);
     CONNS.with(|c| c.borrow_mut().insert("cam1".into(), conn));
@@ -850,8 +850,16 @@ fn production_is_kept_in_the_store() {
     assert_eq!(*store.production.lock().unwrap(), Some(sixty.clone()));
 
     // A restart starts with it.
-    let again = Hub::with_store(store);
+    let again = Hub::with_store(store.clone());
     assert_eq!(again.production(), sixty);
+
+    // One the hub would refuse (an edited state file) is not used.
+    *store.production.lock().unwrap() = Some(Production {
+        mains_hz: 55,
+        ..sixty
+    });
+    let edited = Hub::with_store(store);
+    assert_eq!(edited.production(), default_production());
 }
 
 #[test]
@@ -881,7 +889,7 @@ fn going_offline_drops_status_and_image_stats() {
 fn image_stats_follow_the_controllers() {
     let hub = Arc::new(Hub::new());
     let mut v2 = connect_phone(&hub, "cam1");
-    let (tx, mut v1) = mpsc::unbounded_channel();
+    let (tx, mut v1) = mpsc::channel(DEVICE_QUEUE);
     join(&hub, hub.new_connection_id(), hello_v1("old", "Old"), tx);
     while v1.try_recv().is_ok() {}
 
@@ -969,4 +977,39 @@ fn image_stats_follow_the_controllers() {
         Ok(ServerToDevice::Preview { enabled: false, .. })
     ));
     assert!(v1.try_recv().is_err());
+}
+
+#[test]
+fn controllers_never_see_the_srt_passphrase() {
+    let hub = Hub::new();
+    let mut phone = connect_phone(&hub, "cam1");
+    let mut events = hub.subscribe();
+    let conn = CONNS.with(|c| c.borrow()["cam1"]);
+    let url = "srt://strom:9000?streamid=cam1&passphrase=0123456789abc&latency=100";
+    let mut values = Values::new();
+    values.insert("stream_url".into(), Value::String(url.into()));
+    hub.device_message(conn, "cam1", DeviceMessage::State { values });
+
+    let hidden = "srt://strom:9000?streamid=cam1&passphrase=***&latency=100";
+    let frame = events.try_recv().unwrap();
+    let ControllerEvent::DeviceState { values, .. } = &*frame.event else {
+        panic!("expected the state event")
+    };
+    assert_eq!(values["stream_url"], hidden);
+    assert_eq!(hub.devices()[0].state["stream_url"], hidden);
+
+    // Sent back edited, the phone gets its own passphrase.
+    controller(
+        &hub,
+        serde_json::json!({ "type": "set", "device": "cam1", "values": {
+            "stream_url": "srt://strom:9000?streamid=cam1&passphrase=***&latency=200" } }),
+    )
+    .unwrap();
+    let Ok(ServerToDevice::Set { values, .. }) = phone.try_recv() else {
+        panic!("expected the set")
+    };
+    assert_eq!(
+        values["stream_url"],
+        "srt://strom:9000?streamid=cam1&passphrase=0123456789abc&latency=200"
+    );
 }

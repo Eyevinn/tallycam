@@ -938,3 +938,13 @@ async fn operator_token_guards_invites_forget_and_control() {
     let snap = wait_for(&mut ctl, 5, "snapshot", |m| m["type"] == "snapshot").await;
     assert_eq!(snap["devices"], json!([]));
 }
+
+/// A socket that has not said a valid hello is closed on its first bad
+/// frame, so junk in a loop cannot fill the log.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn junk_before_hello_closes_the_device_socket() {
+    let addr = start_hub().await;
+    let mut ws = connect(addr, tallycam_hub::protocol::DEVICE_PATH).await;
+    ws.send(Message::Text("not json".into())).await.unwrap();
+    expect_closed(&mut ws).await;
+}

@@ -485,7 +485,20 @@ impl AutoIso {
     /// whole number of mains pulses that brings the ISO back into range.
     fn mains_duration(&mut self, s: &AutoIsoInput, product: f64) -> f64 {
         let current = self.duration(s);
-        let held = self.mains_held_ns.unwrap_or(current);
+        // A held shutter longer than the frame now allows (a higher frame
+        // rate, genlock's room) becomes the longest flicker-free one that
+        // fits: commanded as it is, it would stretch the frame.
+        let held = match self.mains_held_ns {
+            Some(h) if h > s.max_exposure_ns * (1.0 + 1e-6) => flicker_free_exposure_ns(
+                s.max_exposure_ns,
+                self.cfg.mains_hz,
+                s.min_exposure_ns,
+                s.max_exposure_ns,
+            )
+            .unwrap_or(current),
+            Some(h) => h,
+            None => current,
+        };
         let shorter = if self.cfg.mains_hz > 0 && product / held < s.min_iso {
             let pulse = 1e9 / (2.0 * f64::from(self.cfg.mains_hz));
             let lo = ((s.min_exposure_ns / pulse) - 1e-6).ceil().max(1.0);
@@ -583,6 +596,8 @@ mod tests {
         pending: Vec<(i64, f64, f64)>,
         iso: f64,
         exposure_ns: f64,
+        /// The format's longest exposure (the frame, less genlock's room).
+        max_exposure_ns: f64,
         /// Exposure EV history per ms for the metering delay.
         history: std::collections::VecDeque<f64>,
         metered: f64,
@@ -605,6 +620,7 @@ mod tests {
                 pending: Vec::new(),
                 iso: 448.0,
                 exposure_ns: 10_000_000.0,
+                max_exposure_ns: 33_333_333.0,
                 history: std::collections::VecDeque::new(),
                 metered: 0.0,
                 seed: 0x9e37_79b9_7f4a_7c15,
@@ -662,7 +678,7 @@ mod tests {
                 min_iso: 34.0,
                 max_iso: 3264.0,
                 min_exposure_ns: 14_000.0,
-                max_exposure_ns: 33_333_333.0,
+                max_exposure_ns: self.max_exposure_ns,
             }
         }
     }
@@ -807,6 +823,43 @@ mod tests {
         // Back indoors: 1/50 again.
         run(&mut cam, &mut ai, 10_000, |_, _| {});
         assert_eq!(cam.exposure_ns, 20_000_000.0);
+        assert!(
+            cam.picture_ev().abs() < 0.3,
+            "picture {} EV off",
+            cam.picture_ev()
+        );
+    }
+
+    #[test]
+    fn a_held_mains_shutter_never_outlasts_a_shorter_frame() {
+        // 25 fps, bright: held at 1/50, shortened to 1/100.
+        let mut cam = Camera::new(3.0, 30, 50.0);
+        cam.max_exposure_ns = 39_200_000.0;
+        cam.exposure_ns = 20_000_000.0;
+        cam.iso = 224.0;
+        cam.scene = Box::new(|t| {
+            if t < 2000 * MS {
+                0.0
+            } else if t < 12_000 * MS {
+                3.2
+            } else {
+                -1.0
+            }
+        });
+        let mut ai = AutoIso::new(AutoIsoConfig::default());
+        run(&mut cam, &mut ai, 11_500, |_, _| {});
+        assert_eq!(cam.exposure_ns, 10_000_000.0);
+        // Now 60 fps (no reset, as on iOS), and dark: 1/50 no longer fits.
+        cam.max_exposure_ns = 16_333_333.0;
+        run(&mut cam, &mut ai, 10_000, |cam, _| {
+            assert!(
+                cam.exposure_ns <= cam.max_exposure_ns,
+                "{} ms exposure in a {} ms frame",
+                cam.exposure_ns / 1e6,
+                cam.max_exposure_ns / 1e6
+            );
+        });
+        assert_eq!(cam.exposure_ns, 10_000_000.0);
         assert!(
             cam.picture_ev().abs() < 0.3,
             "picture {} EV off",

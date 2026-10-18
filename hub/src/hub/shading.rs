@@ -85,6 +85,21 @@ impl DeviceEntry {
     }
 }
 
+/// Production settings a phone can apply: `mains_hz` 50, 60 or 0, and a
+/// fixed shutter above zero.
+pub(super) fn check_production(production: &Production) -> Result<(), String> {
+    if !matches!(production.mains_hz, 0 | 50 | 60) {
+        return Err(format!(
+            "mains_hz must be 50, 60 or 0, not {}",
+            production.mains_hz
+        ));
+    }
+    if let ShutterPolicy::Fixed(0) = production.shutter {
+        return Err("a fixed shutter needs a positive value".into());
+    }
+    Ok(())
+}
+
 /// A controller's stats rate, clamped to what the phone sends.
 pub(super) fn clamp_stats_fps(fps: f64) -> f64 {
     fps.clamp(STATS_FPS_RANGE.0, STATS_FPS_RANGE.1)
@@ -106,15 +121,7 @@ impl Hub {
     /// and applies these when its stream stops. `mains_hz` is 50, 60 or 0
     /// (no mains-lit light).
     pub fn set_production(&self, production: Production) -> Result<(), String> {
-        if !matches!(production.mains_hz, 0 | 50 | 60) {
-            return Err(format!(
-                "mains_hz must be 50, 60 or 0, not {}",
-                production.mains_hz
-            ));
-        }
-        if let ShutterPolicy::Fixed(0) = production.shutter {
-            return Err("a fixed shutter needs a positive value".into());
-        }
+        check_production(&production)?;
         let mut inner = self.lock();
         if inner.production == production {
             return Ok(());

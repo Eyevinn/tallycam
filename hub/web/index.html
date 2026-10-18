@@ -1181,8 +1181,11 @@ function onMessage(m) {
     case "snapshot": {
       const seen = new Set();
       for (const s of m.devices || []) { applySnapshotDevice(s); seen.add(s.id); }
-      // Devices the hub no longer knows (hub restarted) stay, but offline.
-      for (const [id, dev] of devices) if (!seen.has(id)) dev.online = false;
+      // Devices the hub no longer lists were forgotten while this page was
+      // away (a restarted hub lists the ones it keeps).
+      for (const id of [...devices.keys()]) if (!seen.has(id)) removeDevice(id);
+      // Controls may have changed meanwhile, as in `device_hello`.
+      for (const dev of devices.values()) if (dev.shade && dev.shade.layout !== shadeLayout(dev)) dev.shade.rebuild = true;
       if (m.production) production = m.production;
       renderGrid();
       renderShade();
@@ -1199,6 +1202,8 @@ function onMessage(m) {
       nd.commands = m.commands || [];
       nd.keyFingerprint = m.key_fingerprint || null;
       nd.protocol = m.protocol || 0;
+      // The hub drops an older app's statistics without an event.
+      if (!hasShading(nd)) nd.imageStats = null;
       if (!nd.online) addLog(nd.id, "debug", "online");
       nd.online = true;
       renderGrid();
@@ -1241,6 +1246,8 @@ function onMessage(m) {
     case "device_offline":
       if (!d) return;
       d.online = false;
+      // As the hub does: a stale stream state would read as live.
+      d.status = null;
       d.imageStats = null;
       d.isoLimit = null;
       addLog(d.id, "warn", "offline");
@@ -1279,6 +1286,7 @@ function onMessage(m) {
       return;
     case "production":
       production = m;
+      if (shadeBar) shadeBar.sent = null;
       updateShadeAll();
       return;
     case "error":
@@ -1287,6 +1295,7 @@ function onMessage(m) {
         shadeError(d, m.message);
       } else {
         console.warn("hub error:", m.message);
+        if (shadeBar && /^production/.test(m.message || "")) { shadeBar.sent = null; updateProductionBar(); }
         shadeNotice(m.message);
       }
       return;
@@ -1743,11 +1752,13 @@ function buildShadeBar() {
   }, m === "waveform" ? "Waveform" : "Histogram")));
   const mains = el("select", {}, [[50, "50 Hz"], [60, "60 Hz"], [0, "None"]].map(([v, l]) => el("option", { value: v }, l)));
   const shutter = el("select", {});
-  // Sent, then the selects go back to the hub's production until its
-  // `production` event moves them (or an error leaves them as they were).
+  // Sent, then the selects show it until the hub's `production` event (or
+  // an error) answers; a second change meanwhile builds on the first.
   const sendProduction = ev => {
     const sv = shutter.value;
-    send({ type: "production", mains_hz: Number(mains.value), shutter: /^\d+$/.test(sv) ? Number(sv) : sv });
+    const p = { mains_hz: Number(mains.value), shutter: /^\d+$/.test(sv) ? Number(sv) : sv };
+    shadeBar.sent = p;
+    send({ type: "production", ...p });
     ev.target.blur();
     updateProductionBar();
   };
@@ -1760,7 +1771,7 @@ function buildShadeBar() {
     el("label", { title: "Mains frequency of the lights: the shutter avoids their flicker. None: the shutter is free" }, "Mains", mains),
     el("label", { title: "Production shutter for every camera. Free (or mains with no mains light): set per camera in manual exposure" }, "Shutter", shutter),
     note);
-  shadeBar = { root: bar, mains, shutter, note, scope, timer: null, notice: "", noticeUntil: 0 };
+  shadeBar = { root: bar, mains, shutter, note, scope, timer: null, notice: "", noticeUntil: 0, sent: null };
   return bar;
 }
 
@@ -1768,7 +1779,7 @@ function updateProductionBar() {
   if (!shadeBar) return;
   const b = shadeBar;
   for (const btn of b.scope.children) btn.classList.toggle("active", btn.dataset.m === scopeMode);
-  const p = production || { mains_hz: 50, shutter: "mains" };
+  const p = b.sent || production || { mains_hz: 50, shutter: "mains" };
   const choices = SHUTTER_CHOICES.slice();
   if (typeof p.shutter === "number" && !choices.some(([v]) => v === p.shutter)) choices.push([p.shutter, "1/" + p.shutter]);
   const key = choices.map(([v]) => v).join(",");
@@ -1848,7 +1859,7 @@ function connect() {
   };
   ws.onclose = () => {
     setConn("bad", "hub disconnected, retrying");
-    for (const d of devices.values()) d.online = false;
+    for (const d of devices.values()) { d.online = false; d.status = null; d.imageStats = null; }
     renderGrid();
     if (selected) updatePanel();
     updateShadeAll();

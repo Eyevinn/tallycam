@@ -77,24 +77,6 @@ val buildCore by tasks.registering(Exec::class) {
 }
 tasks.named("preBuild") { dependsOn(buildCore) }
 
-// The unit tests call the core too (core/tests/vectors through the UniFFI
-// bindings): a host build of the same library, loaded by JNA.
-val repoDir: File = rootDir.parentFile
-val hostCoreDir: File = File(System.getenv("CARGO_TARGET_DIR") ?: repoDir.resolve("target").path, "debug")
-val buildHostCore by tasks.registering(Exec::class) {
-    workingDir = repoDir
-    commandLine("cargo", "build", "--manifest-path", "core/android/Cargo.toml")
-    inputs.files(fileTree(repoDir.resolve("core")) { include("**/*.rs", "**/Cargo.toml") })
-    inputs.files(repoDir.resolve("Cargo.toml"), repoDir.resolve("Cargo.lock"))
-    outputs.dir(hostCoreDir.resolve("deps"))
-    onlyIf { !project.hasProperty("skipCore") }
-}
-tasks.withType<Test>().configureEach {
-    dependsOn(buildHostCore)
-    systemProperty("jna.library.path", hostCoreDir.path)
-    systemProperty("tallycam.vectors", repoDir.resolve("core/tests/vectors").path)
-}
-
 dependencies {
     implementation(platform("androidx.compose:compose-bom:2024.12.01"))
     implementation("androidx.compose.ui:ui")
@@ -111,6 +93,4 @@ dependencies {
     implementation("com.journeyapps:zxing-android-embedded:4.3.0")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")
-    // JNA with its desktop native parts, for the core in unit tests.
-    testImplementation("net.java.dev.jna:jna:5.15.0")
 }

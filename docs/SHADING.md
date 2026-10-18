@@ -1,9 +1,9 @@
 # Shading: exposure, colour and focus control
 
 Status: design agreed 2026-10-16 (decisions at the end), ownership dropped
-2026-10-18 (D13). Phase 1 in progress.
-PROTOCOL.md gets the message definitions as they are built, and the code
-becomes the source of truth for how this works.
+2026-10-18 (D13). Phase 1 is built (iOS, Android on the emulator, the hub);
+the auto-shader (phase 2) is design only. The messages are in PROTOCOL.md;
+the code is the source of truth.
 
 ## Goal
 
@@ -32,9 +32,9 @@ in its descriptor, which the phone already sends.
 
 Not in any group:
 
-- **Shutter** becomes a production setting (see "Shutter").
-- **Lens, zoom and stabilisation** stay as they are: the camera operator and
-  the server both set them.
+- **Shutter** is a production setting (see "Shutter").
+- **Lens, zoom and stabilisation:** the camera operator and the server both
+  set them.
 - **Resolution, frame rate and codec** cannot be changed while the camera is
   live, from the phone or from the server (see "Locked while live").
 
@@ -131,59 +131,64 @@ is not a whole number of light pulses flickers. So:
   stream stops, then applies the new ones (and logs that it waits). The hub
   page says so while any camera is live.
 - **The shutter must fit the frame.** 1/50 does not fit at 60 fps. The phone
-  then uses the nearest flicker-free value that fits (1/100), as the core's
-  rounding already does. It reports the shutter it uses in `state`, and the
-  hub shows the difference as a warning.
-- `shutter` stays in `state`, read-only unless the shutter is free.
+  then uses the longest flicker-free value that fits (1/100) and reports the
+  shutter it uses in `state`; the hub page shows that one, with the
+  production's in its tooltip.
+- `shutter` is in `state`, read-only unless the shutter is free.
 
 With the shutter fixed, **ISO is the only exposure control** (the "iris").
 So:
 
 - Exposure **auto** is the core's auto ISO loop at the production shutter.
-  It already exists for genlock. iOS continuous auto exposure moves the
-  shutter (and fights genlock), so it is no longer an exposure mode. With a
-  free shutter the core loop holds 180° and shortens it only once ISO is at
-  its minimum (D1).
-- `exposure_mode` options become `auto`, `locked` and `manual`. `auto_iso`
-  merges into `auto`. The phone still accepts `auto_iso` as `auto` for one
-  version.
+  iOS continuous auto exposure moves the shutter and the frame duration
+  (which genlock needs), so it is not an exposure mode.
+- **Too bright at the lowest ISO.** Under mains light the loop then shortens
+  the shutter to fewer light pulses (1/100 from 1/50 at 50 Hz, 1/120 from
+  1/60 at 60 Hz), still flicker-free, before it reports too bright, and
+  returns to the production shutter when the light drops. With a free
+  shutter it holds 180° and shortens it freely once ISO is at its minimum
+  (D1).
+- `exposure_mode` options are `auto`, `locked` and `manual`. The phone
+  accepts an old `auto_iso` as `auto`.
 - `manual` sets ISO only, and the shutter too when the shutter is free.
 
 ## Locked while live
 
-Resolution, frame rate, codec and shutter cannot be changed while live:
+Resolution, frame rate, codecs and the phone's own mains setting cannot be
+changed while live:
 
-- The phone refuses a `set` of `resolution`, `frame_rate`, `video_codec` or
-  `audio_codec` while live, with "not while live". Today the resolution is
-  held as pending, frame rate applies live and the codecs apply on the next
-  Go Live. All three become a refusal, so nobody thinks a change took effect
-  when it did not (D11).
-- The descriptors say so with a new `locked_while_live: true`, so a UI greys
-  them out while `status.stream.state` is `live` or `connecting`.
-- On the phone the settings are disabled while live, with a short "Stop the
-  stream to change".
+- The phone refuses a `set` of `resolution`, `frame_rate`, `video_codec`,
+  `audio_codec` or `mains_hz` while live, with "not while live", so nobody
+  thinks a change took effect when it did not (D11).
+- Their descriptors carry `locked_while_live: true`, so a UI greys them out
+  while `status.stream.state` is `live` or `connecting`.
+- On the phone these settings are disabled while live, with "Stop the stream
+  to change".
+- A hub's `production` is not refused: a live phone keeps it until the
+  stream stops (see "Shutter").
 
 ## Phone UI (camera operator)
 
 The shooting screen is specified in docs/UI_DESIGN.md (one design for iOS and
-Android; differences in docs/APPS.md). What it does for shading:
+Android; differences in docs/APPS.md). For shading it means:
 
-| Part | Notes |
-|---|---|
-| **Values row** | Under the status line, always shown, also with the screen locked: `1080p30 │ ISO 26 │ 1/100 │ +0.3 EV │ 5200 K +4 │ AF`. A manual or locked group's value is yellow, auto white. Each value is a button that picks the group the adjust control changes (the format opens Settings) |
-| **Adjust control** | At the right edge, always there, mirroring zoom on the left: an A / M switch (M is any held mode, manual or locked), a rocker like the zoom rocker, the value. Exposure ramps `ev_bias` in auto and ISO in manual; colour `wb_temperature` (or `wb_tint`); focus `focus_position`. Moving colour or focus in auto switches it to manual. A long press on colour's switch is `wb_one_shot` |
-| **Hub changes** | A value the hub just set flashes cyan for a second, so the operator sees the shader act; nothing else changes on the phone (D13) |
-| **Exposure warning** | `CLIP` (red) or `DARK` (orange) after ISO, from the image statistics (below). The auto ISO limits (`TooDark`, `TooBright`) are a badge on the hub |
-| **Grid, horizon, frame guides** | Rule of thirds; a horizon line from the gravity sensor, green when level; 16:9 action and title safe areas, and 4:3 and 9:16 centre-cut guides. Drawn over the preview only, never in the stream |
-| **Zoom and lens** | A vertical rocker at the left edge for smooth zoom (speed by deflection, for a usable zoom move on air), lens buttons above it (those that exist) |
-| **Focus** | Tap to focus, long press to lock focus there (`AF-L` in the values row), focus peaking |
-| **Audio meter** | A small peak/RMS meter of the microphone, with a clip marker |
-| **Screen lock** | One button locks all touch input except a slide to unlock; the rockers hide. Suggested at Go Live. It blocks touches only: remote control, tally and the stream keep running. Guided Access is still the recommendation against leaving the app |
-
-Focus peaking needs the frames, and the preview today is a capture preview
-layer that the app cannot draw into. The light approach: an overlay drawn
-from the video output at a low rate (edge detection on a downscaled luma
-plane), on top of the preview layer. (D10)
+- **Values row:** the camera's values, always shown; a manual or locked
+  group's value is yellow, auto white.
+- **Adjust control:** exposure ramps `ev_bias` in auto and ISO in manual;
+  colour `wb_temperature` or `wb_tint`; focus `focus_position`. Moving
+  colour or focus in auto switches it to manual. A long press on colour's
+  mode switch is `wb_one_shot`.
+- **Hub changes:** a value the hub just set flashes cyan for a second, so
+  the operator sees the shader act; nothing else changes on the phone (D13).
+- **Exposure warning:** `CLIP` (red) or `DARK` (orange) after ISO, from the
+  image statistics (below). The auto ISO limits (too dark, too bright) are a
+  badge on the hub.
+- **Screen lock** blocks touches only: remote control, tally and the stream
+  keep running. Guided Access is still the recommendation against leaving
+  the app.
+- **Focus peaking** is an overlay drawn from the video frames at a low rate
+  (edge detection on a downscaled luma plane), over the system preview layer
+  (D10).
 
 ## Image statistics
 
@@ -204,8 +209,8 @@ numbers serve all three, so they are part of phase 1:
 
 - Computed on the phone from the picture that is encoded (after the ISP), on
   a downscaled copy (about 240×135 for 1080p), at most 4 times a second, off
-  the capture queue. It works like the preview JPEG: one buffer retained, the
-  work done on a utility queue. The cost is small next to the preview JPEG.
+  the capture queue; the cost is small next to the preview JPEG. Where each
+  app takes the picture from: docs/APPS.md.
 - `clipped` and `crushed`: the share of pixels at the top and bottom of the
   range. `neutral_*`: the mean R/G and B/G of near-grey pixels and how much
   of the picture they cover, so colour matching can tell whether there is
@@ -214,11 +219,11 @@ numbers serve all three, so they are part of phase 1:
   have to line up `state` with the statistics by time.
 - Sent to the hub only while a controller asks for them (as with `preview`),
   at 1 per second by default: about 1 KB/s per camera.
-- The computation is a pure function of a luma and chroma plane, so it goes
-  into the core and Android gets the same numbers. The downscale stays native.
+- The computation is a pure function of a luma and chroma plane, in the
+  core (`core/src/image_stats.rs`), so both apps get the same numbers. The
+  downscale is native.
 
-**Why the phone computes them, not the hub:** the proposal in the brief, and
-the recommendation. Decoding every camera's SRT stream on the hub is what
+**Why the phone computes them, not the hub:** decoding every camera's SRT stream on the hub is what
 the crowd pool deliberately avoids. The preview JPEG is lossy, scaled,
 converted to sRGB (clipping is hard to read from it), and only sent while
 someone watches. The phone has the exact picture, needs the numbers itself,
@@ -229,9 +234,10 @@ in the core.
 
 - **All cameras side by side,** each with its preview, a waveform or
   histogram from `image_stats` (switchable), clip and crush shares, tally,
-  the readout line (as on the phone) and an exposure warning badge (auto ISO
-  at its limit, from the phone's warn log; clipping or too dark from the
-  statistics). The Cameras view shows the readout and badge too.
+  the camera values line (as on the phone) and an exposure warning badge
+  (auto ISO at its limit, from the phone's warn log; clipping or too dark
+  from the statistics). The Cameras view shows the values line and badge
+  too.
 - **Per camera:** exposure and colour modes, ISO (log slider, with the
   production shutter shown next to it; the shutter is editable in manual
   exposure when it is free), white balance temperature and tint. Every
@@ -274,7 +280,7 @@ The hub sees all cameras, so it can make them agree:
 |---|---|---|
 | ISO, white balance, focus, zoom on the sensor | Shader view, copy and match | Black level (pedestal), gamma, knee, saturation |
 | Auto exposure (core auto ISO loop), AWB, AF | Production settings (mains, shutter), kept across restarts | Lift, gamma, gain per camera, LUTs |
-| Readout, exposure warning | Readout and warnings per camera | Matching what the phone cannot (for example mixed models), on the decoded picture |
+| Values row, exposure warning | Values and warnings per camera | Matching what the phone cannot (for example mixed models), on the decoded picture |
 | Image statistics (core) | Auto-shader (phase 2) | Tally source (vision mixer), as today |
 | Operator aids: guides, peaking, meters, screen lock | | |
 
@@ -322,20 +328,11 @@ Taken on 2026-10-16, D13 on 2026-10-18. The references above point here.
   release, remote groups read-only on the phone) cost more in confusion than
   it saved in fights. Production settings and image statistics stay.
 
-## Phase 1 plan (after review)
+## Phases
 
-In this order, each one tested before the next:
-
-1. Core: message types (`production`, `stats`, `image_stats`), protocol
-   version 2.
-2. Phone: production shutter, `exposure_mode` auto as auto ISO, and the live
-   lock on format and codec.
-3. Phone UI: the readout first, then the guides, zoom and lens, focus lock
-   and peaking, audio meter, screen lock.
-4. Image statistics (core function, phone sampling) and the exposure
-   warning.
-5. Hub: production settings (accepted any time, persisted) and the stats
-   preference.
-6. Hub shader view (side by side, copy and match).
-
-The auto-shader is not built in phase 1.
+1. **Built:** protocol 2 (`production`, `stats`, `image_stats`), the
+   production shutter and auto ISO as exposure auto, the live lock on format
+   and codecs, the phone's values row, adjust control and aids, image
+   statistics and the exposure warning, the hub's production settings and
+   the shader view (side by side, copy and match).
+2. **Design only:** the auto-shader.

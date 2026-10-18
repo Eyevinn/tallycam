@@ -368,6 +368,8 @@ class LiveStream(private val listener: Listener) {
                     if (captureToMuxCount < captureToMux.size) captureToMux[captureToMuxCount++] = now - hostNs
                 }
             }
+
+            override fun onVideoError(reason: String) = fail(reason)
         }
 
         // Audio thread: copy into a pooled packet, then mux on the stream thread.
@@ -386,6 +388,13 @@ class LiveStream(private val listener: Listener) {
                 // One drain per burst; Message objects come from Android's pool.
                 if (!drainPosted.getAndSet(true)) handler.post(drainAudio)
             }
+
+            override fun onAudioError(reason: String) = fail(reason)
+        }
+
+        /** An encoder failed: the stream stops, as when SRT gives up. */
+        private fun fail(reason: String) {
+            main.post { if (session === this@Session && !closed) listener.onStreamFailed(reason) }
         }
     }
 

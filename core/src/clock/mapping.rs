@@ -193,9 +193,12 @@ impl MappingSnapshot {
     }
 }
 
-/// Single-writer, many-reader seqlock for a [`MappingSnapshot`]. Readers
-/// never block, take no lock and do not allocate: they retry on the rare
-/// overlap with a write (once per clock update, about once a minute).
+/// Many-reader seqlock for a [`MappingSnapshot`]. Readers never block, take
+/// no lock and do not allocate: they retry on the rare overlap with a write
+/// (once per clock update, about once a minute). Writes are usually from one
+/// thread, but two may overlap (an old clock driver still stopping while a
+/// new one starts): a writer takes the odd sequence with a CAS, so writers
+/// serialize among themselves and the sequence always ends even.
 pub struct SnapshotCell {
     seq: AtomicU64,
     words: [AtomicU64; MappingSnapshot::WORDS],
@@ -217,10 +220,29 @@ impl SnapshotCell {
         }
     }
 
-    /// Publishes a snapshot. Only one thread may write.
+    /// Publishes a snapshot. Safe from several threads: a writer waits
+    /// while another holds the sequence odd. (A plain load and store of
+    /// seq + 1 let two overlapping writers leave it odd for good, and every
+    /// reader then spun forever.)
     pub fn store(&self, snapshot: &MappingSnapshot) {
-        let s = self.seq.load(Ordering::Relaxed);
-        self.seq.store(s.wrapping_add(1), Ordering::Relaxed);
+        let mut s = self.seq.load(Ordering::Relaxed);
+        loop {
+            if s & 1 == 1 {
+                core::hint::spin_loop();
+                s = self.seq.load(Ordering::Relaxed);
+                continue;
+            }
+            match self.seq.compare_exchange_weak(
+                s,
+                s.wrapping_add(1),
+                Ordering::Acquire,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => break,
+                Err(now) => s = now,
+            }
+        }
+        // Readers that see a word below also see the odd sequence.
         fence(Ordering::Release);
         for (cell, w) in self.words.iter().zip(snapshot.to_words()) {
             cell.store(w, Ordering::Relaxed);
@@ -307,5 +329,53 @@ mod tests {
             cell.store(&MappingSnapshot::free_running(i, 2 * i));
         }
         reader.join().unwrap();
+    }
+
+    #[test]
+    fn seqlock_survives_overlapping_writers() {
+        use std::sync::atomic::AtomicBool;
+        use std::sync::Arc;
+        let cell = Arc::new(SnapshotCell::new());
+        cell.store(&MappingSnapshot::free_running(0, 0));
+        let done = Arc::new(AtomicBool::new(false));
+        let readers: Vec<_> = (0..2)
+            .map(|_| {
+                let (cell, done) = (cell.clone(), done.clone());
+                std::thread::spawn(move || {
+                    let mut reads = 0u64;
+                    while !done.load(Ordering::Relaxed) || reads < 1000 {
+                        let s = cell.load().unwrap();
+                        // Every writer keeps anchor_tai = 2 * anchor_host.
+                        assert_eq!(s.anchor_tai_ns, 2 * s.anchor_host_ns);
+                        assert_eq!(s.generation, s.anchor_host_ns as u64);
+                        reads += 1;
+                    }
+                })
+            })
+            .collect();
+        let writers: Vec<_> = (0..4i64)
+            .map(|t| {
+                let cell = cell.clone();
+                std::thread::spawn(move || {
+                    for i in 0..20_000i64 {
+                        let h = t * 1_000_000 + i;
+                        let mut s = MappingSnapshot::free_running(h, 2 * h);
+                        s.generation = h as u64;
+                        cell.store(&s);
+                    }
+                })
+            })
+            .collect();
+        for w in writers {
+            w.join().unwrap();
+        }
+        done.store(true, Ordering::Relaxed);
+        // Readers terminate: the sequence is not left odd.
+        for r in readers {
+            r.join().unwrap();
+        }
+        let seq = cell.seq.load(Ordering::Relaxed);
+        assert_eq!(seq & 1, 0);
+        assert_eq!(seq, 2 * (1 + 4 * 20_000));
     }
 }

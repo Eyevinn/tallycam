@@ -9,7 +9,7 @@ use std::io::{self, ErrorKind};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs, UdpSocket};
 use std::os::fd::AsRawFd;
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
+use std::sync::atomic::{fence, AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -162,7 +162,39 @@ struct Shared {
 }
 
 impl Shared {
+    fn new() -> Result<Shared, String> {
+        Ok(Shared {
+            queue: SpscQueue::new(QUEUE_SLOTS),
+            closed: AtomicBool::new(false),
+            connected: AtomicBool::new(false),
+            parked: AtomicBool::new(false),
+            waker: Waker::new().map_err(|e| format!("wake pipe: {e}"))?,
+            rtt_us: AtomicU64::new(0),
+            retransmitted: AtomicU64::new(0),
+            naks: AtomicU64::new(0),
+            lost: AtomicU64::new(0),
+            dropped: AtomicU64::new(0),
+            queue_dropped: AtomicU64::new(0),
+            in_flight: AtomicU64::new(0),
+            send_buffer_us: AtomicU64::new(0),
+            latency_ms: AtomicU32::new(0),
+            bytes_sent: AtomicU64::new(0),
+            packets_sent: AtomicU64::new(0),
+            connections: AtomicU32::new(0),
+            abr_ceiling_kbps: AtomicU32::new(0),
+            abr_generation: AtomicU32::new(0),
+            abr_callback: Mutex::new(None),
+            abr_target_kbps: AtomicU32::new(0),
+            abr_link: AtomicU8::new(0),
+        })
+    }
+
     fn wake(&self) {
+        // Pairs with the fence in `Worker::sleep`: either this sees
+        // `parked`, or the thread sees the payload just queued. Without it
+        // the queue store and this load could reorder (store buffering)
+        // and the thread would sleep through the payload.
+        fence(Ordering::SeqCst);
         if self.parked.load(Ordering::Acquire) {
             self.waker.wake();
         }
@@ -210,30 +242,7 @@ impl SrtSender {
         observer: Arc<dyn SrtObserver>,
     ) -> Result<SrtSender, String> {
         config.validate()?;
-        let shared = Arc::new(Shared {
-            queue: SpscQueue::new(QUEUE_SLOTS),
-            closed: AtomicBool::new(false),
-            connected: AtomicBool::new(false),
-            parked: AtomicBool::new(false),
-            waker: Waker::new().map_err(|e| format!("wake pipe: {e}"))?,
-            rtt_us: AtomicU64::new(0),
-            retransmitted: AtomicU64::new(0),
-            naks: AtomicU64::new(0),
-            lost: AtomicU64::new(0),
-            dropped: AtomicU64::new(0),
-            queue_dropped: AtomicU64::new(0),
-            in_flight: AtomicU64::new(0),
-            send_buffer_us: AtomicU64::new(0),
-            latency_ms: AtomicU32::new(0),
-            bytes_sent: AtomicU64::new(0),
-            packets_sent: AtomicU64::new(0),
-            connections: AtomicU32::new(0),
-            abr_ceiling_kbps: AtomicU32::new(0),
-            abr_generation: AtomicU32::new(0),
-            abr_callback: Mutex::new(None),
-            abr_target_kbps: AtomicU32::new(0),
-            abr_link: AtomicU8::new(0),
-        });
+        let shared = Arc::new(Shared::new()?);
         let thread_shared = shared.clone();
         let now_ns = options.host_now_ns.clone();
         let thread = std::thread::Builder::new()
@@ -522,9 +531,16 @@ impl Worker {
     fn sleep(&self, timeout: Duration, socket: Option<&UdpSocket>) {
         let s = &self.shared;
         s.parked.store(true, Ordering::SeqCst);
+        // Pairs with the fence in `Shared::wake`: the queue is read after
+        // `parked` is visible to the producer.
+        fence(Ordering::SeqCst);
         // Payloads queued before `parked` was set came without a wake; one
-        // after it wrote to the pipe, which a later poll drains.
-        let idle = s.queue.is_empty() && !self.closed();
+        // after it wrote to the pipe, which a later poll drains. Not
+        // connected, queued payloads wait (a `send` that raced the
+        // disconnect can land one after the queue was cleared; the next
+        // connection clears it): looking at them would spin the handshake
+        // and the reconnect delay at full CPU.
+        let idle = (s.queue.is_empty() || !s.connected.load(Ordering::Acquire)) && !self.closed();
         let woken = if idle && !timeout.is_zero() {
             // Whole ms rounded up: poll(2) waits no shorter, and a wait cut
             // short only wakes the thread again. A sub-ms SND pacing wait
@@ -1158,5 +1174,66 @@ mod tests {
         sender.stop_adaptive_bitrate();
         sender.set_adaptive_ceiling(6000);
         assert_eq!(sender.shared.abr_ceiling_kbps.load(Ordering::Relaxed), 0);
+    }
+
+    fn worker() -> Worker {
+        Worker {
+            shared: Arc::new(Shared::new().unwrap()),
+            config: CallerConfig::from_url("srt://127.0.0.1:9").unwrap(),
+            observer: Arc::new(NoObserver),
+            now_ns: SenderOptions::default().host_now_ns,
+            epoch: Instant::now(),
+            abr: RefCell::new(None),
+        }
+    }
+
+    #[test]
+    fn disconnected_sleep_waits_with_a_payload_queued() {
+        // A `send` that raced the disconnect left a payload behind the
+        // cleared queue: the handshake and reconnect sleeps still wait
+        // instead of returning at once (a busy loop at full CPU).
+        let w = worker();
+        w.shared.queue.push(&[0u8; 188], 0, 1).unwrap();
+        let mut sleeps = 0;
+        let t = Instant::now();
+        while t.elapsed() < Duration::from_millis(100) {
+            w.sleep(Duration::from_millis(20), None);
+            sleeps += 1;
+        }
+        assert!(sleeps <= 6, "{sleeps} sleeps in 100 ms");
+        // Connected, the same payload ends the sleep at once.
+        w.shared.connected.store(true, Ordering::Release);
+        let t = Instant::now();
+        w.sleep(Duration::from_secs(1), None);
+        assert!(t.elapsed() < Duration::from_millis(500));
+    }
+
+    #[test]
+    fn a_payload_wakes_the_sleeping_thread() {
+        let w = worker();
+        w.shared.connected.store(true, Ordering::Release);
+        let shared = w.shared.clone();
+        let producer = std::thread::spawn(move || {
+            for _ in 0..50 {
+                std::thread::sleep(Duration::from_millis(2));
+                shared.queue.push(&[0u8; 188], 0, 1).unwrap();
+                shared.wake();
+                while !shared.queue.is_empty() {
+                    std::thread::yield_now();
+                }
+            }
+        });
+        // Each sleep would last 1 s without its wake.
+        let t = Instant::now();
+        let mut payloads = 0;
+        while payloads < 50 {
+            w.sleep(Duration::from_secs(1), None);
+            while w.shared.queue.front().is_some() {
+                w.shared.queue.pop();
+                payloads += 1;
+            }
+        }
+        producer.join().unwrap();
+        assert!(t.elapsed() < Duration::from_secs(5));
     }
 }

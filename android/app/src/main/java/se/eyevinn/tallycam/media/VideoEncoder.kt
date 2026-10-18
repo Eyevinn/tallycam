@@ -30,6 +30,9 @@ class VideoEncoder(
 
         /** One access unit, Annex B, from position to limit. */
         fun onVideoFrame(frame: ByteBuffer, ptsUs: Long, keyframe: Boolean)
+
+        /** The encoder failed and makes no more frames. */
+        fun onVideoError(reason: String)
     }
 
     private val codec = MediaCodec.createEncoderByType(mime)
@@ -80,6 +83,8 @@ class VideoEncoder(
 
             override fun onError(codec: MediaCodec, e: MediaCodec.CodecException) {
                 Log.e(TAG, "Encoder error", e)
+                // A transient error clears by itself; any other ends the encoder.
+                if (!e.isTransient) sink.onVideoError("video encoder failed")
             }
 
             override fun onOutputFormatChanged(codec: MediaCodec, format: MediaFormat) = Unit

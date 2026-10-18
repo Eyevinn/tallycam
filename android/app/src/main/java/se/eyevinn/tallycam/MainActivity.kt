@@ -21,6 +21,8 @@ import se.eyevinn.tallycam.ui.TallyCamScreen
 
 class MainActivity : ComponentActivity() {
     private var model: AppModel? = null
+    /** Recreated (rotation, process restore): the launch link was applied already. */
+    private var restored = false
     private var permitted by mutableStateOf(false)
 
     private val permissions = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
@@ -42,6 +44,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        restored = savedInstanceState != null
         // A camera on a tripod must not lock itself.
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         WindowCompat.setDecorFitsSystemWindows(window, false)
@@ -58,7 +61,7 @@ class MainActivity : ComponentActivity() {
     private fun start() {
         if (model != null) return
         model = TallyCam.model(this)
-        handle(intent)
+        if (!restored) handle(intent)
         setContent { TallyCamScreen(model, permitted, ::scan) }
         // Android 13+: the streaming notification needs this; streaming does not.
         if (android.os.Build.VERSION.SDK_INT >= 33 &&

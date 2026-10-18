@@ -43,6 +43,12 @@ pub const ADMIT_TIMEOUT: Duration = Duration::from_secs(20);
 /// Phone sockets not yet admitted, at most, across the process; more are
 /// closed at once.
 pub const MAX_UNADMITTED: usize = 64;
+/// Longest WebSocket message or frame accepted from a phone or a controller
+/// (axum's default is 64 MiB). An embedding server that upgrades sockets
+/// itself applies it with [`limit_upgrade`].
+pub const MAX_MESSAGE_BYTES: usize = 8 << 20;
+/// Longest device id, in bytes.
+pub const MAX_DEVICE_ID_BYTES: usize = 256;
 /// Bad text frames logged per admitted phone socket; the rest at debug.
 const BAD_FRAMES_LOGGED: u32 = 3;
 
@@ -320,6 +326,12 @@ pub struct DeviceConnection {
     pub host: Option<String>,
 }
 
+/// `ws` with the hub's message size limit ([`MAX_MESSAGE_BYTES`]).
+pub fn limit_upgrade(ws: WebSocketUpgrade) -> WebSocketUpgrade {
+    ws.max_message_size(MAX_MESSAGE_BYTES)
+        .max_frame_size(MAX_MESSAGE_BYTES)
+}
+
 async fn device_ws(
     ws: WebSocketUpgrade,
     State(hub): State<Arc<Hub>>,
@@ -336,7 +348,7 @@ async fn device_ws(
         token: q.token,
         host,
     };
-    ws.on_upgrade(move |socket| device_session_for(socket, hub, conn))
+    limit_upgrade(ws).on_upgrade(move |socket| device_session_for(socket, hub, conn))
 }
 
 #[derive(Deserialize)]
@@ -349,14 +361,36 @@ async fn control_ws(
     State(state): State<AppState>,
     Query(q): Query<TokenQuery>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
 ) -> Response {
+    // A page on another site must not drive the cameras through the
+    // operator's browser (browsers send no CORS check for WebSockets).
+    if !same_origin(&headers) {
+        warn!("Controller from {addr} refused: cross-origin upgrade");
+        return StatusCode::FORBIDDEN.into_response();
+    }
     if !state.operator_ok(q.token.as_deref()) {
         warn!("Controller from {addr} refused: no or wrong operator token");
         return StatusCode::UNAUTHORIZED.into_response();
     }
     let hub = state.hub;
-    ws.on_upgrade(move |socket| controller_session(socket, hub, addr))
+    limit_upgrade(ws)
+        .on_upgrade(move |socket| controller_session(socket, hub, addr))
         .into_response()
+}
+
+/// No `Origin` (not a browser), or one whose host is the request's `Host`.
+fn same_origin(headers: &HeaderMap) -> bool {
+    let Some(origin) = headers.get(header::ORIGIN) else {
+        return true;
+    };
+    let host = headers.get(header::HOST).and_then(|h| h.to_str().ok());
+    let origin_host = origin
+        .to_str()
+        .ok()
+        .and_then(|o| o.split_once("://"))
+        .map(|(_, rest)| rest.trim_end_matches('/'));
+    matches!((origin_host, host), (Some(o), Some(h)) if o.eq_ignore_ascii_case(h))
 }
 
 /// Runs one phone connection until it closes or goes silent, with no invite
@@ -493,7 +527,11 @@ pub async fn device_session_for(socket: WebSocket, hub: Arc<Hub>, connection: De
         };
         let (hello, proof) = match (msg, &mut phase) {
             (DeviceMessage::Hello(hello), Phase::Hello) => {
-                if hello.device.id.is_empty() || hello.device.id.contains('\n') {
+                let id = &hello.device.id;
+                if id.is_empty()
+                    || id.len() > MAX_DEVICE_ID_BYTES
+                    || id.chars().any(char::is_control)
+                {
                     warn!("Device socket {conn}: hello without a usable device.id, closing");
                     break;
                 }
@@ -504,7 +542,7 @@ pub async fn device_session_for(socket: WebSocket, hub: Arc<Hub>, connection: De
                 if hello.public_key.is_some() {
                     let challenge = hub.challenge();
                     if let Some(tx) = &tx {
-                        let _ = tx.send(challenge.message());
+                        let _ = tx.try_send(challenge.message());
                     }
                     phase = Phase::Challenged {
                         hello: Box::new(hello),
@@ -603,7 +641,7 @@ async fn refuse(
 ) {
     warn!("Device socket {conn}: refused {device} from {addr}: {reason}");
     if let Some(tx) = tx {
-        let _ = tx.send(ServerToDevice::Message {
+        let _ = tx.try_send(ServerToDevice::Message {
             text: reason.to_string(),
         });
         // Dropping the last sender ends the writer, which sends Close.
@@ -700,6 +738,29 @@ fn handle_controller_text(hub: &Hub, text: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn controller_upgrades_are_same_origin_only() {
+        let headers = |pairs: &[(header::HeaderName, &str)]| {
+            let mut h = HeaderMap::new();
+            for (k, v) in pairs {
+                h.insert(k.clone(), v.parse().unwrap());
+            }
+            h
+        };
+        let host = (header::HOST, "hub.local:8090");
+        assert!(same_origin(&headers(&[host.clone()])), "not a browser");
+        assert!(same_origin(&headers(&[
+            host.clone(),
+            (header::ORIGIN, "http://HUB.local:8090")
+        ])));
+        for other in ["http://evil.example", "http://hub.local:8091", "null"] {
+            assert!(
+                !same_origin(&headers(&[host.clone(), (header::ORIGIN, other)])),
+                "{other}"
+            );
+        }
+    }
 
     #[test]
     fn operator_page_carries_the_config() {

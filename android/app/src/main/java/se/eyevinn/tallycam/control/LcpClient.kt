@@ -84,6 +84,12 @@ class LcpClient(private val listener: Listener) {
                 }
             }.let { }
 
+            // The server closed: answer its close frame, or OkHttp never
+            // reaches onClosed.
+            override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                webSocket.close(1000, null)
+            }
+
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) = lost(gen, reason.ifEmpty { "closed" })
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) =

@@ -21,6 +21,9 @@ class AudioEncoder(private val aac: Boolean, private val sink: Sink) {
     interface Sink {
         /** Called on the encoder thread; copy what you keep. */
         fun onAudioPacket(packet: ByteBuffer, ptsNs: Long)
+
+        /** Called on the encoder thread: the microphone or encoder failed, and audio stopped. */
+        fun onAudioError(reason: String)
     }
 
     @Volatile private var running = false
@@ -81,7 +84,13 @@ class AudioEncoder(private val aac: Boolean, private val sink: Sink) {
             while (running) {
                 pcm.clear()
                 val n = record.read(pcm, CHUNK_BYTES, AudioRecord.READ_BLOCKING)
-                if (n <= 0) continue
+                if (n < 0) {
+                    // An error code: it comes back at once on every read.
+                    Log.e(TAG, "AudioRecord.read: $n")
+                    if (running) sink.onAudioError("microphone failed ($n)")
+                    break
+                }
+                if (n == 0) continue
                 // Capture time of this chunk's first frame, from the latest
                 // (frame position, boot time) pair the HAL reported.
                 val captureNs = if (record.getTimestamp(ts, AudioTimestamp.TIMEBASE_BOOTTIME) == AudioRecord.SUCCESS) {
@@ -116,6 +125,7 @@ class AudioEncoder(private val aac: Boolean, private val sink: Sink) {
             }
         } catch (e: Exception) {
             Log.e(TAG, "Audio stopped", e)
+            if (running) sink.onAudioError("audio encoder failed")
         } finally {
             runCatching { record.stop() }
             record.release()

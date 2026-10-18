@@ -55,12 +55,13 @@ with the bottom row above it.
 1. **Status row.** Left: stream state (STANDBY, CONNECTING, LIVE with the
    bitrate, yellow while adaptive bitrate holds it down). Centre: the tally
    chip, the camera name in red with "ON AIR", green with "PREVIEW", dark when
-   off. Right: hub link dot, clock dot, battery and thermal state when it
+   off. Right: hub link dot, clock dot, battery; thermal state when it
    matters, an orientation-pending icon, the Settings gear.
 2. **Values row.** `format │ ISO │ shutter │ EV │ WB │ focus`, each a button
    (see "Values").
-3. **Message slot.** Centred under the values row: operator messages (yellow
-   banner, 8 s) and toasts (stream errors and hints, 4 s). Nothing else goes
+3. **Message slot.** Centred under the values row: the yellow banner (8 s)
+   for operator messages and the app's connection messages ("Connecting to
+   …", "Not a valid connect code", control errors), and toasts (stream errors and hints, 4 s). Nothing else goes
    there and nothing else shows messages.
 4. **Left edge** and 5. **right edge.** A side control each, mirror images,
    vertically centred at the same height (see "Side control"). Zoom on the
@@ -111,7 +112,7 @@ Right side shown; the left one is its mirror image.
 ```
 
 - **Mode switch.** A vertical two-segment switch, `A` over `M`, 46 wide with
-  two 34 pt segments, the same look as the K/Tint switch. It shows the state,
+  two segments (see "Sizes"), the same look as the selector. It shows the state,
   not an action: the filled segment is the current mode. Tap the other segment
   to switch; the values are kept. `M` stands for any held mode: a group the
   hub locked, focus locked by a long press on the picture, and a camera
@@ -133,11 +134,13 @@ Right side shown; the left one is its mirror image.
   (hub change) and orange (warning) keep their meaning.
 - **Under the selector,** beside the lower half of the rocker: the mode
   switch for exposure, white balance and focus; the lens buttons for zoom
-  (only on a camera with more than one lens). The K/Tint switch (white
-  balance only) sits under the value.
-- **Sizes.** Segments 30 pt high on the selector and the mode switch; the
-  rocker is as long as the selector and what is under it, and both sides'
-  rockers are the same length.
+  (only on a camera with more than one lens). A small horizontal K / Tint
+  switch (white balance only) sits under the value.
+- **Sizes.** Segments 30 pt high on the selector and the mode switch where
+  the screen allows; on a landscape phone they shrink to fit between the
+  top rows and the bottom row, 20 pt at least. The rocker is as long as the
+  selector and what is under it, and both sides' rockers are the same
+  length.
 - **Rocker.** The same component as zoom, same size, with the direction
   written at its ends. Three gestures, the same on every rocker:
   - **Drag** for a move: speed rises with the square of the deflection, about
@@ -145,8 +148,9 @@ Right side shown; the left one is its mirror image.
     letting go stops it and the knob springs back.
   - **Tap an end** for one step, for fine trimming on air.
   - **Double tap the knob** for the neutral value.
-- **Haptics.** A light tick on each step and each tap, a firmer one when a
-  value reaches the end of its range.
+- **Haptics.** A light tick on each step of a value and each tap, a firmer
+  one when a value reaches the end of its range; the zoom drag ticks only at
+  its ends.
 - **While adjusting** the value label grows and turns bright, and the value
   in the values row follows.
 
@@ -155,7 +159,7 @@ Right side shown; the left one is its mirror image.
 | Exposure, auto | `+` / `−` | `ev_bias` 2 EV/s | 0.3 EV | EV 0 |
 | Exposure, manual | `+` / `−` | `iso` 2 stops/s (log) | 1/3 stop | back to auto |
 | White balance, K | `K+` / `K−` | `wb_temperature` 1500 K/s | 100 K | white balance once |
-| White balance, Tint | `M` / `G` (magenta, green) | `wb_tint` 60/s | 1 | tint 0 |
+| White balance, Tint | `M` / `G` (magenta, green) | `wb_tint` 60/s | 1 | tint 0 (the mode unchanged) |
 | Focus | `Far` / `Near` | `focus_position` 0.4/s | 0.02 | back to auto |
 | Zoom | `T` / `W` | 2 doublings/s | 1/4 doubling | the lens's own 1× (no digital zoom) |
 
@@ -184,7 +188,8 @@ the lens buttons, which follow the active lens.
 ## States
 
 - **Screen lock.** Everything stays visible but the rockers, which hide; only
-  the slide to unlock (in the bottom row's place) takes touches. A toast
+  the slide to unlock takes touches (in the bottom row's centre in
+  landscape, on its own row above the bottom row in portrait). A toast
   suggests it at Go Live.
 - **Not connected.** A centred card: "Scan QR code" (the in-app scanner),
   "Enter manually", "Not now". The QR button stays in the bottom row.
@@ -202,7 +207,8 @@ the lens buttons, which follow the active lens.
 
 ## Settings
 
-A full-screen sheet, "Settings" with Done (Android's back does the same).
+A sheet (iOS page sheet, Android full screen), "Settings" with Done
+(Android's back does the same).
 Sections in this order: who the camera is, where it connects and streams,
 the production, then diagnostics. Footers are full sentences; a disabled
 row's footer says why instead of the usual text.
@@ -220,7 +226,8 @@ row's footer says why instead of the usual text.
 ## Look
 
 - Round buttons and rockers: 46 pt wide, black at 35 % with a thin white
-  outline at 25 %; rockers 180 pt long (shorter on a landscape phone, both the
+  outline at 25 % (a rocker's outline, 1.5 pt, and its knob's ring, 2 pt,
+  in the group colour); rockers 180 pt long (shorter on a landscape phone, both the
   same).
 - Rows: 34 pt high, dark capsules, tabular digits, white text.
 - Group colours (controls only): zoom blue `#3B82F6`, exposure red

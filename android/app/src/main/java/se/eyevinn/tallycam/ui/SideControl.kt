@@ -186,13 +186,25 @@ fun SideControl(model: AppModel, group: String, groups: List<String>, leading: B
         }
         val mode = model.shading.values.optString(modeKey(group), "auto")
         when {
-            group == "white_balance" && tint -> ramping?.let { send(it, 0.0) }
+            // Tint 0, the white balance mode as it is (docs/UI_DESIGN.md).
+            group == "white_balance" && tint -> ramping?.let { send(Ramped(it.id, it.label, it.speed, it.tap), 0.0) }
             group == "white_balance" -> model.localWhiteBalanceOnce()
             group == "exposure" && mode == "auto" -> ramping?.let { send(it, 0.0) }
             mode != "auto" -> model.localSet(JSONObject().put(modeKey(group), "auto"))
         }
         haptics.step()
         touched = android.os.SystemClock.uptimeMillis()
+    }
+
+    // The zoom drag ticks only at its ends: once when it reaches one.
+    val zoomValue = model.shading.values.optDouble("zoom", 1.0)
+    var zoomAtEnd by remember { mutableStateOf(false) }
+    LaunchedEffect(zoomValue, rate) {
+        if (!zoom || rate == 0.0) { zoomAtEnd = false; return@LaunchedEffect }
+        val d = model.shading.descriptors["zoom"] ?: return@LaunchedEffect
+        val atEnd = zoomValue <= d.optDouble("min", 1.0) + 0.01 || zoomValue >= d.optDouble("max", 1.0) - 0.01
+        if (atEnd && !zoomAtEnd) haptics.step(atEnd = true)
+        zoomAtEnd = atEnd
     }
 
     val mode = if (zoom) "auto" else model.shading.values.optString(modeKey(group), "auto")

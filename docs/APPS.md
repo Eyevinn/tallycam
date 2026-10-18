@@ -46,6 +46,8 @@ its own dark (#16181E), so launchers' masks keep the tally dot.
 | Genlock | In every exposure mode | In every exposure mode with `MANUAL_SENSOR` | Camera2 applies a frame duration only with its auto exposure off, which it always is there |
 | `wb_temperature` | Any Kelvin | The nearest AWB preset (2700 to 7500 K) | Camera2 offers presets; colour gains per sensor would need calibration |
 | `wb_tint` | Yes | No | As above |
+| White balance in the values row while auto | The temperature in K | "AWB" | Camera2 reports no colour temperature for its auto white balance; the K shows once white balance is manual (a preset) |
+| In-app QR scanner | An overlay over the picture: viewfinder square, instruction, Cancel | The zxing scanner activity: viewfinder and the instruction, back to cancel | The overlay would need the camera's frames for decoding while the preview runs; to close with a decoder on the small YUV stream |
 | White balance `M` | Manual | A lock: what auto white balance found (the rocker still sets a preset, which is manual) | Manual white balance is a Camera2 preset, so holding the auto result means locking it |
 | `torch_probe` | Yes | No | A measurement tool (docs/GENLOCK.md); add when Android genlock is measured |
 | `frame_duration` (Debug) | Yes | No | A measurement tool |

@@ -89,7 +89,10 @@ final class UiVectorTests: XCTestCase {
         guard case let .array(order)? = try vectors()["drop_order"] else {
             return XCTFail("no drop_order")
         }
-        XCTAssertEqual(UiRules.dropOrder.map(\.rawValue), order.compactMap(\.string))
+        // The vector may list only the start of the order (the steps both
+        // apps share so far); the app's order begins with it.
+        let expected = order.compactMap(\.string)
+        XCTAssertEqual(Array(UiRules.dropOrder.map(\.rawValue).prefix(expected.count)), expected)
     }
 
     func testAdjustValue() throws {
@@ -178,5 +181,16 @@ final class UiVectorTests: XCTestCase {
         XCTAssertEqual(UiRules.timecode(utcNs: ns, fps: 25, timeZone: stockholm, synced: true), "14:51:46:12")
         XCTAssertEqual(UiRules.timecode(utcNs: ns, fps: 30, timeZone: utc, synced: false), "12:51:46:--")
         XCTAssertEqual(UiRules.timecode(utcNs: ns + 499_999_999, fps: 30, timeZone: utc, synced: true), "12:51:46:29")
+    }
+
+    func testTimecodeVectors() throws {
+        for vector in try cases("timecode") {
+            let name = vector["name"]?.string ?? "?"
+            let zone = try XCTUnwrap(TimeZone(secondsFromGMT: Int(XCTUnwrap(vector["utc_offset_s"]?.double))), name)
+            let text = try UiRules.timecode(utcNs: Int64(XCTUnwrap(vector["utc_ns"]?.double)),
+                                            fps: Int(XCTUnwrap(vector["fps"]?.double)), timeZone: zone,
+                                            synced: vector["synced"] == .bool(true))
+            XCTAssertEqual(text, vector["expect"]?.string, name)
+        }
     }
 }

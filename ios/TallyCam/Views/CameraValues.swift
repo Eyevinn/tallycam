@@ -21,8 +21,8 @@ struct CameraValuesRow: View {
     /// A tap on a group's value.
     let onSelect: (ShadingGroup) -> Void
     let onFormat: () -> Void
-    /// How many groups to leave out (`UiRules.dropOrder`); nil: as many as
-    /// it takes to fit.
+    /// How many steps of `UiRules.dropOrder` to apply; nil: as many as it
+    /// takes to fit.
     var drop: Int?
     /// Inside the landscape top bar: no capsule of its own.
     var embedded = false
@@ -40,11 +40,11 @@ struct CameraValuesRow: View {
             if let drop {
                 line(Self.dropping(drop, from: items))
             } else {
-                // Then without focus, then without white balance too.
+                // Leaving out more and more, in the drop order.
                 ViewThatFits(in: .horizontal) {
-                    line(items)
-                    line(Self.dropping(1, from: items))
-                    line(Self.dropping(2, from: items))
+                    ForEach(0 ... UiRules.dropOrder.count, id: \.self) { count in
+                        line(Self.dropping(count, from: items))
+                    }
                 }
             }
         }
@@ -71,8 +71,8 @@ struct CameraValuesRow: View {
     }
 
     private static func dropping(_ count: Int, from items: [Item]) -> [Item] {
-        let dropped = UiRules.dropOrder.prefix(count)
-        return items.filter { $0.value.group.map { !dropped.contains($0) } ?? true }
+        let kept = Set(UiRules.dropping(count, from: items.map(\.value)))
+        return items.filter { kept.contains($0.value) }
     }
 
     private func button(_ item: Item) -> some View {

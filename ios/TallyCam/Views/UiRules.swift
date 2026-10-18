@@ -99,6 +99,25 @@ struct ValueItem: Hashable {
     var ids: [String] = []
 }
 
+/// One step of the top bar's drop order (`UiRules.dropOrder`).
+enum DropStep: String {
+    case focus
+    case whiteBalance = "white_balance"
+    /// The name chip's ON AIR / PREVIEW.
+    case tallyLabel = "tally_label"
+    case evBias = "ev_bias"
+    case shutter
+
+    func drops(_ item: ValueItem) -> Bool {
+        switch self {
+        case .focus: item.group == .focus
+        case .whiteBalance: item.group == .whiteBalance
+        case .tallyLabel: false
+        case .evBias, .shutter: item.ids.contains(rawValue)
+        }
+    }
+}
+
 /// What a double tap on a rocker's knob does.
 enum Neutral: Equatable {
     case set([String: JSONValue])
@@ -138,9 +157,17 @@ enum UiRules {
         return (lines >= 2160 ? "4K" : "\(lines)p") + "\(fps)"
     }
 
-    /// On a narrow screen the values row leaves these groups out, in this
-    /// order; it never wraps.
-    static let dropOrder: [ShadingGroup] = [.focus, .whiteBalance]
+    /// What the top bar (and a narrow values row) leaves out when it does
+    /// not fit, in this order; it never wraps. Only after all of these is
+    /// the camera name shortened; the timecode stays whole.
+    static let dropOrder: [DropStep] = [.focus, .whiteBalance, .tallyLabel, .evBias, .shutter]
+
+    /// `items` without what the first `count` steps of `dropOrder` leave out
+    /// (the tally label is the name chip's, not an item).
+    static func dropping(_ count: Int, from items: [ValueItem]) -> [ValueItem] {
+        let dropped = dropOrder.prefix(count)
+        return items.filter { item in !dropped.contains { $0.drops(item) } }
+    }
 
     /// The values row (docs/UI_DESIGN.md, "Values"): format, ISO (with CLIP
     /// or DARK from the image statistics' `warning`), shutter, EV (auto and

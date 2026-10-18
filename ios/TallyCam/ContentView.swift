@@ -292,17 +292,15 @@ struct ContentView: View {
         }
     }
 
+    /// The chip and the values, leaving out more and more in
+    /// `UiRules.dropOrder` until they fit; past the end the name shortens.
     private var barCentre: some View {
         ViewThatFits(in: .horizontal) {
-            ForEach(0 ..< 3) { drop in
+            ForEach(0 ... UiRules.dropOrder.count, id: \.self) { drop in
                 HStack(spacing: Chrome.gap) {
-                    nameChip()
+                    nameChip(nameOnly: UiRules.dropOrder.prefix(drop).contains(.tallyLabel))
                     valuesRow(drop: drop, embedded: true)
                 }
-            }
-            HStack(spacing: Chrome.gap) {
-                nameChip(nameOnly: true)
-                valuesRow(drop: 2, embedded: true)
             }
         }
     }

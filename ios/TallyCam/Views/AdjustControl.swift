@@ -98,7 +98,7 @@ struct AdjustControl<Selector: View>: View {
                 .shadow(color: .black.opacity(on ? 0 : 0.5), radius: 2)
                 .padding(.horizontal, 8)
                 .frame(height: SideMetrics.rowHeight - 4)
-                .background(on ? .white.opacity(0.85) : .clear, in: RoundedRectangle(cornerRadius: 8))
+                .background(on ? .white.opacity(0.7) : .clear, in: RoundedRectangle(cornerRadius: 8))
                 .contentShape(RoundedRectangle(cornerRadius: 8))
         }
         .buttonStyle(.plain)
@@ -137,10 +137,17 @@ struct AdjustControl<Selector: View>: View {
     /// the values, and the rocker turns locked into manual anyway. A long
     /// press on colour's is "white balance once".
     private var modeButton: some View {
-        CellGrid(cells: [.init(title: "A", on: isAuto, fill: .white), .init(title: "M", on: !isAuto, fill: .yellow)],
-                 columns: 2, fontSize: 17)
-        { index in
-            if (index == 0) != isAuto {
+        // White balance has a third cell, ◎: white balance once from the
+        // picture, then held (M).
+        let once = group == .whiteBalance
+        let cells: [CellGrid.Cell] = [.init(title: "A", on: isAuto, fill: .white),
+                                      .init(title: "M", on: !isAuto, fill: .yellow)]
+            + (once ? [.init(title: "◎", on: false)] : [])
+        return CellGrid(cells: cells, columns: cells.count, fontSize: 17) { index in
+            if index == 2 {
+                remote.runLocal(command: "wb_one_shot")
+                Haptics.tick()
+            } else if (index == 0) != isAuto {
                 toggleMode()
             }
         }
@@ -303,11 +310,6 @@ struct AdjustControl<Selector: View>: View {
         tapped = nil
         switch UiRules.neutral(SideGroup(group), shading.values, tint: tint) {
         case let .set(values):
-            // The camera takes a tint only in manual white balance: silent
-            // otherwise (no error banner).
-            guard values["wb_tint"] == nil || mode == "manual" else {
-                return
-            }
             remote.localSet(values)
         case let .command(name):
             remote.runLocal(command: name)

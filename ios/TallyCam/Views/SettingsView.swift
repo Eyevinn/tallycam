@@ -1,11 +1,20 @@
 import SwiftUI
 
-/// Everything that is not needed while shooting: connection, stream URL,
-/// orientation, clock and device details.
+/// Everything that is not needed while shooting (docs/UI_DESIGN.md,
+/// "Settings"): connection and stream, the picture, sync, mains,
+/// orientation, clock, diagnostics and device details. Camera and stream
+/// settings go through the same control table as the hub's sets; the last
+/// change wins.
 struct SettingsView: View {
+    /// A section Settings can open at.
+    enum Anchor: Hashable {
+        case picture
+    }
+
     @ObservedObject var remote: RemoteControl
     @ObservedObject var controller: StreamController
     @ObservedObject var capture: Capture
+    var anchor: Anchor?
     /// Closes Settings and starts the in-app QR scanner.
     let onScan: () -> Void
     @Environment(\.dismiss) private var dismiss
@@ -16,14 +25,25 @@ struct SettingsView: View {
 
     var body: some View {
         NavigationStack {
-            Form {
-                cameraSection
-                connectionSection
-                streamSection
-                MainsSection(remote: remote, shading: remote.shading, live: controller.state != .idle)
-                orientationSection
-                clockSection
-                aboutSection
+            ScrollViewReader { proxy in
+                Form {
+                    cameraSection
+                    connectionSection
+                    streamSection
+                    PictureSection(remote: remote, shading: remote.shading, controller: controller)
+                        .id(Anchor.picture)
+                    SyncSection(remote: remote, shading: remote.shading, capture: capture)
+                    MainsSection(remote: remote, shading: remote.shading, live: controller.state != .idle)
+                    orientationSection
+                    clockSection
+                    DiagnosticsSection(remote: remote)
+                    aboutSection
+                }
+                .onAppear {
+                    if let anchor {
+                        proxy.scrollTo(anchor, anchor: .top)
+                    }
+                }
             }
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
@@ -111,8 +131,7 @@ struct SettingsView: View {
         Section {
             urlField("srt://host:port?streamid=...", text: $controller.url)
                 .disabled(controller.state != .idle)
-            LabeledContent("Video", value: "\(controller.videoCodec.label), \(controller.bitrateKbps) kbit/s"
-                + (controller.bitrateIsAuto ? " (auto)" : ""))
+            latencyStepper
             Toggle("Adaptive bitrate", isOn: $controller.adaptiveBitrate)
             if let stats = controller.stats, controller.state == .live {
                 if controller.adaptiveBitrate, let target = stats.targetKbps {
@@ -145,7 +164,6 @@ struct SettingsView: View {
                 }
             }
             .pickerStyle(.segmented)
-            LabeledContent("Picture", value: "\(capture.status)")
         } header: {
             Text("Orientation")
         } footer: {
@@ -208,6 +226,19 @@ struct SettingsView: View {
             } else {
                 LabeledContent("Device key", value: "waiting for unlock")
             }
+        }
+    }
+
+    /// The URL's `latency`, in 20 ms steps; applies on the next Go Live.
+    private var latencyStepper: some View {
+        let latency = Int((try? SrtUrl(string: controller.url))?.latency ?? SrtUrl.defaultLatency)
+        let range = SrtUrl.latencyRange
+        return Stepper {
+            LabeledContent("SRT latency", value: "\(latency) ms")
+        } onIncrement: {
+            remote.localStreamSet("srt_latency_ms", .int(min(latency + 20, range.upperBound)))
+        } onDecrement: {
+            remote.localStreamSet("srt_latency_ms", .int(max(latency - 20, range.lowerBound)))
         }
     }
 

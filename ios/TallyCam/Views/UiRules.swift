@@ -324,8 +324,8 @@ enum UiRules {
 
     /// A double tap on a rocker's knob: the neutral value (docs/UI_DESIGN.md).
     /// EV 0 in auto exposure, else back to auto; white balance once (K) or
-    /// tint 0 with the mode as it is; focus back to auto; zoom the lens's
-    /// own 1×. Nil: nothing to do.
+    /// tint 0 in manual white balance (the camera takes a tint nowhere
+    /// else); focus back to auto; zoom the lens's own 1×. Nil: nothing to do.
     static func neutral(_ group: SideGroup, _ values: [String: JSONValue], tint: Bool) -> Neutral? {
         guard let shadingGroup = group.shading else {
             return .set(["zoom": .number(1)])
@@ -333,7 +333,7 @@ enum UiRules {
         let mode = values[shadingGroup.modeKey]?.string ?? "auto"
         switch shadingGroup {
         case .whiteBalance where tint:
-            return .set(["wb_tint": .number(0)])
+            return mode == "manual" ? .set(["wb_tint": .number(0)]) : nil
         case .whiteBalance:
             return .command("wb_one_shot")
         case .exposure where mode == "auto":

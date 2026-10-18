@@ -15,8 +15,12 @@ enum Aid {
     static let peakingTint = Color(red: 1, green: 0.15, blue: 0.1)
 }
 
-/// The small button that opens the aids menu.
+/// The small button that opens the aids menu, which also holds the torch
+/// (where the lens has one; the hub can switch it too).
 struct AidsMenu: View {
+    let remote: RemoteControl
+    @ObservedObject var shading: Shading
+
     @AppStorage(Aid.grid) private var grid = true
     @AppStorage(Aid.horizon) private var horizon = true
     @AppStorage(Aid.safeAreas) private var safeAreas = false
@@ -32,6 +36,14 @@ struct AidsMenu: View {
             Section {
                 Toggle("Focus peaking (sharp edges in red)", isOn: $peaking)
             }
+            if shading.descriptor("torch") != nil {
+                Section {
+                    Toggle("Torch", isOn: Binding(
+                        get: { shading.values["torch"]?.bool ?? false },
+                        set: { remote.localSet(["torch": .bool($0)]) }
+                    ))
+                }
+            }
         } label: {
             ChromeButtonLabel(systemName: "squareshape.split.3x3", active: anyOn)
         }
@@ -40,7 +52,7 @@ struct AidsMenu: View {
 
     /// Any guide or peaking on.
     private var anyOn: Bool {
-        grid || horizon || safeAreas || centreCuts || peaking
+        grid || horizon || safeAreas || centreCuts || peaking || shading.values["torch"]?.bool == true
     }
 }
 

@@ -26,16 +26,15 @@ enum Chrome {
 }
 
 extension View {
-    /// The chrome's light background: black at 25 % over an ultra-thin
-    /// material blur, so the picture shows through (docs/UI_DESIGN.md,
-    /// "Light backgrounds").
-    func sideSurface(_ shape: some Shape, dim: Double = 0.25, visible: Bool = true) -> some View {
+    /// The chrome's see-through surface: black at 15 % with a thin white
+    /// border, no blur, so the picture shows through (docs/UI_DESIGN.md,
+    /// "See-through, no blur").
+    func sideSurface(_ shape: some InsettableShape, dim: Double = 0.15, visible: Bool = true) -> some View {
         background {
             if visible {
                 shape
                     .fill(.black.opacity(dim))
-                    .background(.ultraThinMaterial, in: shape)
-                    .environment(\.colorScheme, .dark)
+                    .overlay(shape.strokeBorder(.white.opacity(0.4), lineWidth: 1))
             }
         }
     }
@@ -53,9 +52,8 @@ struct ChromeButtonLabel: View {
             .foregroundStyle(active ? .yellow : .white.opacity(0.85))
             .frame(width: size, height: size)
             .shadow(color: .black.opacity(0.5), radius: 2)
+            // Its border keeps it visible over the black bars too.
             .sideSurface(Circle())
-            // Visible over the black bars around the picture too.
-            .overlay(Circle().strokeBorder(.white.opacity(0.25), lineWidth: 1))
             .contentShape(Circle())
     }
 }

@@ -21,6 +21,8 @@ struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
 
     @State private var showSettings = false
+    /// Settings opens scrolled to this section (`SettingsView.Anchor`).
+    @State private var settingsAnchor: SettingsView.Anchor?
     @State private var connectCardDismissed = false
     @State private var toast: String?
     @State private var toastTask: Task<Void, Never>?
@@ -99,8 +101,9 @@ struct ContentView: View {
         .sheet(isPresented: $showSettings, onDismiss: {
             // A join asked for while Settings was open.
             askingJoin = pendingJoin != nil
+            settingsAnchor = nil
         }) {
-            SettingsView(remote: remote, controller: controller, capture: capture) {
+            SettingsView(remote: remote, controller: controller, capture: capture, anchor: settingsAnchor) {
                 showSettings = false
                 startScan()
             }
@@ -158,23 +161,25 @@ struct ContentView: View {
 
     // MARK: Zones
 
-    /// The whole chrome in one stack: the top rows, then the edge columns
-    /// with the centre between them. While the screen is locked everything
-    /// stays in place but only the slide to unlock takes touches.
+    /// The whole chrome: the top rows, then the corners (docs/UI_DESIGN.md,
+    /// "Zones"). The centre belongs to the picture. While the screen is
+    /// locked everything stays in place but only the slide to unlock takes
+    /// touches.
     @ViewBuilder
     private func chrome(landscape: Bool, nameInline: Bool, rowsBeside: Bool, screenHeight: CGFloat) -> some View {
         VStack(spacing: Chrome.zoneGap) {
             topRows(landscape: landscape, nameInline: nameInline)
                 .allowsHitTesting(!screenLocked)
-            if landscape {
+            if UIDevice.current.userInterfaceIdiom == .phone {
+                phoneCorners(landscape: landscape, rowsBeside: rowsBeside, screenHeight: screenHeight)
+            } else if landscape {
                 // Left: a side control over the tools. Centre: messages, the
                 // slide to unlock, the meter. Right: a side control over the
-                // live button. The bottom row is the live button's height, so
-                // both edge columns centre on the same line.
+                // live button.
                 HStack(spacing: Chrome.gap) {
                     VStack(alignment: .leading, spacing: Chrome.zoneGap) {
                         sideColumn(.left, rowsBeside: rowsBeside, screenHeight: screenHeight)
-                        tools
+                        tools(vertical: false)
                             .frame(height: LiveButton.size, alignment: .bottom)
                     }
                     VStack(spacing: Chrome.zoneGap) {
@@ -190,13 +195,10 @@ struct ContentView: View {
                     .frame(maxWidth: .infinity)
                     VStack(alignment: .trailing, spacing: Chrome.zoneGap) {
                         sideColumn(.right, rowsBeside: rowsBeside, screenHeight: screenHeight)
-                        liveButton(hintAbove: true)
+                        liveButton(hint: .above)
                     }
                 }
             } else {
-                // Messages in a band of their own (the side controls leave
-                // little between them), then the side controls, mirror
-                // images, their rockers level.
                 messageSlot
                     .frame(height: Self.portraitMessageHeight, alignment: .top)
                 HStack(spacing: Chrome.gap) {
@@ -206,11 +208,11 @@ struct ContentView: View {
                 }
                 unlockSlider
                 HStack(alignment: .bottom, spacing: Chrome.gap) {
-                    tools
+                    tools(vertical: false)
                     Spacer(minLength: 0)
                     audioMeter
                 }
-                liveButton(hintAbove: false)
+                liveButton(hint: .left)
             }
         }
         .animation(.easeInOut(duration: 0.2), value: leftGroup)
@@ -219,6 +221,44 @@ struct ContentView: View {
         .animation(.easeInOut(duration: 0.2), value: rightHidden)
         .animation(.easeInOut(duration: 0.2), value: screenLocked)
         .animation(.easeInOut(duration: 0.2), value: remote.banner)
+    }
+
+    /// Phones: the side controls in the bottom corners; the tools in the
+    /// upper-left corner (a column in landscape, a row in portrait) and the
+    /// live button in the upper-right one with the meter on its inner side.
+    /// Messages at the top centre; the slide to unlock at the bottom edge
+    /// between the side controls (landscape) or just above them (portrait).
+    private func phoneCorners(landscape: Bool, rowsBeside: Bool, screenHeight: CGFloat) -> some View {
+        ZStack {
+            HStack(alignment: .bottom, spacing: Chrome.gap) {
+                sideColumn(.left, rowsBeside: rowsBeside, screenHeight: screenHeight, inCorner: true)
+                Spacer(minLength: 0)
+                sideColumn(.right, rowsBeside: rowsBeside, screenHeight: screenHeight, inCorner: true)
+            }
+            VStack(spacing: Chrome.zoneGap) {
+                HStack(alignment: .top, spacing: Chrome.gap) {
+                    tools(vertical: landscape)
+                    Spacer(minLength: 0)
+                    HStack(spacing: Chrome.gap) {
+                        audioMeter
+                        liveButton(hint: .below)
+                    }
+                }
+                if !landscape {
+                    messageSlot
+                }
+                Spacer(minLength: 0)
+            }
+            if landscape {
+                // Between the tools column and the live button.
+                messageSlot
+                    .padding(.horizontal, LiveButton.size + 3 * Chrome.gap + 12)
+                    .frame(maxHeight: .infinity, alignment: .top)
+            }
+            unlockSlider
+                .frame(maxHeight: .infinity, alignment: .bottom)
+                .padding(.bottom, landscape ? 0 : SideMetrics.rocker + Chrome.gap + SideMetrics.rowsHeight + Chrome.gap)
+        }
     }
 
     /// The message band above the side controls in portrait: two lines of
@@ -267,7 +307,11 @@ struct ContentView: View {
 
     private func valuesRow(drop: Int? = nil, embedded: Bool = false) -> some View {
         CameraValuesRow(shading: remote.shading, capture: capture, selected: shownGroups, onSelect: selectFromValues,
-                        onFormat: { showSettings = true }, drop: drop, embedded: embedded)
+                        onFormat: {
+                            // The format opens Settings at Picture.
+                            settingsAnchor = .picture
+                            showSettings = true
+                        }, drop: drop, embedded: embedded)
     }
 
     /// The groups on the shown side controls: underlined in the values row.
@@ -281,9 +325,11 @@ struct ContentView: View {
 
     /// A side control: the left or right edge's, low in its zone.
     /// Hidden (in place) while the screen is locked.
-    private func sideColumn(_ side: Side, rowsBeside: Bool, screenHeight: CGFloat) -> some View {
+    private func sideColumn(_ side: Side, rowsBeside: Bool, screenHeight: CGFloat,
+                            inCorner: Bool = false) -> some View
+    {
         SideControl(side: side, sides: sides, remote: remote, controls: capture.controls, shading: remote.shading,
-                    rowsBeside: rowsBeside, screenHeight: screenHeight)
+                    rowsBeside: rowsBeside, screenHeight: screenHeight, inCorner: inCorner)
             .opacity(screenLocked ? 0 : 1)
             .allowsHitTesting(!screenLocked)
     }
@@ -321,8 +367,8 @@ struct ContentView: View {
         }
     }
 
-    private func liveButton(hintAbove: Bool) -> some View {
-        LiveButton(state: controller.state, hintAbove: hintAbove, onStart: start, onStop: { controller.stop() })
+    private func liveButton(hint: LiveButton.HintPlacement) -> some View {
+        LiveButton(state: controller.state, hint: hint, onStart: start, onStop: { controller.stop() })
             .allowsHitTesting(!screenLocked)
     }
 
@@ -337,10 +383,12 @@ struct ContentView: View {
     }
 
     /// Aids and screen lock; the QR scanner too while no hub is connected
-    /// and not live.
-    private var tools: some View {
-        HStack(spacing: Chrome.gap) {
-            AidsMenu()
+    /// and not live. A column (6 pt gaps) in a landscape phone's upper-left
+    /// corner, else a row.
+    private func tools(vertical: Bool) -> some View {
+        let layout = vertical ? AnyLayout(VStackLayout(spacing: 6)) : AnyLayout(HStackLayout(spacing: Chrome.gap))
+        return layout {
+            AidsMenu(remote: remote, shading: remote.shading)
             if !remote.connected, controller.state == .idle, !scanning {
                 Button(action: startScan) {
                     ChromeButtonLabel(systemName: "qrcode.viewfinder")
@@ -377,7 +425,7 @@ struct ContentView: View {
             showToast(message)
         } else if controller.state != .idle, !screenLocked {
             // Suggested, not forced: a camera on a tripod may need its controls.
-            showToast("Lock the screen against stray touches: lock button, bottom left")
+            showToast("Lock the screen against stray touches: the lock button")
         }
     }
 
@@ -493,7 +541,7 @@ struct ContentView: View {
             }
             shading.hubSet(["wb_temperature"])
             if defaults.bool(forKey: "uiPreviewToast") {
-                showToast("Lock the screen against stray touches: lock button, bottom left")
+                showToast("Lock the screen against stray touches: the lock button")
             }
         }
     #endif

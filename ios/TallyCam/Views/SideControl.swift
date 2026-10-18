@@ -48,9 +48,10 @@ enum SideMetrics {
 /// lens buttons; the value and, for white balance, the K / Tint switch
 /// beside the block on its inner side (above it where the screen is too
 /// narrow for that, a portrait phone). Runs zoom (`ZoomControl`) or a
-/// shading group (`AdjustControl`). Its centre sits at 65 % of the screen's
-/// height, where the thumbs rest, moved up only as far as it must to clear
-/// the bottom row (the bottom of its zone); the same on both sides.
+/// shading group (`AdjustControl`). On a phone it sits in its bottom corner;
+/// on an iPad its centre sits at 65 % of the screen's height, where the
+/// thumbs rest, moved up only as far as it must to clear the bottom row
+/// (the bottom of its zone); the same on both sides.
 struct SideControl: View {
     let side: Side
     /// Both sides' choices: choosing the other side's group swaps the two,
@@ -63,6 +64,8 @@ struct SideControl: View {
     let rowsBeside: Bool
     /// The whole screen's height, safe areas included.
     let screenHeight: CGFloat
+    /// Phones: in the bottom corner, against the bottom edge.
+    var inCorner = false
 
     /// Where thumbs rest, from the top of the screen.
     private static let restShare: CGFloat = 0.65
@@ -72,14 +75,17 @@ struct SideControl: View {
     @State private var zone: CGRect = .zero
 
     /// The control's height: the rocker, with the value rows above it where
-    /// they are not beside the block.
+    /// they are not beside the block; the tab's while hidden.
     private var height: CGFloat {
-        rowsBeside ? SideMetrics.rocker : SideMetrics.rocker + Chrome.gap + SideMetrics.rowsHeight
+        if sides.hidden(side) {
+            return Chrome.control
+        }
+        return rowsBeside ? SideMetrics.rocker : SideMetrics.rocker + Chrome.gap + SideMetrics.rowsHeight
     }
 
     /// From the top of the zone to the control's top.
     private var top: CGFloat {
-        let wanted = Self.restShare * screenHeight - zone.minY - height / 2
+        let wanted = inCorner ? .infinity : Self.restShare * screenHeight - zone.minY - height / 2
         return max(0, min(wanted, zone.height - height))
     }
 
@@ -259,7 +265,6 @@ struct CellGrid: View {
         }
         .padding(SideMetrics.cellGap)
         .sideSurface(RoundedRectangle(cornerRadius: 10))
-        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(.white.opacity(0.25), lineWidth: 1))
     }
 
     private func cell(_ cell: Cell) -> some View {
@@ -270,7 +275,7 @@ struct CellGrid: View {
             .foregroundStyle(cell.on ? cell.text : .white)
             .shadow(color: .black.opacity(cell.on ? 0 : 0.5), radius: 2)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(cell.on ? cell.fill.opacity(0.85) : .clear, in: RoundedRectangle(cornerRadius: 8))
+            .background(cell.on ? cell.fill.opacity(0.7) : .clear, in: RoundedRectangle(cornerRadius: 8))
             .contentShape(RoundedRectangle(cornerRadius: 8))
             .accessibilityElement()
             .accessibilityLabel(cell.title)
@@ -296,7 +301,7 @@ struct SideValueLabel: View {
             .fixedSize()
             .padding(.horizontal, 8)
             .frame(height: SideMetrics.rowHeight)
-            .sideSurface(Capsule(), dim: adjusting ? 0.55 : 0.25)
+            .sideSurface(Capsule(), dim: adjusting ? 0.45 : 0.15)
             .scaleEffect(adjusting ? 1.25 : 1, anchor: anchor)
             .animation(.easeOut(duration: 0.15), value: adjusting)
             .allowsHitTesting(false)

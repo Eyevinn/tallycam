@@ -9,9 +9,18 @@ struct LiveButton: View {
     static let size: CGFloat = 76
 
     let state: StreamController.State
-    /// The "Hold to stop" hint above and left of the button (landscape,
-    /// bottom-right corner, over the picture) or left of it (portrait).
-    var hintAbove = false
+    /// Where the "Hold to stop" hint goes, over the picture and clear of
+    /// the other chrome.
+    enum HintPlacement {
+        /// Above and left of the button (iPad landscape, bottom-right corner).
+        case above
+        /// Left of it (iPad portrait, bottom centre).
+        case left
+        /// Under it, ending at its right edge (phones, upper-right corner).
+        case below
+    }
+
+    var hint: HintPlacement = .left
     let onStart: () -> Void
     let onStop: () -> Void
 
@@ -21,20 +30,29 @@ struct LiveButton: View {
 
     var body: some View {
         gestures(face)
-            .overlay(alignment: hintAbove ? .topLeading : .leading) { placedHint }
+            .overlay(alignment: hintAlignment) { placedHint }
             .sensoryFeedback(.impact(weight: .heavy), trigger: state, condition: Self.feedback)
             .modifier(accessibility)
     }
 
-    /// Clear of the bottom row and the adjust control: over the picture.
+    private var hintAlignment: Alignment {
+        switch hint {
+        case .above: .topLeading
+        case .left: .leading
+        case .below: .bottomTrailing
+        }
+    }
+
+    /// Clear of the bottom row and the side controls: over the picture.
     @ViewBuilder
     private var placedHint: some View {
         if showHint {
-            hint
+            hintLabel
                 .alignmentGuide(HorizontalAlignment.leading) { (d: ViewDimensions) -> CGFloat in
-                    hintAbove ? d.width : d.width + Chrome.gap
+                    hint == .above ? d.width : d.width + Chrome.gap
                 }
                 .alignmentGuide(VerticalAlignment.top) { (d: ViewDimensions) -> CGFloat in d.height + Chrome.gap }
+                .alignmentGuide(VerticalAlignment.bottom) { (_: ViewDimensions) -> CGFloat in -Chrome.gap }
                 .transition(.opacity)
         }
     }
@@ -115,7 +133,7 @@ struct LiveButton: View {
         }
     }
 
-    private var hint: some View {
+    private var hintLabel: some View {
         Text("Hold to stop")
             .font(.caption.weight(.semibold))
             .foregroundStyle(.white)

@@ -195,7 +195,7 @@ struct Rocker: View {
             .shadow(color: .black.opacity(0.5), radius: 2)
             .padding(.vertical, 10)
             RoundedRectangle(cornerRadius: 8)
-                .fill(Color(white: 0.88).opacity(sentStep == 0 ? 0.8 : 0.95))
+                .fill(Color(white: 0.88).opacity(sentStep == 0 ? 0.7 : 0.9))
                 .frame(width: Self.knob, height: Self.knob)
                 .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(tint, lineWidth: 2))
                 .offset(y: -deflection * travel)

@@ -38,6 +38,10 @@ final class RemoteControl: ObservableObject {
     @Published private(set) var banner: String?
     /// The phone's clock discipline, refreshed every second.
     @Published private(set) var clock: ClockSummary?
+    /// The last torch probe's summary (Settings, Diagnostics), and whether
+    /// one is running.
+    @Published private(set) var torchProbeSummary: String?
+    @Published private(set) var torchProbeRunning = false
 
     enum Link {
         case notSetUp
@@ -378,6 +382,11 @@ final class RemoteControl: ObservableObject {
                 sendHelloMessage()
             }
         case let .log(level, message):
+            // The probe's result line (not its progress) ends a run.
+            if torchProbeRunning, message.hasPrefix("Torch probe"), !message.contains(" started: ") {
+                torchProbeRunning = false
+                torchProbeSummary = message
+            }
             sendLog(level: level, message: message)
         }
     }
@@ -710,6 +719,40 @@ final class RemoteControl: ObservableObject {
                 self?.showBanner(error)
             }
         }
+    }
+
+    /// A stream control from Settings (codec, bitrate, SRT latency), through
+    /// the same checks and clamping as the hub's sets. Returns a warning.
+    @discardableResult
+    func localStreamSet(_ id: String, _ value: JSONValue) -> String? {
+        let warning = applyStream(id, value)
+        publishState()
+        return warning
+    }
+
+    /// Settings, Diagnostics: the torch probe with its defaults; the summary
+    /// arrives in `torchProbeSummary`.
+    func runTorchProbe() {
+        torchProbeRunning = true
+        torchProbeSummary = nil
+        capture?.controls.run(command: "torch_probe", args: [:]) { [weak self] error in
+            guard let error else {
+                return
+            }
+            Task { @MainActor in
+                self?.torchProbeRunning = false
+                self?.torchProbeSummary = error
+            }
+        }
+    }
+
+    /// The clock discipline log as the `clock_log` command returns it, as
+    /// text to share.
+    func clockLogText() -> String {
+        let report = PhoneClock.shared.logReport(kinds: [], lines: 4000)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        return (try? encoder.encode(report)).flatMap { String(data: $0, encoding: .utf8) } ?? ""
     }
 
     /// A camera command from the operator's own controls.

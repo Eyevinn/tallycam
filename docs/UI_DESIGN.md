@@ -65,8 +65,10 @@ images of each other. Tools and the live button: see 6.
    bitrate, yellow while adaptive bitrate holds it down). Centre: the tally
    chip, the camera name in red with "ON AIR", green with "PREVIEW", dark when
    off. Right: hub link dot, clock dot, battery; thermal state when it
-   matters, an orientation-pending icon, the Settings gear. Next to the dots
-   a time-of-day timecode, `14:51:46:12` (hours, minutes, seconds, frames at
+   matters, an orientation-pending icon, the Settings gear. Next to the clock
+   dot a `GL` badge while genlock is on: green when locked, orange while
+   locking, red in free run (no trusted time); hidden when genlock is off.
+   Next to the dots a time-of-day timecode, `14:51:46:12` (hours, minutes, seconds, frames at
    the stream rate), from the phone's disciplined clock in local time, in
    tabular digits: white while the clock is healthy, orange when degraded,
    dim with `--` frames when it is not synchronised. The same timecode on

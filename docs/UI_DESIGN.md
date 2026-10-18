@@ -142,10 +142,13 @@ Right side shown; the left one is its mirror image.
   colour with white text. Tap a cell to put that group on this side. Both
   sides may not run the same group: choosing the group the other side runs
   swaps the two. The rocker's job is never a guess.
-- **Hide a side ("–").** A tap on the chosen cell again sets that side to
-  "–": the side control folds into a small tab at the edge (46 × 46, the
-  last group's colour, a chevron), so the picture is clear. A tap on the
-  tab brings the side control back with its last group. Either side or both
+- **Hide and show: one tab.** Each side control has a tab (46 × 46, the
+  group's colour, a chevron) at a fixed place just above its rocker at the
+  screen edge. While the control shows, the chevron points out to the edge
+  (‹ on the left, › on the right) and a tap folds the control away, leaving
+  only the tab, so the picture is clear. While hidden, the same tab at the
+  same place points inward and a tap brings the control back with its last
+  group. A tap on the chosen selector cell does nothing. Either side or both
   may be hidden; the choice is remembered like the group. A tap on a value
   in the values row brings back a hidden side that runs its group; a group
   no side runs goes to the right side and shows it. A swap keeps each

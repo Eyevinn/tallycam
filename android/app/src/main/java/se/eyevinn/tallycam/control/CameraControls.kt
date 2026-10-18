@@ -18,7 +18,7 @@ import kotlin.math.roundToInt
 class CameraControls(
     private val camera: CameraCapture,
     private val isLive: () -> Boolean,
-    /** Persists `mains_hz` (50, 60, 0). */
+    /** Persists the phone's own `mains_hz` (50, 60, 0). */
     private val saveMainsHz: (Int) -> Unit = {},
 ) {
     /**
@@ -27,6 +27,14 @@ class CameraControls(
      * with mains off).
      */
     var serverShutter: Shutter? = null
+        private set
+
+    /**
+     * The phone's own mains frequency (Settings, saved). A hub's production
+     * replaces it while it applies, without being saved; forgetting the hub
+     * returns to this one.
+     */
+    var ownMainsHz: Int = 50
         private set
 
     /** A production that came while live, applied when the stream stops. */
@@ -89,8 +97,12 @@ class CameraControls(
             }
         }
         mainsOptions().takeIf { it.size > 1 }?.let { hz ->
-            list += enumControl("mains_hz", "Mains frequency", "exposure",
-                                options(*hz.map { it to if (it == 0) "Off" else "$it Hz" }.toTypedArray()))
+            // A production setting: not while live, and the hub's wins while it applies.
+            val mains = enumControl("mains_hz", "Mains frequency", "exposure",
+                                    options(*hz.map { it to if (it == 0) "Off" else "$it Hz" }.toTypedArray()))
+                .put("locked_while_live", true)
+            if (serverShutter != null) mains.put("readonly", true)
+            list += mains
         }
         c.evRange?.let { (range, step) ->
             list += Controls.range("ev_bias", "Exposure bias", "exposure", (range.lower * step).toDouble(),
@@ -244,7 +256,7 @@ class CameraControls(
                 val hz = number()?.takeIf { it == 50.0 || it == 60.0 || it == 0.0 }?.toInt()
                     ?: return "expected 50, 60 or 0 (off)"
                 if (hz !in mainsOptions()) return "not supported by this camera"
-                if (hz == s.mainsHz) return null
+                if (hz == s.mainsHz && serverShutter == null) return null
                 // The phone's own production; a hub's wins (docs/SHADING.md).
                 if (serverShutter != null) return "set by the production on the control server"
                 if (isLive()) return NOT_WHILE_LIVE
@@ -309,17 +321,19 @@ class CameraControls(
     }
 
     /**
-     * Mains frequency (flicker from mains-powered light): 50, 60, or 0 for
-     * none (outdoors). The production shutter follows it, and without a
-     * manual sensor Camera2's anti-banding.
+     * The phone's own mains frequency (flicker from mains-powered light): 50,
+     * 60, or 0 for none (outdoors). It applies while no hub production does;
+     * the production shutter follows it, and without a manual sensor
+     * Camera2's anti-banding.
      */
     fun setMainsHz(hz: Int) {
         if (hz != 50 && hz != 60 && hz != 0) return
-        camera.update { it.copy(mainsHz = hz) }
+        ownMainsHz = hz
+        if (serverShutter == null) applyProduction(hz, Shutter.Mains)
     }
 
     /** With a manual sensor the app sets the shutter itself: every frequency works. */
-    private fun mainsOptions(): List<Int> =
+    fun mainsOptions(): List<Int> =
         if (camera.hasManualSensor) listOf(50, 60, 0)
         else listOf(50, 60, 0).filter { CameraCapture.antibandingMode(it) in camera.antibandingModes }
 
@@ -330,8 +344,9 @@ class CameraControls(
      */
     fun setProduction(mainsHz: Int?, shutter: Shutter?, stopped: Boolean = false): String? {
         val s = camera.settings
+        // No mains in the message: the phone's own.
+        val hz = mainsHz?.takeIf { it == 50 || it == 60 || it == 0 } ?: ownMainsHz
         if (isLive() && !stopped) {
-            val hz = mainsHz ?: s.mainsHz
             if (hz != s.mainsHz || shutter != serverShutter) {
                 pendingProduction = mainsHz to shutter
                 return "production shutter changed while live: kept until the stream stops"
@@ -340,13 +355,26 @@ class CameraControls(
             return null
         }
         pendingProduction = null
-        val changed = shutter != serverShutter
+        val wasServer = serverShutter != null
         serverShutter = shutter
-        camera.update { it.copy(mainsHz = mainsHz?.takeIf { hz -> hz == 50 || hz == 60 || hz == 0 } ?: it.mainsHz,
-                                shutter = shutter ?: Shutter.Mains) }
-        // The shutter descriptor's `readonly` follows the production.
-        if (changed) camera.onControlsChanged?.invoke()
+        val changed = applyProduction(hz, shutter ?: Shutter.Mains)
+        // `readonly` of mains_hz follows whether a hub production applies.
+        if (!changed && wasServer != (shutter != null)) camera.onControlsChanged?.invoke()
         return null
+    }
+
+    /**
+     * Sets the camera's mains and shutter policy. When the effective shutter
+     * or the mains changes, the descriptors are sent again (the shutter's
+     * `readonly` and options follow them). Returns whether they changed.
+     */
+    private fun applyProduction(hz: Int, shutter: Shutter): Boolean {
+        val before = camera.settings
+        camera.update { it.copy(mainsHz = hz, shutter = shutter) }
+        val after = camera.settings
+        val changed = before.mainsHz != after.mainsHz || before.effectiveShutter != after.effectiveShutter
+        if (changed) camera.onControlsChanged?.invoke()
+        return changed
     }
 
     /** Ids this table handles. */

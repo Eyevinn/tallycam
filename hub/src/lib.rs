@@ -10,7 +10,8 @@
 //! - `device_key`: device public keys, ids and signatures.
 //! - `hub`: device registry, controller fan-out, tally and preview gating.
 //! - `provision`: the URLs and deep link handed to phones.
-//! - `store`: where known devices are kept between restarts.
+//! - `store`: where known devices and the production are kept between
+//!   restarts.
 //! - `server` (feature `server`): Axum routes, WebSocket sessions, web UI.
 
 pub mod device_key;

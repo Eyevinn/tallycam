@@ -8,8 +8,6 @@
 //! Unknown `type` values and unknown fields are ignored. Fields the hub does not
 //! interpret are kept in `extra` maps so they reach the operator UI unchanged.
 
-use std::collections::BTreeMap;
-
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -25,10 +23,6 @@ pub use tallycam_core::protocol::*;
 pub struct ControllerRequest {
     pub device: String,
     pub message: ServerToDevice,
-    /// Who sends a `set` or `command` (the top-level `holder`, removed before
-    /// forwarding). A protocol 2 phone's exposure, colour and focus accept
-    /// it only from the holder that owns the group (docs/SHADING.md).
-    pub holder: Option<Holder>,
 }
 
 impl ControllerRequest {
@@ -48,7 +42,7 @@ impl ControllerRequest {
             .to_string();
         if !matches!(
             ty.as_str(),
-            "set" | "command" | "tally" | "message" | "preview" | "own" | "release" | "stats"
+            "set" | "command" | "tally" | "message" | "preview" | "stats"
         ) {
             return Ok(None);
         }
@@ -56,22 +50,11 @@ impl ControllerRequest {
             Some(Value::String(d)) => d,
             _ => return Err(format!("'{ty}' needs a 'device' string")),
         };
-        // `own` carries its holder in the message itself.
-        let holder = match ty.as_str() {
-            "set" | "command" => match obj.remove("holder") {
-                None | Some(Value::Null) => None,
-                Some(h) => {
-                    Some(serde_json::from_value(h).map_err(|e| format!("bad 'holder': {e}"))?)
-                }
-            },
-            _ => None,
-        };
+        // An older controller may still send a `holder` (from when the hub
+        // had ownership): ignored.
+        obj.remove("holder");
         let message = serde_json::from_value(value).map_err(|e| e.to_string())?;
-        Ok(Some(Self {
-            device,
-            message,
-            holder,
-        }))
+        Ok(Some(Self { device, message }))
     }
 }
 
@@ -101,9 +84,6 @@ impl ControllerInput {
     }
 }
 
-/// `ownership.groups`: group name to its owner.
-pub type Ownership = BTreeMap<String, GroupOwnership>;
-
 /// Everything the hub knows about one device, sent in `snapshot`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct DeviceSnapshot {
@@ -116,14 +96,12 @@ pub struct DeviceSnapshot {
     /// Latest preview frame, so a new controller has a picture right away.
     pub preview: Option<Preview>,
     pub tally: TallyState,
-    /// The LCP version from the device's `hello`. Ownership, production and
-    /// image statistics need 2.
+    /// The LCP version from the device's `hello`. Production and image
+    /// statistics need 2.
     #[serde(default)]
     pub protocol: u32,
-    /// Who owns each control group, as the device reports it (protocol 2).
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub ownership: Ownership,
-    /// The latest `image_stats` (protocol 2, only while a controller asks).
+    /// The latest `image_stats` (protocol 2, only while a controller asks
+    /// and the device is online).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image_stats: Option<ImageStats>,
     pub online: bool,
@@ -184,11 +162,6 @@ pub enum ControllerEvent {
         device: String,
         #[serde(flatten)]
         log: Log,
-    },
-    /// The device's `ownership`, forwarded.
-    DeviceOwnership {
-        device: String,
-        groups: Ownership,
     },
     /// The device's `image_stats`, forwarded.
     DeviceImageStats {

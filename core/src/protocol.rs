@@ -7,16 +7,15 @@
 //! not interpret are kept in `extra` maps so they can be forwarded unchanged.
 //! Controller-side envelopes (operator UI <-> server) belong to the server.
 
-use std::collections::BTreeMap;
-
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 /// LCP protocol version. 1 added device keys: `hello.public_key`, the
 /// server's `challenge` and the device's `auth` (docs/PROTOCOL.md, "Device
 /// keys"). A version 0 `hello` comes from an app without a key. 2 added
-/// ownership of exposure, colour and focus (`own`, `release`, `ownership`)
-/// and the production settings (`production`), docs/SHADING.md.
+/// the production settings (`production`) and the image statistics
+/// (`stats`, `image_stats`), docs/SHADING.md. An `ownership` message from a
+/// phone of an earlier version 2 build is an unknown type, ignored.
 pub const PROTOCOL_VERSION: u32 = 2;
 
 pub const DEVICE_PATH: &str = "/lcp/v0/device";
@@ -307,10 +306,6 @@ pub enum DeviceMessage {
     },
     Ping(Ping),
     Pong(Ping),
-    /// Who owns each control group, in full on admission and on every change.
-    Ownership {
-        groups: BTreeMap<String, GroupOwnership>,
-    },
     /// Exposure and colour statistics, only while the server asked for them.
     ImageStats(ImageStats),
     #[serde(other)]
@@ -368,20 +363,6 @@ pub enum ServerToDevice {
     },
     Ping(Ping),
     Pong(Ping),
-    /// The holder takes the named groups (`exposure`, `white_balance`,
-    /// `focus`). Values stay as they are.
-    Own {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<Value>,
-        groups: Vec<String>,
-        holder: Holder,
-    },
-    /// The named groups go back to auto.
-    Release {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<Value>,
-        groups: Vec<String>,
-    },
     /// Production settings, after admission and when they change.
     Production(Production),
     /// Start or stop `image_stats` (default 1 per second, at most 4).
@@ -393,34 +374,8 @@ pub enum ServerToDevice {
 }
 
 // ---------------------------------------------------------------------------
-// Ownership and production (docs/SHADING.md)
+// Production (docs/SHADING.md)
 // ---------------------------------------------------------------------------
-
-/// Who owns a control group.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum Owner {
-    Auto,
-    Local,
-    Remote,
-}
-
-/// The remote owner of a group: chosen by the hub, `id` opaque to the
-/// phone, `label` shown on it. Each at most 64 bytes.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct Holder {
-    pub id: String,
-    #[serde(default)]
-    pub label: String,
-}
-
-/// One group in `ownership`.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct GroupOwnership {
-    pub owner: Owner,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub holder: Option<Holder>,
-}
 
 /// The production's shutter. On the wire `"mains"`, `"free"` or the
 /// denominator of a fixed flicker-free shutter (`100` for 1/100 s). An
@@ -430,8 +385,8 @@ pub enum ShutterPolicy {
     /// One mains period: 1/50 at 50 Hz, 1/60 at 60 Hz.
     #[default]
     Mains,
-    /// No mains-lit light in the picture: the shutter joins the exposure
-    /// group, and auto shortens it once ISO is at its minimum.
+    /// No mains-lit light in the picture: the shutter is free in manual
+    /// exposure, and auto shortens it once ISO is at its minimum.
     Free,
     /// A fixed shutter, 1/x s.
     Fixed(u32),
@@ -463,7 +418,8 @@ impl<'de> Deserialize<'de> for ShutterPolicy {
 }
 
 /// Production-wide settings (docs/SHADING.md, "Shutter"): the same for
-/// every camera of the production, not changeable while live.
+/// every camera of the production. A phone that is live keeps its current
+/// settings and applies these when the stream stops.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Production {
     /// 50, 60, or 0 (no mains-lit light).
@@ -472,6 +428,19 @@ pub struct Production {
     pub shutter: ShutterPolicy,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
+}
+
+impl Production {
+    /// Is the shutter free (set in manual exposure, shortened by auto ISO at
+    /// the lowest ISO)? Under a `free` policy, and under `mains` with no
+    /// mains-lit light (`mains_hz` 0): there is nothing to flicker against.
+    pub fn shutter_free(&self) -> bool {
+        match self.shutter {
+            ShutterPolicy::Free => true,
+            ShutterPolicy::Mains => self.mains_hz == 0,
+            ShutterPolicy::Fixed(_) => false,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -704,6 +673,60 @@ mod tests {
             serde_json::to_value(&challenge).unwrap(),
             serde_json::json!({"type":"challenge","nonce":"n","server":"s"})
         );
+    }
+
+    #[test]
+    fn production_round_trips_and_says_when_the_shutter_is_free() {
+        for (text, shutter, free) in [
+            (
+                r#"{"type":"production","mains_hz":50,"shutter":"mains"}"#,
+                ShutterPolicy::Mains,
+                false,
+            ),
+            (
+                r#"{"type":"production","mains_hz":0,"shutter":"mains"}"#,
+                ShutterPolicy::Mains,
+                true,
+            ),
+            (
+                r#"{"type":"production","mains_hz":60,"shutter":"free"}"#,
+                ShutterPolicy::Free,
+                true,
+            ),
+            (
+                r#"{"type":"production","mains_hz":0,"shutter":100}"#,
+                ShutterPolicy::Fixed(100),
+                false,
+            ),
+        ] {
+            let msg: ServerToDevice = serde_json::from_str(text).unwrap();
+            let ServerToDevice::Production(p) = &msg else {
+                panic!("not a production")
+            };
+            assert_eq!(p.shutter, shutter);
+            assert_eq!(p.shutter_free(), free, "{text}");
+            let back: Value = serde_json::to_value(&msg).unwrap();
+            assert_eq!(back, serde_json::from_str::<Value>(text).unwrap());
+        }
+        // Unknown shutters read as mains; unknown fields are kept.
+        let msg: ServerToDevice = serde_json::from_str(
+            r#"{"type":"production","mains_hz":50,"shutter":"fast","later":1}"#,
+        )
+        .unwrap();
+        let ServerToDevice::Production(p) = msg else {
+            panic!("not a production")
+        };
+        assert_eq!(p.shutter, ShutterPolicy::Mains);
+        assert_eq!(p.extra["later"], 1);
+    }
+
+    #[test]
+    fn ownership_from_an_older_phone_is_ignored() {
+        let msg: DeviceMessage = serde_json::from_str(
+            r#"{"type":"ownership","groups":{"exposure":{"owner":"remote","holder":{"id":"a"}}}}"#,
+        )
+        .unwrap();
+        assert_eq!(msg, DeviceMessage::Unknown);
     }
 
     #[test]

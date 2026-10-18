@@ -1,6 +1,6 @@
 use super::*;
 use crate::device_key::SoftwareKey;
-use crate::protocol::{Holder, Owner, ShutterPolicy};
+use crate::protocol::ShutterPolicy;
 
 /// Records what the hub saves.
 #[derive(Default)]
@@ -8,6 +8,7 @@ struct RecordingStore {
     initial: Vec<StoredDevice>,
     saved: Mutex<Vec<StoredDevice>>,
     removed: Mutex<Vec<String>>,
+    production: Mutex<Option<Production>>,
 }
 
 impl DeviceStore for RecordingStore {
@@ -19,6 +20,12 @@ impl DeviceStore for RecordingStore {
     }
     fn remove(&self, id: &str) {
         self.removed.lock().unwrap().push(id.to_string());
+    }
+    fn load_production(&self) -> Option<Production> {
+        self.production.lock().unwrap().clone()
+    }
+    fn save_production(&self, production: &Production) {
+        *self.production.lock().unwrap() = Some(production.clone());
     }
 }
 
@@ -652,20 +659,13 @@ fn a_device_forgotten_after_admission_cannot_join() {
 }
 
 // ---------------------------------------------------------------------------
-// Shading: ownership checks, production, image statistics
+// Shading: production, image statistics
 // ---------------------------------------------------------------------------
 
 fn hello_v1(id: &str, name: &str) -> Hello {
     Hello {
         protocol: 1,
         ..hello(id, name)
-    }
-}
-
-fn holder(id: &str, label: &str) -> Holder {
-    Holder {
-        id: id.into(),
-        label: label.into(),
     }
 }
 
@@ -678,18 +678,6 @@ fn controller(hub: &Hub, json: Value) -> Result<(), String> {
     }
 }
 
-/// The phone reports `exposure` remote for `holder`, the rest auto.
-fn report_exposure_held(hub: &Hub, device: &str, by: Holder) {
-    let conn = CONNS.with(|c| c.borrow()[device]);
-    let groups: Ownership = serde_json::from_value(serde_json::json!({
-        "exposure": { "owner": "remote", "holder": by },
-        "white_balance": { "owner": "local" },
-        "focus": { "owner": "auto" },
-    }))
-    .unwrap();
-    hub.device_message(conn, device, DeviceMessage::Ownership { groups });
-}
-
 fn report_stream(hub: &Hub, device: &str, state: &str) {
     let conn = CONNS.with(|c| c.borrow()[device]);
     let status: Status =
@@ -698,134 +686,68 @@ fn report_stream(hub: &Hub, device: &str, state: &str) {
 }
 
 #[test]
-fn a_set_on_a_group_needs_its_remote_holder() {
+fn exposure_colour_and_focus_are_plain_controls() {
     let hub = Hub::new();
     let mut phone = connect_phone(&hub, "cam1");
-    report_exposure_held(&hub, "cam1", holder("a", "Shader A"));
-    assert_eq!(hub.devices()[0].protocol, PROTOCOL_VERSION);
-    assert_eq!(hub.devices()[0].ownership["exposure"].owner, Owner::Remote);
+    let mut events = hub.subscribe();
 
-    // Another holder, and no holder at all.
-    let set_iso = |h: Option<Value>| {
-        let mut m =
-            serde_json::json!({ "type": "set", "device": "cam1", "values": { "iso": 400 } });
-        if let Some(h) = h {
-            m["holder"] = h;
-        }
-        m
-    };
-    assert_eq!(
-        controller(
-            &hub,
-            set_iso(Some(serde_json::json!({ "id": "b", "label": "Shader B" })))
-        ),
-        Err("exposure is held by Shader A: take over first".into())
-    );
-    assert_eq!(
-        controller(&hub, set_iso(None)),
-        Err("exposure is held by Shader A: take over first".into())
-    );
-    assert!(phone.try_recv().is_err(), "nothing sent on a refusal");
-
-    // The holder: forwarded, without the holder.
+    // Any controller sets any control; the last write wins on the phone.
     controller(
         &hub,
-        set_iso(Some(serde_json::json!({ "id": "a", "label": "Shader A" }))),
+        serde_json::json!({ "type": "set", "device": "cam1",
+                            "values": { "iso": 400, "wb_temperature": 5600, "shutter": 100 } }),
     )
     .unwrap();
     let Ok(ServerToDevice::Set { values, .. }) = phone.try_recv() else {
         panic!("expected the set")
     };
     assert_eq!(values["iso"], 400);
-
-    // A group that is not remote, in the same set as a held one: refused whole.
-    let both = serde_json::json!({
-        "type": "set", "device": "cam1", "holder": { "id": "a", "label": "Shader A" },
-        "values": { "iso": 200, "wb_temperature": 5600 },
-    });
-    assert_eq!(
-        controller(&hub, both),
-        Err("white_balance is not under remote control: take over first".into())
-    );
-    // Keys outside the groups need no holder.
     controller(
         &hub,
-        serde_json::json!({ "type": "set", "device": "cam1", "values": { "zoom": 2.0 } }),
-    )
-    .unwrap();
-    assert!(matches!(phone.try_recv(), Ok(ServerToDevice::Set { .. })));
-    // Commands by their group.
-    assert_eq!(
-        controller(
-            &hub,
-            serde_json::json!({ "type": "command", "device": "cam1", "name": "focus_at",
-                                "args": { "x": 0.5, "y": 0.5 } }),
-        ),
-        Err("focus is not under remote control: take over first".into())
-    );
-    controller(
-        &hub,
-        serde_json::json!({ "type": "command", "device": "cam1", "name": "clock_log" }),
+        serde_json::json!({ "type": "command", "device": "cam1", "name": "focus_at",
+                            "args": { "x": 0.5, "y": 0.5 } }),
     )
     .unwrap();
     assert!(matches!(
         phone.try_recv(),
         Ok(ServerToDevice::Command { .. })
     ));
-    // The shutter joins exposure only when the production shutter is free.
-    let shutter =
-        serde_json::json!({ "type": "set", "device": "cam1", "values": { "shutter": 100 } });
-    controller(&hub, shutter.clone()).unwrap();
+
+    // An older controller's `holder` is ignored, its `own` and `release`
+    // are unknown types.
+    controller(
+        &hub,
+        serde_json::json!({ "type": "set", "device": "cam1", "values": { "iso": 200 },
+                            "holder": { "id": "a", "label": "Shader A" } }),
+    )
+    .unwrap();
     assert!(matches!(phone.try_recv(), Ok(ServerToDevice::Set { .. })));
-    hub.set_production(Production {
-        shutter: ShutterPolicy::Free,
-        ..default_production()
-    })
-    .unwrap();
-    assert!(matches!(
-        phone.try_recv(),
-        Ok(ServerToDevice::Production(_))
-    ));
-    assert!(controller(&hub, shutter).is_err());
-}
-
-#[test]
-fn own_and_release_are_forwarded_with_the_holder() {
-    let hub = Hub::new();
-    let mut phone = connect_phone(&hub, "cam1");
-    controller(
-        &hub,
-        serde_json::json!({ "type": "own", "device": "cam1", "id": 3,
-                            "groups": ["exposure"], "holder": { "id": "a", "label": "Shader A" } }),
-    )
-    .unwrap();
-    assert_eq!(
-        phone.try_recv().unwrap(),
-        ServerToDevice::Own {
-            id: Some(Value::from(3)),
-            groups: vec!["exposure".into()],
-            holder: holder("a", "Shader A"),
-        }
+    for ty in ["own", "release"] {
+        controller(
+            &hub,
+            serde_json::json!({ "type": ty, "device": "cam1", "groups": ["exposure"],
+                                "holder": { "id": "a", "label": "A" } }),
+        )
+        .unwrap();
+    }
+    assert!(
+        phone.try_recv().is_err(),
+        "own and release are not forwarded"
     );
-    assert!(controller(
-        &hub,
-        serde_json::json!({ "type": "own", "device": "cam1", "groups": ["exposure"],
-                            "holder": { "id": "", "label": "x" } }),
-    )
-    .is_err());
-    controller(
-        &hub,
-        serde_json::json!({ "type": "release", "device": "cam1", "groups": ["exposure"] }),
-    )
-    .unwrap();
-    assert!(matches!(
-        phone.try_recv(),
-        Ok(ServerToDevice::Release { .. })
-    ));
+
+    // An older phone's `ownership` is ignored.
+    let conn = CONNS.with(|c| c.borrow()["cam1"]);
+    let ownership: DeviceMessage =
+        serde_json::from_str(r#"{"type":"ownership","groups":{"exposure":{"owner":"local"}}}"#)
+            .unwrap();
+    hub.device_message(conn, "cam1", ownership);
+    assert!(events.try_recv().is_err(), "nothing forwarded");
+    let snapshot = serde_json::to_value(hub.devices()).unwrap();
+    assert!(snapshot[0].get("ownership").is_none());
 }
 
 #[test]
-fn protocol_1_devices_get_requests_unchecked_and_no_shading() {
+fn protocol_1_devices_get_no_shading() {
     let hub = Hub::new();
     let (tx, mut phone) = mpsc::unbounded_channel();
     let conn = hub.new_connection_id();
@@ -845,23 +767,6 @@ fn protocol_1_devices_get_requests_unchecked_and_no_shading() {
     )
     .unwrap();
     assert!(matches!(phone.try_recv(), Ok(ServerToDevice::Set { .. })));
-    controller(
-        &hub,
-        serde_json::json!({ "type": "command", "device": "old", "name": "focus_at",
-                            "holder": { "id": "a" } }),
-    )
-    .unwrap();
-    assert!(matches!(
-        phone.try_recv(),
-        Ok(ServerToDevice::Command { .. })
-    ));
-    assert!(controller(
-        &hub,
-        serde_json::json!({ "type": "own", "device": "old", "groups": ["exposure"],
-                            "holder": { "id": "a", "label": "A" } }),
-    )
-    .unwrap_err()
-    .contains("protocol 1"));
     hub.set_production(Production {
         mains_hz: 60,
         ..default_production()
@@ -875,7 +780,7 @@ fn protocol_1_devices_get_requests_unchecked_and_no_shading() {
 }
 
 #[test]
-fn production_is_sent_on_admission_and_refused_while_live() {
+fn production_is_sent_on_admission_and_accepted_while_live() {
     let hub = Hub::new();
     let mut events = hub.subscribe();
     hub.set_production(Production {
@@ -899,33 +804,77 @@ fn production_is_sent_on_admission_and_refused_while_live() {
         ServerToDevice::Production(p) if p.mains_hz == 60 && p.shutter == ShutterPolicy::Fixed(120)
     )));
 
-    report_stream(&hub, "cam1", "connecting");
-    let fifty = default_production();
-    assert_eq!(
-        hub.set_production(fifty.clone()),
-        Err("not while cameras are live".into())
-    );
+    // Live: the phone gets it and applies it when its stream stops.
     report_stream(&hub, "cam1", "live");
-    assert!(controller(
+    controller(
         &hub,
-        serde_json::json!({ "type": "production", "mains_hz": 50, "shutter": "mains" })
+        serde_json::json!({ "type": "production", "mains_hz": 50, "shutter": "mains" }),
     )
-    .is_err());
-    assert!(phone.try_recv().is_err());
-    // Unchanged settings are fine while live.
-    assert_eq!(hub.production().mains_hz, 60);
+    .unwrap();
+    assert_eq!(
+        phone.try_recv().unwrap(),
+        ServerToDevice::Production(default_production())
+    );
+    assert_eq!(hub.production(), default_production());
+    // Unchanged settings send nothing.
     hub.set_production(hub.production()).unwrap();
+    assert!(phone.try_recv().is_err());
 
-    // A camera that went offline while live does not block it.
-    hub.device_disconnected(conn, "cam1");
-    hub.set_production(fifty.clone()).unwrap();
-    assert_eq!(hub.production(), fifty);
+    // Values are still checked.
     assert!(hub
         .set_production(Production {
             mains_hz: 55,
-            ..fifty
+            ..default_production()
         })
         .is_err());
+    assert!(hub
+        .set_production(Production {
+            shutter: ShutterPolicy::Fixed(0),
+            ..default_production()
+        })
+        .is_err());
+    assert_eq!(hub.production(), default_production());
+}
+
+#[test]
+fn production_is_kept_in_the_store() {
+    let store = Arc::new(RecordingStore::default());
+    let hub = Hub::with_store(store.clone());
+    assert_eq!(hub.production(), default_production());
+    let sixty = Production {
+        mains_hz: 60,
+        shutter: ShutterPolicy::Free,
+        extra: Map::new(),
+    };
+    hub.set_production(sixty.clone()).unwrap();
+    assert_eq!(*store.production.lock().unwrap(), Some(sixty.clone()));
+
+    // A restart starts with it.
+    let again = Hub::with_store(store);
+    assert_eq!(again.production(), sixty);
+}
+
+#[test]
+fn going_offline_drops_status_and_image_stats() {
+    let hub = Hub::new();
+    let _phone = connect_phone(&hub, "cam1");
+    let conn = CONNS.with(|c| c.borrow()["cam1"]);
+    report_stream(&hub, "cam1", "live");
+    let stats: ImageStats =
+        serde_json::from_value(serde_json::json!({ "luma": { "mean": 0.4 } })).unwrap();
+    hub.device_message(conn, "cam1", DeviceMessage::ImageStats(stats));
+    assert!(hub.devices()[0].status.is_some());
+    assert!(hub.devices()[0].image_stats.is_some());
+
+    hub.device_disconnected(conn, "cam1");
+    let snap = &hub.devices()[0];
+    assert!(!snap.online);
+    assert_eq!(snap.status, None, "a stale stream state would read as live");
+    assert_eq!(snap.image_stats, None);
+
+    // Back online: nothing stale until the phone reports again.
+    let _phone = connect_phone(&hub, "cam1");
+    assert_eq!(hub.devices()[0].status, None);
 }
 
 #[test]
@@ -977,7 +926,29 @@ fn image_stats_follow_the_controllers() {
         serde_json::from_value(serde_json::json!({ "luma": { "mean": 0.4, "clipped": 0.01 } }))
             .unwrap();
     hub.device_message(conn, "cam1", DeviceMessage::ImageStats(stats.clone()));
-    assert_eq!(hub.devices()[0].image_stats, Some(stats));
+    assert_eq!(hub.devices()[0].image_stats, Some(stats.clone()));
+
+    // Switched off by a controller: the numbers go stale, so they go.
+    controller(
+        &hub,
+        serde_json::json!({ "type": "stats", "device": "cam1", "enabled": false }),
+    )
+    .unwrap();
+    assert!(matches!(
+        v2.try_recv(),
+        Ok(ServerToDevice::Stats { enabled: false, .. })
+    ));
+    assert_eq!(hub.devices()[0].image_stats, None);
+    controller(
+        &hub,
+        serde_json::json!({ "type": "stats", "device": "cam1", "enabled": true }),
+    )
+    .unwrap();
+    assert!(matches!(
+        v2.try_recv(),
+        Ok(ServerToDevice::Stats { enabled: true, .. })
+    ));
+    hub.device_message(conn, "cam1", DeviceMessage::ImageStats(stats));
 
     drop(guard2);
     assert!(v2.try_recv().is_err());

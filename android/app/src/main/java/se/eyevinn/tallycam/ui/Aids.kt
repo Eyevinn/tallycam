@@ -81,6 +81,8 @@ class Aids(context: Context) {
     var safeAreas by mutableStateOf(prefs.getBoolean("safeAreas", false)); private set
     var centreCuts by mutableStateOf(prefs.getBoolean("centreCuts", false)); private set
     var peaking by mutableStateOf(prefs.getBoolean("peaking", false)); private set
+    /** The camera values line at the bottom (on by default). */
+    var readout by mutableStateOf(prefs.getBoolean("readout", true)); private set
 
     val anyOn get() = grid || horizon || safeAreas || centreCuts || peaking
 
@@ -92,6 +94,7 @@ class Aids(context: Context) {
             "safeAreas" -> safeAreas = on
             "centreCuts" -> centreCuts = on
             "peaking" -> peaking = on
+            "readout" -> readout = on
         }
     }
 
@@ -136,6 +139,8 @@ fun AidsMenu(aids: Aids) {
             item("centreCuts", "Centre cuts (4:3, 9:16)", aids.centreCuts)
             HorizontalDivider()
             item("peaking", "Focus peaking (sharp edges in red)", aids.peaking)
+            HorizontalDivider()
+            item("readout", "Camera values", aids.readout)
         }
     }
 }
@@ -275,22 +280,35 @@ fun PeakingOverlay(model: AppModel, modifier: Modifier = Modifier) {
  */
 @Composable
 fun ZoomRocker(onRate: (Double) -> Unit) {
-    val travel = 62.dp
-    var deflection by remember { mutableFloatStateOf(0f) }
     var sentStep by remember { mutableIntStateOf(0) }
+    Rocker("T", "W") { d ->
+        val step = (d * STEPS).roundToInt()
+        if (step == sentStep) return@Rocker
+        sentStep = step
+        val share = abs(step).toDouble() / STEPS
+        onRate(if (step == 0) 0.0 else (if (step > 0) 1 else -1) * MAX_RATE * share * share)
+    }
+}
+
+/**
+ * A vertical rocker: drag the knob up or down; [onDeflection] gets -1..1
+ * (up positive) while held and 0 on release, when the knob springs back.
+ * The zoom rocker and the operator's exposure, colour and focus controls.
+ */
+@Composable
+fun Rocker(top: String, bottom: String, height: androidx.compose.ui.unit.Dp = 180.dp, onDeflection: (Float) -> Unit) {
+    val travel = (height - 56.dp) / 2
+    var deflection by remember { mutableFloatStateOf(0f) }
     val shown by animateFloatAsState(deflection, label = "rocker")
+    val report = androidx.compose.runtime.rememberUpdatedState(onDeflection)
     Box(
-        Modifier.width(46.dp).height(180.dp).background(Color.Black.copy(alpha = 0.35f), CircleShape)
+        Modifier.width(46.dp).height(height).background(Color.Black.copy(alpha = 0.35f), CircleShape)
             .pointerInput(Unit) {
                 val travelPx = travel.toPx()
                 var dy = 0f
                 fun send(d: Float) {
                     deflection = d
-                    val step = (d * STEPS).roundToInt()
-                    if (step == sentStep) return
-                    sentStep = step
-                    val share = abs(step).toDouble() / STEPS
-                    onRate(if (step == 0) 0.0 else (if (step > 0) 1 else -1) * MAX_RATE * share * share)
+                    report.value(d)
                 }
                 detectDragGestures(
                     onDragStart = { dy = 0f },
@@ -306,11 +324,11 @@ fun ZoomRocker(onRate: (Double) -> Unit) {
     ) {
         Column(Modifier.fillMaxSize().padding(vertical = 8.dp), horizontalAlignment = Alignment.CenterHorizontally,
                verticalArrangement = Arrangement.SpaceBetween) {
-            Text("T", color = Color.White.copy(alpha = 0.6f), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-            Text("W", color = Color.White.copy(alpha = 0.6f), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+            Text(top, color = Color.White.copy(alpha = 0.6f), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+            Text(bottom, color = Color.White.copy(alpha = 0.6f), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
         }
         Box(Modifier.offset { IntOffset(0, (-shown * travel.toPx()).roundToInt()) }.size(30.dp)
-                .background(Color.White.copy(alpha = if (sentStep == 0) 0.7f else 0.95f), CircleShape))
+                .background(Color.White.copy(alpha = if (deflection == 0f) 0.7f else 0.95f), CircleShape))
     }
 }
 

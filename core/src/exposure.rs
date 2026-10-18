@@ -726,23 +726,45 @@ mod tests {
     fn free_shutter_shortens_only_below_the_lowest_iso_and_comes_back() {
         // Daylight: 6 EV brighter than the ISO range at 1/100 s can take.
         let mut cam = Camera::new(3.0, 30, 50.0);
-        cam.scene = Box::new(|t| if t < 2000 * MS { 0.0 } else if t < 12_000 * MS { 6.0 } else { 0.0 });
+        cam.scene = Box::new(|t| {
+            if t < 2000 * MS {
+                0.0
+            } else if t < 12_000 * MS {
+                6.0
+            } else {
+                0.0
+            }
+        });
         let mut ai = AutoIso::new(AutoIsoConfig {
             mains_hz: 0,
             ..Default::default()
         });
         ai.set_free_shutter(Some(10_000_000.0));
         let mut shortest = f64::MAX;
-        run(&mut cam, &mut ai, 11_500, |c, _| shortest = shortest.min(c.exposure_ns));
+        run(&mut cam, &mut ai, 11_500, |c, _| {
+            shortest = shortest.min(c.exposure_ns)
+        });
         assert!(shortest < 3_000_000.0, "shutter stayed at {shortest} ns");
-        assert!((cam.iso - 34.0).abs() < 1.0, "ISO {} not at its minimum", cam.iso);
-        assert!(cam.picture_ev().abs() < 0.3, "picture {} EV off", cam.picture_ev());
+        assert!(
+            (cam.iso - 34.0).abs() < 1.0,
+            "ISO {} not at its minimum",
+            cam.iso
+        );
+        assert!(
+            cam.picture_ev().abs() < 0.3,
+            "picture {} EV off",
+            cam.picture_ev()
+        );
         assert_eq!(ai.status().limit, AutoIsoLimit::None);
         // Back indoors: the shutter returns to the held 1/100 before the
         // ISO rises.
         run(&mut cam, &mut ai, 10_000, |_, _| {});
         assert_eq!(cam.exposure_ns, 10_000_000.0);
-        assert!(cam.picture_ev().abs() < 0.3, "picture {} EV off", cam.picture_ev());
+        assert!(
+            cam.picture_ev().abs() < 0.3,
+            "picture {} EV off",
+            cam.picture_ev()
+        );
     }
 
     #[test]
@@ -764,16 +786,32 @@ mod tests {
         let mut cam = Camera::new(3.0, 30, 50.0);
         cam.exposure_ns = 20_000_000.0;
         cam.iso = 224.0;
-        cam.scene = Box::new(|t| if t < 2000 * MS { 0.0 } else if t < 12_000 * MS { 3.2 } else { 0.0 });
+        cam.scene = Box::new(|t| {
+            if t < 2000 * MS {
+                0.0
+            } else if t < 12_000 * MS {
+                3.2
+            } else {
+                0.0
+            }
+        });
         let mut ai = AutoIso::new(AutoIsoConfig::default());
         run(&mut cam, &mut ai, 11_500, |_, _| {});
         assert_eq!(cam.exposure_ns, 10_000_000.0);
-        assert!(cam.picture_ev().abs() < 0.3, "picture {} EV off", cam.picture_ev());
+        assert!(
+            cam.picture_ev().abs() < 0.3,
+            "picture {} EV off",
+            cam.picture_ev()
+        );
         assert_eq!(ai.status().limit, AutoIsoLimit::None);
         // Back indoors: 1/50 again.
         run(&mut cam, &mut ai, 10_000, |_, _| {});
         assert_eq!(cam.exposure_ns, 20_000_000.0);
-        assert!(cam.picture_ev().abs() < 0.3, "picture {} EV off", cam.picture_ev());
+        assert!(
+            cam.picture_ev().abs() < 0.3,
+            "picture {} EV off",
+            cam.picture_ev()
+        );
     }
 
     #[test]

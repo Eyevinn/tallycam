@@ -179,12 +179,16 @@ class CameraCapture(context: Context) {
 
     /** Auto ISO (camera thread): the core's loop, its shutter setup, and the latest frame's sensor values. */
     private var autoIso = 0L
-    private var autoIsoSetup: Pair<Shutter, Int>? = null
+    private var autoIsoSetup: Triple<Shutter, Int, Int>? = null
     private var autoIsoBias = Double.NaN
     private var autoIsoOn = false
     private var lastAutoIsoNs = 0L
     private var frameIso = 0
     private var frameExposureNs = 0L
+    /** After a commanded ISO and exposure: skip samples until the frames report them, or until this time (ns). */
+    private var autoIsoWaitIso = 0
+    private var autoIsoWaitExposureNs = 0L
+    private var autoIsoWaitUntilNs = 0L
     private val autoIsoInput = DoubleArray(8)
     private val autoIsoOutput = DoubleArray(2)
     private val autoIsoState = DoubleArray(4)
@@ -313,11 +317,20 @@ class CameraCapture(context: Context) {
     }
 
     private fun change(change: (Settings) -> Settings) {
-        synchronized(this) { settings = fitShutter(change(settings)) }
+        synchronized(this) {
+            val before = settings
+            val after = change(before)
+            // Only when what the shutter follows changed: a zoom tick or a
+            // focus must not undo the auto ISO loop's shorter shutter.
+            settings = if (fitKey(after) != fitKey(before)) fitShutter(after) else after
+        }
     }
 
+    /** What [fitShutter] depends on: the production, the frame rate (and genlock's room) and the exposure mode. */
+    private fun fitKey(s: Settings) = listOf(s.effectiveShutter, s.mainsHz, s.frameRate, s.genlock, s.exposureMode)
+
     /**
-     * With a manual sensor, keeps the exposure at the production shutter,
+     * With a manual sensor, puts the exposure at the production shutter,
      * moving the ISO so the picture keeps its brightness; under a free
      * shutter only within the frame.
      */
@@ -785,12 +798,17 @@ class CameraCapture(context: Context) {
         if (autoIso == 0L) autoIso = Hot.autoIsoNew(0)
         if (!autoIsoOn) {
             autoIsoOn = true
-            Hot.autoIsoReset(autoIso)
             frameIso = 0
+            // Set up again: the production may have changed while off.
+            autoIsoSetup = null
         }
-        val setup = s.effectiveShutter to s.mainsHz
+        val setup = Triple(s.effectiveShutter, s.mainsHz, s.frameRate)
         if (setup != autoIsoSetup) {
             autoIsoSetup = setup
+            // A new production or frame rate: start the loop over, from the
+            // values the settings now hold (fitShutter may have moved them).
+            Hot.autoIsoReset(autoIso)
+            awaitFrame(s.iso, s.exposureNs, now)
             when (setup.first) {
                 Shutter.Mains -> {
                     Hot.autoIsoSetMains(autoIso, s.mainsHz)
@@ -801,9 +819,11 @@ class CameraCapture(context: Context) {
                     Hot.autoIsoSetMains(autoIso, 0)
                     Hot.autoIsoSetFreeShutter(autoIso, 0.0)
                 }
+                // A 180 degree shutter (half the frame, 1/60 at 30 fps) as
+                // the base, never an exposure the loop already shortened.
                 Shutter.Free -> {
                     Hot.autoIsoSetMains(autoIso, 0)
-                    Hot.autoIsoSetFreeShutter(autoIso, s.exposureNs.toDouble().takeIf { it > 0 } ?: 1e7)
+                    Hot.autoIsoSetFreeShutter(autoIso, 0.5e9 / s.frameRate)
                 }
             }
         }
@@ -813,6 +833,14 @@ class CameraCapture(context: Context) {
             Hot.autoIsoSetBias(autoIso, bias)
         }
         if (now - lastAutoIsoNs < 95_000_000L || frameIso <= 0 || frameExposureNs <= 0) return
+        // Frames still exposed with the values before the last command
+        // would make the loop correct twice.
+        if (autoIsoWaitUntilNs != 0L) {
+            val arrived = kotlin.math.abs(frameIso - autoIsoWaitIso) <= maxOf(1, autoIsoWaitIso / 50) &&
+                kotlin.math.abs(frameExposureNs - autoIsoWaitExposureNs) <= autoIsoWaitExposureNs / 50
+            if (!arrived && now < autoIsoWaitUntilNs) return
+            autoIsoWaitUntilNs = 0L
+        }
         lastAutoIsoNs = now
         val isoRange = isoRange ?: return
         val exposureRange = exposureRange ?: return
@@ -841,7 +869,15 @@ class CameraCapture(context: Context) {
             // Only while still in auto: the operator may have just locked.
             if (settings.exposureMode == ExposureMode.AUTO) settings = settings.copy(iso = iso, exposureNs = exposure)
         }
+        awaitFrame(iso, exposure, now)
         repeat()
+    }
+
+    /** Camera thread: the next samples wait for frames with this ISO and exposure (at most [AUTO_ISO_WAIT_NS]). */
+    private fun awaitFrame(iso: Int, exposureNs: Long, now: Long) {
+        autoIsoWaitIso = iso
+        autoIsoWaitExposureNs = exposureNs
+        autoIsoWaitUntilNs = now + AUTO_ISO_WAIT_NS
     }
 
     private fun samplePeaking(image: android.media.Image, now: Long) {
@@ -938,6 +974,8 @@ class CameraCapture(context: Context) {
     companion object {
         private const val TAG = "CameraCapture"
         private const val ZOOM_STEP_MS = 33L
+        /** Longest wait for a commanded exposure to show in the frames (a few frames of pipeline). */
+        private const val AUTO_ISO_WAIT_NS = 400_000_000L
 
         /** CONTROL_AE_ANTIBANDING_MODE_* for a mains frequency (0: off). */
         fun antibandingMode(hz: Int) = when (hz) {

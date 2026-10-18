@@ -4,87 +4,74 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import org.json.JSONArray
+import kotlinx.coroutines.delay
 import org.json.JSONObject
 import se.eyevinn.tallycam.AppModel
-import se.eyevinn.tallycam.control.isRemote
-import se.eyevinn.tallycam.control.shortName
-import se.eyevinn.tallycam.control.title
-import se.eyevinn.tallycam.core.GroupView
-import kotlin.math.exp
-import kotlin.math.ln
+import se.eyevinn.tallycam.control.Shading
+import kotlin.math.pow
 import kotlin.math.roundToInt
 
+private val Yellow = Color(0xFFFFD60A)
+
 /**
- * Who owns exposure, colour and focus: one chip per group (`EXP AUTO`,
- * `WB LOCKED`, `FOC REMOTE`), as on iOS. Tapping a chip opens the group's
- * controls, read-only while the group is remote; a long press on a
- * disconnected remote group offers to take it local (docs/SHADING.md, D2).
+ * Exposure, colour and focus: one chip per group (`EXP AUTO`, `WB LOCKED`,
+ * `FOC MANUAL`), as on iOS. Tapping a chip selects the group, whose control
+ * then shows at the right edge ([GroupControl]); tapping it again hides it.
+ * The camera operator and the hub both change these at any time; the chips
+ * show what the camera does now.
  */
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun GroupChips(model: AppModel, modifier: Modifier = Modifier, interactive: Boolean = true) {
-    var open by remember { mutableStateOf<String?>(null) }
-    var confirmTake by remember { mutableStateOf<GroupView?>(null) }
+fun GroupChips(model: AppModel, selected: String?, onSelect: (String?) -> Unit, modifier: Modifier = Modifier,
+               interactive: Boolean = true) {
+    val values = model.shading.values
+    val descriptors = model.shading.descriptors
     Row(modifier, horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-        for (view in model.shading.groups) {
-            GroupChip(view, if (!interactive) Modifier else Modifier.combinedClickable(
-                onClick = { open = view.group },
-                onLongClick = { if (view.indicator == "remote_disconnected") confirmTake = view },
-            ))
+        for ((group, modeKey) in Shading.MODE_CONTROLS) {
+            if (modeKey !in descriptors) continue
+            val mode = values.optString(modeKey, "auto")
+            GroupChip(Shading.shortName(group), mode, group == selected,
+                      if (!interactive) Modifier else Modifier.clickable { onSelect(if (group == selected) null else group) })
         }
         ExposureWarning(model.shading.exposureWarning)
     }
-    open?.let { GroupSheet(model, it) { open = null } }
-    confirmTake?.let { view -> TakeLocalDialog(model, view) { confirmTake = null } }
 }
 
 @Composable
-private fun GroupChip(view: GroupView, modifier: Modifier) {
-    val (state, color) = when (view.indicator) {
-        "locked" -> "LOCKED" to Color(0xFFFFD60A)
-        "remote" -> "REMOTE" to Color(0xFF64D2FF)
-        "remote_disconnected" -> "REMOTE · OFFLINE" to Color(0xFFFF9F0A)
-        else -> "AUTO" to Color.White
-    }
+private fun GroupChip(name: String, mode: String, selected: Boolean, modifier: Modifier) {
+    val color = if (mode == "auto") Color.White else Yellow
     Row(
-        modifier.background(Color.Black.copy(alpha = 0.55f), CircleShape)
-            .border(1.dp, if (view.indicator == "auto") Color.Transparent else color.copy(alpha = 0.8f), CircleShape)
+        modifier.background(Color.Black.copy(alpha = if (selected) 0.75f else 0.55f), CircleShape)
+            .border(1.dp, if (selected) Color.White else if (mode == "auto") Color.Transparent else color.copy(alpha = 0.8f),
+                    CircleShape)
             .padding(horizontal = 8.dp, vertical = 4.dp),
         horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        Text(view.shortName, color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
-        Text(state, color = color, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+        Text(name, color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+        Text(mode.uppercase(), color = color, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
     }
 }
 
@@ -100,162 +87,188 @@ private fun ExposureWarning(warning: String?) {
          modifier = Modifier.background(Color(0xFFFF9F0A), CircleShape).padding(horizontal = 8.dp, vertical = 4.dp))
 }
 
+/**
+ * The selected group's control, at the right edge: a round mode button (A:
+ * auto, tap to go manual or back to auto with the values kept; for colour a
+ * long press is white balance once) above a rocker and the value. The
+ * rocker ramps the value, faster the further it is pushed (the square of
+ * the deflection), about ten changes a second, clamped to the descriptor's
+ * range and snapped to its step:
+ * - exposure: `ev_bias` in auto, ISO (log scale) otherwise;
+ * - colour: `wb_temperature` (manual white balance);
+ * - focus: `focus_position`, up is far (manual focus).
+ */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun TakeLocalDialog(model: AppModel, view: GroupView, onDismiss: () -> Unit) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Take ${view.title.lowercase()} back from the hub?") },
-        text = { Text("The values stay. The hub cannot change them until it takes over again.") },
-        confirmButton = {
-            TextButton(onClick = { model.takeLocal(view.group); onDismiss() }) {
-                Text("Take local control", color = Color(0xFFFF453A))
+fun GroupControl(model: AppModel, group: String, modifier: Modifier = Modifier) {
+    val values = model.shading.values
+    val modeKey = Shading.MODE_CONTROLS.firstOrNull { it.first == group }?.second ?: return
+    val mode = values.optString(modeKey, "auto")
+    var deflection by remember(group) { mutableFloatStateOf(0f) }
+    LaunchedEffect(group) {
+        // The value the ramp is at (between steps and presets), and the one last sent.
+        var target: Double? = null
+        var sent: Double? = null
+        while (true) {
+            delay(RAMP_MS)
+            val d = deflection
+            if (d == 0f) {
+                target = null
+                sent = null
+                continue
             }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
-    )
+            val ramp = ramp(model, group) ?: continue
+            val descriptor = model.shading.descriptors[ramp.id] ?: continue
+            val min = descriptor.optDouble("min", Double.NaN)
+            val max = descriptor.optDouble("max", Double.NaN)
+            if (min.isNaN() || max.isNaN() || max <= min) continue
+            val start = target ?: model.shading.values.optDouble(ramp.id, Double.NaN).takeIf { !it.isNaN() } ?: continue
+            val rate = (if (d > 0) 1 else -1) * d * d * ramp.perSecond * RAMP_MS / 1000.0
+            val next = (if (ramp.log) start * 2.0.pow(rate) else start + rate).coerceIn(min, max)
+            target = next
+            val step = descriptor.optDouble("step", 0.0)
+            val snapped = (if (step > 0) (next / step).roundToInt() * step else next).coerceIn(min, max)
+            if (snapped != sent) {
+                sent = snapped
+                model.localSet(JSONObject().put(ramp.id, snapped), quiet = true)
+            }
+        }
+    }
+    Column(modifier, horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        val auto = mode == "auto"
+        Box(
+            Modifier.size(46.dp).background(if (auto) Color.White.copy(alpha = 0.9f) else Color.Black.copy(alpha = 0.35f), CircleShape)
+                .border(1.dp, if (auto) Color.Transparent else Yellow.copy(alpha = 0.8f), CircleShape)
+                .combinedClickable(
+                    onClick = { toggleAuto(model, group, modeKey, mode) },
+                    onLongClick = if (group == "white_balance") ({ model.localWhiteBalanceOnce() }) else null,
+                ),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text("A", color = if (auto) Color.Black else Color.White.copy(alpha = 0.85f), fontSize = 18.sp,
+                 fontWeight = FontWeight.Bold)
+        }
+        val (top, bottom) = if (group == "focus") "∞" to "N" else "+" to "−"
+        Rocker(top, bottom, height = 150.dp) { deflection = it }
+        Text(valueLabel(group, values), color = if (auto) Color.White else Yellow, fontSize = 12.sp,
+             fontFamily = FontFamily.Monospace, fontWeight = FontWeight.SemiBold,
+             modifier = Modifier.background(Color.Black.copy(alpha = 0.55f), CircleShape).padding(horizontal = 8.dp, vertical = 3.dp))
+    }
+}
+
+/** Which control a group's rocker ramps, and how fast at full deflection (per second; doublings when log). */
+private class Ramp(val id: String, val perSecond: Double, val log: Boolean = false)
+
+/** The control the rocker moves now, switching the group to manual first where the control needs it. */
+private fun ramp(model: AppModel, group: String): Ramp? {
+    val values = model.shading.values
+    val descriptors = model.shading.descriptors
+    fun manual(modeKey: String) {
+        if (values.optString(modeKey) != "manual") model.localSet(JSONObject().put(modeKey, "manual"), quiet = true)
+    }
+    return when (group) {
+        "exposure" -> when {
+            values.optString("exposure_mode") == "auto" -> if ("ev_bias" in descriptors) Ramp("ev_bias", 2.0) else null
+            "iso" in descriptors -> { manual("exposure_mode"); Ramp("iso", 2.0, log = true) }
+            else -> null
+        }
+        "white_balance" -> if ("wb_temperature" in descriptors) { manual("wb_mode"); Ramp("wb_temperature", 2000.0) } else null
+        "focus" -> if ("focus_position" in descriptors) { manual("focus_mode"); Ramp("focus_position", 0.5) } else null
+        else -> null
+    }
 }
 
 /**
- * The controls of one group: the mode (Auto, Locked, Manual) and the manual
- * values. Read-only while the group is remote; while the hub is away the
- * operator may take the group back (D2).
+ * The A button: auto to manual with the values kept, anything else back to
+ * auto. Colour goes to locked, which keeps what auto white balance found
+ * (Camera2's manual white balance is a preset); exposure to locked where
+ * the camera has no manual sensor.
+ */
+private fun toggleAuto(model: AppModel, group: String, modeKey: String, mode: String) {
+    val options = model.shading.descriptors[modeKey]?.optJSONArray("options")
+    val offered = (0 until (options?.length() ?: 0)).mapNotNull { options?.optJSONObject(it)?.optString("value") }
+    val next = when {
+        mode != "auto" -> "auto"
+        group == "white_balance" -> "locked"
+        "manual" in offered -> "manual"
+        else -> "locked"
+    }
+    model.localSet(JSONObject().put(modeKey, next))
+}
+
+private fun valueLabel(group: String, v: JSONObject): String = when (group) {
+    "exposure" -> if (v.optString("exposure_mode") == "auto" && v.has("ev_bias")) "%+.1f EV".format(v.optDouble("ev_bias"))
+                  else if (v.has("iso")) "ISO ${v.optInt("iso")}" else v.optString("exposure_mode").uppercase()
+    "white_balance" -> when (v.optString("wb_mode")) {
+        "manual" -> if (v.has("wb_temperature")) "${v.optInt("wb_temperature")} K" else "MANUAL"
+        "locked" -> "LOCKED"
+        else -> "AWB"
+    }
+    else -> if (v.optString("focus_mode") == "auto" || !v.has("focus_position")) "AF" else "%.2f".format(v.optDouble("focus_position"))
+}
+
+/**
+ * The camera's values in one line at the bottom, as a cinema camera shows
+ * them: format, ISO, shutter, exposure bias (when not 0), white balance and
+ * focus. A value whose group is locked or manual is yellow. On a narrow
+ * screen focus goes first, then white balance, instead of wrapping.
  */
 @Composable
-private fun GroupSheet(model: AppModel, group: String, onDismiss: () -> Unit) {
-    val view = model.shading.view(group) ?: return onDismiss()
-    // Re-read with every change the operator makes here.
-    var serial by remember { mutableStateOf(0) }
-    val descriptors = remember(serial, view) { model.cameraDescriptors().associateBy { it.optString("id") } }
-    val values = remember(serial, view) { model.cameraValues() }
-    var confirmTake by remember { mutableStateOf(false) }
-    val remote = view.isRemote
-    fun set(id: String, value: Any) {
-        model.localSet(group, JSONObject().put(id, value))
-        serial++
-    }
-    Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.4f)).combinedClickableNoRipple(onDismiss)) {
-        Column(
-            Modifier.align(Alignment.CenterStart).padding(start = 24.dp).width(360.dp)
-                .background(Color(0xFF1C1C1E), RoundedCornerShape(16.dp))
-                .combinedClickableNoRipple {}
-                .verticalScroll(rememberScrollState())
-                .padding(18.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(view.title, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold,
-                     modifier = Modifier.weight(1f))
-                TextButton(onClick = onDismiss) { Text("Done") }
-            }
-            if (remote) {
-                val holder = view.holderLabel ?: "the hub"
-                Text(if (view.indicator == "remote") "Controlled by $holder"
-                     else "Controlled by $holder, which is not connected",
-                     color = Color(0xFF64D2FF), fontSize = 14.sp)
-                if (view.indicator == "remote_disconnected") {
-                    TextButton(onClick = { confirmTake = true }) { Text("Take local control", color = Color(0xFFFF453A)) }
-                }
-            }
-            val modeKey = when (group) {
-                "exposure" -> "exposure_mode"
-                "white_balance" -> "wb_mode"
-                else -> "focus_mode"
-            }
-            ModePicker(descriptors[modeKey], values.optString(modeKey, "auto"), enabled = !remote) { mode ->
-                if (mode == "auto") model.localAuto(group) else model.localSet(group, JSONObject().put(modeKey, mode))
-                serial++
-            }
-            val slider = @Composable { id: String, label: String, format: (Double) -> String ->
-                descriptors[id]?.let { RangeControl(it, label, values, format, enabled = !remote) { v -> set(id, v) } }
-            }
-            when (group) {
-                "exposure" -> {
-                    slider("iso", "ISO") { "%.0f".format(it) }
-                    slider("ev_bias", "Compensation") { "%+.1f EV".format(it) }
-                    if (values.has("shutter")) Row {
-                        Text("Shutter", color = Color.White, fontSize = 14.sp, modifier = Modifier.weight(1f))
-                        Text("1/${values.optInt("shutter")}", color = Color.White.copy(alpha = 0.6f), fontSize = 14.sp)
-                    }
-                }
-                "white_balance" -> {
-                    slider("wb_temperature", "Temperature") { "%.0f K".format(it) }
-                    TextButton(enabled = !remote, onClick = {
-                        model.localSet(group, JSONObject())
-                        model.localWhiteBalanceOnce()
-                        serial++
-                    }) { Text("White balance once") }
-                }
-                else -> slider("focus_position", "Position") { "%.2f".format(it) }
-            }
+fun CameraReadout(model: AppModel, modifier: Modifier = Modifier) {
+    val v = model.shading.values
+    val exposure = if (v.optString("exposure_mode", "auto") == "auto") Color.White else Yellow
+    val items = mutableListOf<Pair<String, Color>>()
+    // Index in `items` of white balance and focus, the ones dropped first.
+    var wb = -1
+    var focus = -1
+    items += model.shading.format to Color.White
+    if (v.has("iso")) items += "ISO ${v.optInt("iso")}" to exposure
+    if (v.has("shutter")) items += "1/${v.optInt("shutter")}" to exposure
+    val bias = v.optDouble("ev_bias", 0.0)
+    if (v.optString("exposure_mode") == "auto" && kotlin.math.abs(bias) >= 0.05) items += "%+.1fEV".format(bias) to exposure
+    if (v.has("wb_mode")) {
+        wb = items.size
+        items += when (v.optString("wb_mode")) {
+            "manual" -> (if (v.has("wb_temperature")) "${v.optInt("wb_temperature")}K" else "WB") to Yellow
+            "locked" -> "AWB" to Yellow
+            else -> "AWB" to Color.White
         }
     }
-    if (confirmTake) TakeLocalDialog(model, view) { confirmTake = false }
-}
-
-@Composable
-private fun ModePicker(descriptor: JSONObject?, current: String, enabled: Boolean, onPick: (String) -> Unit) {
-    val options = descriptor?.optJSONArray("options") ?: JSONArray()
-    Row(
-        Modifier.fillMaxWidth().background(Color.White.copy(alpha = 0.08f), RoundedCornerShape(8.dp)).padding(2.dp)
-            .alpha(if (enabled) 1f else 0.5f),
-    ) {
-        for (i in 0 until options.length()) {
-            val option = options.optJSONObject(i) ?: continue
-            val value = option.optString("value")
-            val selected = value == current
-            Box(
-                Modifier.weight(1f)
-                    .background(if (selected) Color.White.copy(alpha = 0.22f) else Color.Transparent, RoundedCornerShape(6.dp))
-                    .combinedClickableNoRipple { if (enabled && !selected) onPick(value) }
-                    .padding(vertical = 7.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(option.optString("label"), color = Color.White, fontSize = 13.sp,
-                     fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal)
+    if (v.has("focus_mode")) {
+        focus = items.size
+        items += (if (v.optString("focus_mode") == "auto" || !v.has("focus_position")) "AF" to Color.White
+                  else "F %.2f".format(v.optDouble("focus_position")) to Yellow)
+    }
+    Box(modifier.background(Color.Black.copy(alpha = 0.5f), CircleShape).padding(horizontal = 12.dp, vertical = 4.dp)) {
+        DroppingRow(listOf(focus, wb).filter { it >= 0 }) {
+            items.forEachIndexed { i, (text, color) ->
+                Text((if (i == 0) "" else "  ") + text, color = color, fontSize = 12.sp, fontFamily = FontFamily.Monospace,
+                     fontWeight = FontWeight.SemiBold, maxLines = 1, softWrap = false)
             }
         }
     }
 }
 
-/** A slider for a range control, writable only where its descriptor's `enabled_when` holds. */
+/** A row on one line: when it does not fit, the children at `drop` (in that order) are left out. */
 @Composable
-private fun RangeControl(descriptor: JSONObject, label: String, values: JSONObject, format: (Double) -> String,
-                         enabled: Boolean, onSet: (Double) -> Unit) {
-    val min = descriptor.optDouble("min", Double.NaN)
-    val max = descriptor.optDouble("max", Double.NaN)
-    val value = values.optDouble(descriptor.optString("id"), Double.NaN)
-    if (min.isNaN() || max.isNaN() || value.isNaN() || max <= min) return
-    val writable = enabled && !descriptor.optBoolean("readonly") && (descriptor.optJSONObject("enabled_when")?.let { cond ->
-        cond.keys().asSequence().all { key ->
-            when (val wanted = cond.get(key)) {
-                is JSONArray -> (0 until wanted.length()).any { wanted.get(it) == values.opt(key) }
-                else -> wanted == values.opt(key)
+private fun DroppingRow(drop: List<Int>, content: @Composable () -> Unit) {
+    Layout(content) { measurables, constraints ->
+        val placeables = measurables.map { it.measure(Constraints()) }
+        val shown = placeables.indices.toMutableSet()
+        for (i in drop) {
+            if (shown.sumOf { placeables[it].width } <= constraints.maxWidth) break
+            shown -= i
+        }
+        val width = shown.sumOf { placeables[it].width }.coerceAtMost(constraints.maxWidth)
+        layout(width, placeables.maxOfOrNull { it.height } ?: 0) {
+            var x = 0
+            for (i in placeables.indices) if (i in shown) {
+                placeables[i].placeRelative(x, 0)
+                x += placeables[i].width
             }
         }
-    } ?: true)
-    val log = descriptor.optString("scale") == "log" && min > 0
-    val step = descriptor.optDouble("step", 0.0)
-    var position by remember(value) { mutableStateOf((if (log) ln(value) else value).toFloat()) }
-    Column(Modifier.alpha(if (writable) 1f else 0.5f)) {
-        Row {
-            Text(label, color = Color.White, fontSize = 14.sp, modifier = Modifier.weight(1f))
-            val shown = if (log) exp(position.toDouble()) else position.toDouble()
-            Text(format(shown), color = Color.White.copy(alpha = 0.6f), fontSize = 14.sp)
-        }
-        Slider(
-            value = position,
-            onValueChange = { position = it },
-            onValueChangeFinished = {
-                val raw = if (log) exp(position.toDouble()) else position.toDouble()
-                onSet(if (step > 0) (raw / step).roundToInt() * step else raw)
-            },
-            valueRange = (if (log) ln(min) else min).toFloat()..(if (log) ln(max) else max).toFloat(),
-            enabled = writable,
-        )
     }
 }
 
-/** A click with no ripple: the sheet's backdrop and its segments. */
-@Composable
-private fun Modifier.combinedClickableNoRipple(onClick: () -> Unit): Modifier =
-    clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onClick)
+/** How often a held rocker changes its value (about 10 Hz). */
+private const val RAMP_MS = 100L

@@ -1,79 +1,52 @@
 package se.eyevinn.tallycam.control
 
-import android.content.Context
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import org.json.JSONObject
-import se.eyevinn.tallycam.core.GroupView
 import se.eyevinn.tallycam.core.ImageStatsResult
-import se.eyevinn.tallycam.core.OwnershipMachine
-import se.eyevinn.tallycam.core.shadingControlGroup
 
 /**
- * Who owns the camera's exposure, colour and focus (docs/SHADING.md): the
- * core's ownership state machine, persisted across restarts (D3), plus what
- * the operator's screen shows about it and the latest image statistics, as
- * on iOS (ios/TallyCam/Control/Shading.swift). AppModel drives it on the
- * main thread; the UI reads its Compose state.
+ * What the operator's screen shows about exposure, colour and focus
+ * (docs/SHADING.md): the camera's control values and descriptors, and the
+ * latest image statistics' warning, as on iOS
+ * (ios/TallyCam/Control/Shading.swift). The camera operator and the hub
+ * both change these at any time; the last change wins. AppModel updates it
+ * on the main thread; the UI reads its Compose state.
  */
-class Shading(context: Context) {
-    private val prefs = context.getSharedPreferences("shading", Context.MODE_PRIVATE)
-
-    val machine = OwnershipMachine(GROUPS, prefs.getString(STATE_KEY, null))
-
-    /** One entry per group the camera has, in a fixed order. */
-    var groups by mutableStateOf(machine.view())
-        private set
-
+class Shading {
     /** `too_dark` or `clipping`, from the image statistics. */
     var exposureWarning by mutableStateOf<String?>(null)
         private set
 
-    /** Called after an owner changes, with the `ownership` message. */
-    var onChange: ((String) -> Unit)? = null
+    /** The camera's control values, refreshed with every `state` (also from the hub's changes). */
+    var values by mutableStateOf(JSONObject())
+        private set
 
-    /** The group controls' values while a group is not auto, saved so a relaunch comes back with them (D3). */
-    private var savedValues: String = prefs.getString(VALUES_KEY, null) ?: "{}"
+    /** The camera's control descriptors, by id. */
+    var descriptors by mutableStateOf<Map<String, JSONObject>>(emptyMap())
+        private set
 
-    fun view(group: String): GroupView? = groups.firstOrNull { it.group == group }
+    /** Resolution and frame rate for the operator's readout: "1080p30", "4K30". */
+    var format by mutableStateOf("")
+        private set
 
-    /** The groups this camera has (focus only with a focus control). */
-    fun useGroups(names: List<String>) {
-        machine.setGroups(names)
-        changed()
+    private var valuesText = ""
+
+    fun updateFormat(height: Int, frameRate: Int) {
+        val text = (if (height >= 2160) "4K" else "${height}p") + frameRate
+        if (text != format) format = text
     }
 
-    /** An owner changed (or the link did): persist, refresh the view, tell the server. */
-    fun changed(notify: Boolean = true) {
-        prefs.edit().putString(STATE_KEY, machine.saveJson()).apply()
-        val view = machine.view()
-        if (view != groups) groups = view
-        if (notify) onChange?.invoke(machine.messageJson())
+    fun update(values: JSONObject, text: String = values.toString()) {
+        if (text == valuesText) return
+        valuesText = text
+        this.values = values
     }
 
-    /** Keeps the values of the groups that are not auto. */
-    fun note(values: JSONObject, shutterFree: Boolean) {
-        val owned = groups.filter { it.indicator != "auto" }.map { it.group }.toSet()
-        val kept = JSONObject()
-        for (key in values.keys()) {
-            if (shadingControlGroup(key, shutterFree)?.let { it in owned } == true) kept.put(key, values.get(key))
-        }
-        val text = kept.toString()
-        if (text == savedValues) return
-        savedValues = text
-        prefs.edit().putString(VALUES_KEY, text).apply()
-    }
-
-    /** The saved values of the groups that are not auto. */
-    fun restoredValues(): JSONObject {
-        val owned = groups.filter { it.indicator != "auto" }.map { it.group }.toSet()
-        val saved = runCatching { JSONObject(savedValues) }.getOrDefault(JSONObject())
-        val out = JSONObject()
-        for (key in saved.keys()) {
-            if (shadingControlGroup(key, true)?.let { it in owned } == true) out.put(key, saved.get(key))
-        }
-        return out
+    fun update(descriptors: List<JSONObject>) {
+        val map = descriptors.associateBy { it.optString("id") }
+        if (map.mapValues { it.value.toString() } != this.descriptors.mapValues { it.value.toString() }) this.descriptors = map
     }
 
     fun update(stats: ImageStatsResult) {
@@ -81,41 +54,18 @@ class Shading(context: Context) {
     }
 
     companion object {
-        val GROUPS = listOf("exposure", "white_balance", "focus")
-        private const val STATE_KEY = "ownership"
-        private const val VALUES_KEY = "values"
+        /** The mode control of each group the operator's chips show. */
+        val MODE_CONTROLS = listOf("exposure" to "exposure_mode", "white_balance" to "wb_mode", "focus" to "focus_mode")
 
-        /** The values that put groups into auto (rule 4: never the last values). */
-        fun autoValues(groups: List<String>): JSONObject {
-            val v = JSONObject()
-            for (group in groups) when (group) {
-                "exposure" -> v.put("exposure_mode", "auto").put("ev_bias", 0)
-                "white_balance" -> v.put("wb_mode", "auto")
-                "focus" -> v.put("focus_mode", "auto")
-            }
-            return v
+        /** Short name on the phone's chips. */
+        fun shortName(group: String): String = when (group) {
+            "exposure" -> "EXP"
+            "white_balance" -> "WB"
+            "focus" -> "FOC"
+            else -> group.uppercase()
         }
     }
 }
 
-/** Short name on the phone's chips. */
-val GroupView.shortName: String
-    get() = when (group) {
-        "exposure" -> "EXP"
-        "white_balance" -> "WB"
-        "focus" -> "FOC"
-        else -> group.uppercase()
-    }
-
-val GroupView.title: String
-    get() = when (group) {
-        "exposure" -> "Exposure"
-        "white_balance" -> "Colour"
-        "focus" -> "Focus"
-        else -> group
-    }
-
-val GroupView.isRemote: Boolean get() = indicator == "remote" || indicator == "remote_disconnected"
-
-/** "exposure: under remote control" -> "Exposure: under remote control". */
+/** "exposure_mode: requires manual" -> "Exposure_mode: requires manual". */
 fun String.capitalizedFirst(): String = replaceFirstChar { it.uppercase() }

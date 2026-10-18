@@ -2,10 +2,10 @@
 //! after a restart. The embedding server owns persistence: the standalone hub
 //! uses [`JsonFileStore`], Strom plugs in its own storage.
 //!
-//! Only identity is stored: the hello's device info and the device's public
-//! key (once it proved one). Tally, state and status are live data and start
-//! empty: a tally kept across a restart would light a camera that is not on
-//! air.
+//! Stored: each device's identity (the hello's device info and its public
+//! key, once it proved one) and the production settings. Tally, state and
+//! status are live data and start empty: a tally kept across a restart would
+//! light a camera that is not on air.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -14,7 +14,7 @@ use std::sync::Mutex;
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
-use crate::protocol::DeviceInfo;
+use crate::protocol::{DeviceInfo, Production};
 
 /// One known device.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -28,9 +28,10 @@ pub struct StoredDevice {
     pub public_key: Option<String>,
 }
 
-/// Persistence for known devices. The hub calls `save` and `remove` while it
-/// holds its own lock (so a forget and a reconnect cannot interleave), from
-/// the task that handled the message. They must be quick (a small write, or
+/// Persistence for known devices and the production. The hub calls `save`,
+/// `remove` and `save_production` while it holds its own lock (so a forget
+/// and a reconnect cannot interleave), from the task that handled the
+/// message. They must be quick (a small write, or
 /// a send to a writer task), since every other hub operation waits, and must
 /// not call back into the hub, which would deadlock.
 pub trait DeviceStore: Send + Sync {
@@ -43,6 +44,13 @@ pub trait DeviceStore: Send + Sync {
     /// that persists should implement it, or a forgotten device is listed
     /// again after a restart.
     fn remove(&self, _id: &str) {}
+    /// The production settings kept by `save_production`, if any. The
+    /// default keeps none.
+    fn load_production(&self) -> Option<Production> {
+        None
+    }
+    /// The production changed ([`crate::Hub::set_production`]).
+    fn save_production(&self, _production: &Production) {}
 }
 
 /// Keeps nothing: every restart starts with an empty list.
@@ -56,17 +64,26 @@ impl DeviceStore for NoStore {
     fn save(&self, _device: &StoredDevice) {}
 }
 
-/// All devices in one JSON file, rewritten on every change (a hub has tens of
-/// devices, not thousands).
+/// All devices and the production in one JSON file, rewritten on every
+/// change (a hub has tens of devices, not thousands).
 pub struct JsonFileStore {
     path: PathBuf,
+    state: Mutex<State>,
+}
+
+#[derive(Default)]
+struct State {
     /// Keyed by device id; insertion order is kept in `order`.
-    devices: Mutex<(BTreeMap<String, StoredDevice>, Vec<String>)>,
+    devices: BTreeMap<String, StoredDevice>,
+    order: Vec<String>,
+    production: Option<Production>,
 }
 
 #[derive(Serialize, Deserialize)]
 struct FileContents {
     devices: Vec<StoredDevice>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    production: Option<Production>,
 }
 
 impl JsonFileStore {
@@ -74,36 +91,47 @@ impl JsonFileStore {
     /// logged and replaced on the first save.
     pub fn open(path: impl Into<PathBuf>) -> Self {
         let path = path.into();
-        let list = match std::fs::read(&path) {
+        let contents = match std::fs::read(&path) {
             Ok(bytes) => match serde_json::from_slice::<FileContents>(&bytes) {
-                Ok(c) => c.devices,
+                Ok(c) => Some(c),
                 Err(e) => {
                     warn!("Ignoring device store {}: {e}", path.display());
-                    Vec::new()
+                    None
                 }
             },
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
             Err(e) => {
                 warn!("Cannot read device store {}: {e}", path.display());
-                Vec::new()
+                None
             }
         };
-        let mut map = BTreeMap::new();
-        let mut order = Vec::new();
-        for d in list {
-            if map.insert(d.info.id.clone(), d.clone()).is_none() {
-                order.push(d.info.id);
+        let mut state = State::default();
+        if let Some(c) = contents {
+            state.production = c.production;
+            for d in c.devices {
+                if state.devices.insert(d.info.id.clone(), d.clone()).is_none() {
+                    state.order.push(d.info.id);
+                }
             }
         }
         Self {
             path,
-            devices: Mutex::new((map, order)),
+            state: Mutex::new(state),
         }
     }
 
-    fn write(&self, map: &BTreeMap<String, StoredDevice>, order: &[String]) {
+    fn lock(&self) -> std::sync::MutexGuard<'_, State> {
+        self.state.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn write(&self, state: &State) {
         let contents = FileContents {
-            devices: order.iter().filter_map(|id| map.get(id).cloned()).collect(),
+            devices: state
+                .order
+                .iter()
+                .filter_map(|id| state.devices.get(id).cloned())
+                .collect(),
+            production: state.production.clone(),
         };
         let Ok(json) = serde_json::to_vec_pretty(&contents) else {
             return;
@@ -119,32 +147,46 @@ impl JsonFileStore {
 
 impl DeviceStore for JsonFileStore {
     fn load(&self) -> Vec<StoredDevice> {
-        let guard = self.devices.lock().unwrap_or_else(|e| e.into_inner());
-        let (map, order) = &*guard;
-        order.iter().filter_map(|id| map.get(id).cloned()).collect()
+        let state = self.lock();
+        state
+            .order
+            .iter()
+            .filter_map(|id| state.devices.get(id).cloned())
+            .collect()
     }
 
     fn save(&self, device: &StoredDevice) {
-        let mut guard = self.devices.lock().unwrap_or_else(|e| e.into_inner());
-        let (map, order) = &mut *guard;
+        let mut state = self.lock();
         let id = &device.info.id;
-        if map.get(id) == Some(device) {
+        if state.devices.get(id) == Some(device) {
             return;
         }
-        if map.insert(id.clone(), device.clone()).is_none() {
-            order.push(id.clone());
+        if state.devices.insert(id.clone(), device.clone()).is_none() {
+            state.order.push(id.clone());
         }
-        self.write(map, order);
+        self.write(&state);
     }
 
     fn remove(&self, id: &str) {
-        let mut guard = self.devices.lock().unwrap_or_else(|e| e.into_inner());
-        let (map, order) = &mut *guard;
-        if map.remove(id).is_none() {
+        let mut state = self.lock();
+        if state.devices.remove(id).is_none() {
             return;
         }
-        order.retain(|o| o != id);
-        self.write(map, order);
+        state.order.retain(|o| o != id);
+        self.write(&state);
+    }
+
+    fn load_production(&self) -> Option<Production> {
+        self.lock().production.clone()
+    }
+
+    fn save_production(&self, production: &Production) {
+        let mut state = self.lock();
+        if state.production.as_ref() == Some(production) {
+            return;
+        }
+        state.production = Some(production.clone());
+        self.write(&state);
     }
 }
 
@@ -207,6 +249,17 @@ mod tests {
         assert_eq!(ids, ["a", "c"]);
         assert_eq!(loaded[0].public_key, None);
         assert_eq!(loaded[1].public_key.as_deref(), Some("BAE="));
+        assert_eq!(again.load_production(), None);
+
+        let production = Production {
+            mains_hz: 60,
+            shutter: crate::protocol::ShutterPolicy::Fixed(120),
+            extra: Default::default(),
+        };
+        again.save_production(&production);
+        let last = JsonFileStore::open(&path);
+        assert_eq!(last.load_production(), Some(production));
+        assert_eq!(last.load().len(), 2, "devices kept");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

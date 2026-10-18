@@ -1,26 +1,18 @@
-//! Shading (docs/SHADING.md): who may change a camera's exposure, colour and
-//! focus, the production settings, and the image statistics preference.
-//!
-//! The phone is the source of truth for ownership; the hub only checks a
-//! controller's `set` and `command` against what the phone last reported,
-//! so two shaders cannot fight without one of them taking over explicitly.
-//! The phone checks again on its side. Protocol 1 phones know none of this
-//! and get requests as before.
-
-use tallycam_core::ownership::{command_group, control_group, Group};
+//! Shading (docs/SHADING.md): the production settings and the image
+//! statistics preference. Exposure, colour and focus are plain controls:
+//! the shader and the camera operator both change them, and the last write
+//! wins. Protocol 1 phones know none of this and get requests as before.
 
 use super::*;
-use crate::protocol::{Holder, Owner, Production, ShutterPolicy};
+use crate::protocol::{Production, ShutterPolicy};
 
-/// The first protocol version with ownership, production and image stats.
+/// The first protocol version with production and image stats.
 pub const SHADING_PROTOCOL: u32 = 2;
 /// `image_stats` per second the hub asks each phone for while a controller
 /// is connected, unless a controller asks for another rate.
 pub const DEFAULT_STATS_FPS: f64 = 1.0;
 /// The rates a controller may ask for (the phone sends at most 4).
 const STATS_FPS_RANGE: (f64, f64) = (0.2, 4.0);
-/// Longest holder id and label, in bytes (as the phone accepts them).
-const HOLDER_MAX_BYTES: usize = 64;
 
 /// The production a hub starts with: 50 Hz mains, the shutter at the mains
 /// period.
@@ -69,70 +61,17 @@ impl DeviceEntry {
         }
     }
 
-    /// Send the stats preference, to a phone that understands it.
-    pub(super) fn send_stats(&self, controllers: usize) {
-        if self.shading() {
-            self.send(self.stats_command(controllers));
-        }
-    }
-
-    /// May `holder` change `group` on this phone? Only the remote holder of
-    /// the group may, as the phone last reported it.
-    fn check_group(&self, group: Group, holder: Option<&Holder>) -> Result<(), String> {
-        let name = group.as_str();
-        let owned = self.ownership.get(name);
-        match owned {
-            Some(g) if g.owner == Owner::Remote => match (&g.holder, holder) {
-                (Some(owner), Some(h)) if owner.id == h.id => Ok(()),
-                (Some(owner), _) => {
-                    let label = if owner.label.is_empty() {
-                        &owner.id
-                    } else {
-                        &owner.label
-                    };
-                    Err(format!("{name} is held by {label}: take over first"))
-                }
-                (None, _) => Err(format!(
-                    "{name} is held by another controller: take over first"
-                )),
-            },
-            _ => Err(format!(
-                "{name} is not under remote control: take over first"
-            )),
-        }
-    }
-
-    /// A controller's `set` or `command` on a protocol 2 phone: every key or
-    /// command in a control group must be held by the request's holder.
-    /// Keys outside the groups pass. Protocol 1 phones are not checked.
-    pub(super) fn check_holder(
-        &self,
-        msg: &ServerToDevice,
-        holder: Option<&Holder>,
-        shutter: ShutterPolicy,
-    ) -> Result<(), String> {
+    /// Send the stats preference, to a phone that understands it. Stats
+    /// switched off are dropped, so nobody reads stale numbers.
+    pub(super) fn send_stats(&mut self, controllers: usize) {
         if !self.shading() {
-            return Ok(());
+            return;
         }
-        let mut groups: Vec<Group> = match msg {
-            ServerToDevice::Set { values, .. } => values
-                .keys()
-                .filter_map(|k| control_group(k, shutter))
-                .collect(),
-            ServerToDevice::Command { name, .. } => command_group(name).into_iter().collect(),
-            _ => return Ok(()),
-        };
-        groups.sort();
-        groups.dedup();
-        let errors: Vec<String> = groups
-            .into_iter()
-            .filter_map(|g| self.check_group(g, holder).err())
-            .collect();
-        if errors.is_empty() {
-            Ok(())
-        } else {
-            Err(errors.join("; "))
+        let cmd = self.stats_command(controllers);
+        if matches!(cmd, ServerToDevice::Stats { enabled: false, .. }) {
+            self.image_stats = None;
         }
+        self.send(cmd);
     }
 
     /// Is the camera streaming (or about to)?
@@ -144,20 +83,6 @@ impl DeviceEntry {
                 .and_then(|s| s.stream.as_ref())
                 .is_some_and(|s| matches!(s.state.as_str(), "live" | "connecting"))
     }
-}
-
-/// A holder from a controller's `own`: non-empty id, both within the
-/// phone's limits.
-pub(super) fn check_holder_shape(holder: &Holder) -> Result<(), String> {
-    if holder.id.is_empty() {
-        return Err("'holder.id' must not be empty".into());
-    }
-    if holder.id.len() > HOLDER_MAX_BYTES || holder.label.len() > HOLDER_MAX_BYTES {
-        return Err(format!(
-            "'holder' id and label are at most {HOLDER_MAX_BYTES} bytes"
-        ));
-    }
-    Ok(())
 }
 
 /// A controller's stats rate, clamped to what the phone sends.
@@ -176,9 +101,10 @@ impl Hub {
     }
 
     /// New production settings: sent to every connected protocol 2 camera
-    /// and to every controller (`production`). Refused while any camera is
-    /// live or connecting, as a phone cannot change its shutter mid-stream.
-    /// `mains_hz` is 50, 60 or 0 (no mains-lit light).
+    /// and to every controller (`production`), and kept in the store.
+    /// Accepted any time: a camera that is live keeps its current settings
+    /// and applies these when its stream stops. `mains_hz` is 50, 60 or 0
+    /// (no mains-lit light).
     pub fn set_production(&self, production: Production) -> Result<(), String> {
         if !matches!(production.mains_hz, 0 | 50 | 60) {
             return Err(format!(
@@ -193,18 +119,19 @@ impl Hub {
         if inner.production == production {
             return Ok(());
         }
-        if let Some(live) = inner.devices.values().find(|e| e.is_live()) {
-            debug!(
-                "Production change refused: {} is live",
-                live.info.name.as_str()
-            );
-            return Err("not while cameras are live".into());
-        }
+        let live = inner.devices.values().filter(|e| e.is_live()).count();
         info!(
-            "Production: mains {} Hz, shutter {:?}",
-            production.mains_hz, production.shutter
+            "Production: mains {} Hz, shutter {:?}{}",
+            production.mains_hz,
+            production.shutter,
+            if live > 0 {
+                format!(" ({live} live, applied when they stop)")
+            } else {
+                String::new()
+            }
         );
         inner.production = production.clone();
+        self.store.save_production(&production);
         for entry in inner.devices.values().filter(|e| e.shading()) {
             entry.send(ServerToDevice::Production(production.clone()));
         }

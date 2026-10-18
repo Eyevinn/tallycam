@@ -41,6 +41,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.input.pointer.pointerInput
 import se.eyevinn.tallycam.AppModel
+import se.eyevinn.tallycam.control.Shading
 import se.eyevinn.tallycam.media.LiveStream
 
 /**
@@ -70,6 +71,8 @@ fun TallyCamScreen(model: AppModel?, permitted: Boolean, onScan: () -> Unit) {
             val context = androidx.compose.ui.platform.LocalContext.current
             val aids = remember { Aids(context) }
             var screenLocked by remember { mutableStateOf(false) }
+            // The group whose control shows at the right edge, or none.
+            var group by remember { mutableStateOf<String?>(null) }
             var toast by remember { mutableStateOf<String?>(null) }
             androidx.compose.runtime.LaunchedEffect(toast) {
                 if (toast != null) {
@@ -82,8 +85,8 @@ fun TallyCamScreen(model: AppModel?, permitted: Boolean, onScan: () -> Unit) {
             Column(Modifier.align(Alignment.TopCenter).padding(top = 12.dp, start = 16.dp, end = 16.dp),
                    verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 StatusStrip(model, onSettings = { if (!screenLocked) showSettings = true }, modifier = Modifier)
-                // Who owns exposure, colour and focus, as on iOS; shown, not tappable, while locked.
-                GroupChips(model, Modifier.padding(start = 4.dp), interactive = !screenLocked)
+                // Exposure, colour and focus, as on iOS; shown, not tappable, while locked.
+                GroupChips(model, group, { group = it }, Modifier.padding(start = 4.dp), interactive = !screenLocked)
             }
             if (!screenLocked) {
                 // Lens buttons above the zoom rocker at the leading edge, vertically centred.
@@ -91,6 +94,12 @@ fun TallyCamScreen(model: AppModel?, permitted: Boolean, onScan: () -> Unit) {
                        verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     LensButtons(model)
                     if (model.camera.zoomRange != null) ZoomRocker { rate -> model.rampZoom(rate) }
+                }
+                // The selected group's control, at the trailing edge left of the live button.
+                group?.let { g ->
+                    if (Shading.MODE_CONTROLS.any { (name, mode) -> name == g && mode in model.shading.descriptors }) {
+                        GroupControl(model, g, Modifier.align(Alignment.CenterEnd).padding(end = 124.dp))
+                    }
                 }
                 // Aids and screen lock, bottom leading.
                 Row(Modifier.align(Alignment.BottomStart).padding(start = 24.dp, bottom = 18.dp),
@@ -100,6 +109,12 @@ fun TallyCamScreen(model: AppModel?, permitted: Boolean, onScan: () -> Unit) {
                 }
             }
             AudioMeter(Modifier.align(Alignment.BottomEnd).padding(end = 24.dp, bottom = 18.dp))
+            // The camera's values, bottom centre, clear of the buttons at the
+            // corners (above the slide to unlock while locked).
+            if (aids.readout) {
+                CameraReadout(model, Modifier.align(Alignment.BottomCenter)
+                    .padding(start = 140.dp, end = 140.dp, bottom = if (screenLocked) 76.dp else 18.dp))
+            }
             LiveButton(model, Modifier.align(Alignment.CenterEnd).padding(end = 28.dp)) {
                 val starting = model.streamState == LiveStream.State.IDLE
                 model.toggleLive()

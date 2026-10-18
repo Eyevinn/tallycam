@@ -8,8 +8,8 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use tallycam_hub::hub::{default_production, DEFAULT_PREVIEW_FPS};
-use tallycam_hub::protocol::{Production, ShutterPolicy, CONTROL_PATH, DEVICE_PATH};
+use tallycam_hub::hub::DEFAULT_PREVIEW_FPS;
+use tallycam_hub::protocol::{ShutterPolicy, CONTROL_PATH, DEVICE_PATH};
 use tallycam_hub::provision::{FixedSrt, Provisioning};
 use tallycam_hub::{Hub, JsonFileStore};
 use tracing::info;
@@ -25,7 +25,9 @@ struct Args {
     invites: bool,
     operator_token: Option<String>,
     preview_fps: Option<f64>,
-    production: Production,
+    /// Given explicitly: replace the stored production's values.
+    mains_hz: Option<u32>,
+    shutter: Option<ShutterPolicy>,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -71,8 +73,9 @@ fn parse_args() -> Result<Args, String> {
                      --srt-url     SRT URL handed to phones ($LCP_HUB_SRT_URL), default\n\
                      \x20             srt://<lan ip>:9000?streamid={{device}}&latency=100. The app\n\
                      \x20             replaces {{device}} with its own stream id.\n\
-                     --state-file  JSON file that keeps the known devices across restarts\n\
-                     \x20             ($LCP_HUB_STATE_FILE). Default: none, the list starts empty.\n\
+                     --state-file  JSON file that keeps the known devices and the production\n\
+                     \x20             settings across restarts ($LCP_HUB_STATE_FILE). Default:\n\
+                     \x20             none, the list starts empty.\n\
                      --invites     a new phone needs a one-time invite (POST /api/invite, or\n\
                      \x20             \"Add a camera\" on the page) and a device key; known phones\n\
                      \x20             prove their key ($LCP_HUB_INVITES=1). Default: open, any\n\
@@ -84,10 +87,12 @@ fn parse_args() -> Result<Args, String> {
                      \x20             open, 0.1 to 10 ($LCP_HUB_PREVIEW_FPS, default {DEFAULT_PREVIEW_FPS}).\n\
                      --mains-hz    mains frequency of the production's lights: 50, 60, or 0 for\n\
                      \x20             none ($LCP_HUB_MAINS_HZ, default 50). Sent to phones with\n\
-                     \x20             protocol 2; the operator page can change it while no camera is live.\n\
+                     \x20             protocol 2; the operator page can change it (live cameras apply\n\
+                     \x20             it when their stream stops).\n\
                      --shutter     production shutter: mains (one mains period, default), free\n\
-                     \x20             (no mains-lit light: the shutter joins exposure), or N for 1/N s\n\
-                     \x20             ($LCP_HUB_SHUTTER).\n\
+                     \x20             (no mains-lit light: the shutter is set in manual exposure),\n\
+                     \x20             or N for 1/N s ($LCP_HUB_SHUTTER). Given, these two replace\n\
+                     \x20             the production kept in --state-file.\n\
                      Log level: RUST_LOG (default info)."
                 );
                 std::process::exit(0);
@@ -116,16 +121,14 @@ fn parse_args() -> Result<Args, String> {
         },
         None => None,
     };
-    let mut production = default_production();
-    if let Some(text) = mains_hz {
-        production.mains_hz = match text.parse() {
-            Ok(hz @ (0 | 50 | 60)) => hz,
+    let mains_hz = match mains_hz {
+        Some(text) => match text.parse() {
+            Ok(hz @ (0 | 50 | 60)) => Some(hz),
             _ => return Err(format!("--mains-hz must be 50, 60 or 0, not '{text}'")),
-        };
-    }
-    if let Some(text) = shutter {
-        production.shutter = parse_shutter(&text)?;
-    }
+        },
+        None => None,
+    };
+    let shutter = shutter.as_deref().map(parse_shutter).transpose()?;
     let listen = listen.unwrap_or_else(|| DEFAULT_LISTEN.to_string());
     let listen = listen
         .parse()
@@ -138,7 +141,8 @@ fn parse_args() -> Result<Args, String> {
         invites,
         operator_token,
         preview_fps,
-        production,
+        mains_hz,
+        shutter,
     })
 }
 
@@ -199,9 +203,16 @@ async fn main() {
         "Previews at {} per second while a controller is connected",
         args.preview_fps.unwrap_or(DEFAULT_PREVIEW_FPS)
     );
-    let production = args.production;
+    // The stored production (or the default), with what the flags say.
+    let mut production = hub.production();
+    if let Some(hz) = args.mains_hz {
+        production.mains_hz = hz;
+    }
+    if let Some(shutter) = args.shutter {
+        production.shutter = shutter;
+    }
     info!(
-        "Production: mains {} Hz, shutter {:?}",
+        "Starting with production: mains {} Hz, shutter {:?}",
         production.mains_hz, production.shutter
     );
     if let Err(e) = hub.set_production(production) {

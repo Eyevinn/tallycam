@@ -1,6 +1,7 @@
 package se.eyevinn.tallycam.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -138,6 +139,19 @@ fun SettingsScreen(model: AppModel, onScan: () -> Unit, onDone: () -> Unit) {
                         Labeled("Retransmitted / dropped", "${s.retransmits} / ${s.dropped}")
                     }
                 }
+                // Mains: the phone's own production (docs/SHADING.md, "Shutter").
+                val mainsOptions = model.mainsOptions
+                if (mainsOptions.size > 1) {
+                    val editable = !model.hubProduction && !live
+                    Section("Mains", when {
+                        model.hubProduction -> "Set by the control hub."
+                        live -> "Stop the stream to change."
+                        else -> "The shutter follows the mains frequency so mains-powered light does not flicker. Off outdoors, where the shutter is free."
+                    }, width) {
+                        Segmented(mainsOptions.map { it to if (it == 0) "Off" else "$it Hz" },
+                                  if (model.hubProduction) model.shading.values.optInt("mains_hz", model.ownMainsHz) else model.ownMainsHz, editable) { model.setOwnMains(it) }
+                    }
+                }
                 // Orientation: Android streams landscape only for now (docs/APPS.md).
                 Section("Orientation", "Android streams in landscape for now.", width) {
                     Labeled("Picture", model.pictureSummary)
@@ -208,6 +222,24 @@ private fun Section(header: String, footer: String?, modifier: Modifier, content
         Column(Modifier.fillMaxWidth().background(Card, RoundedCornerShape(10.dp)).padding(horizontal = 16.dp, vertical = 10.dp),
                verticalArrangement = Arrangement.spacedBy(8.dp)) { content() }
         footer?.let { Text(it, color = Secondary, fontSize = 13.sp, modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 6.dp)) }
+    }
+}
+
+/** One choice of a few, as iOS's segmented picker. */
+@Composable
+private fun <T> Segmented(options: List<Pair<T, String>>, selected: T, enabled: Boolean, onPick: (T) -> Unit) {
+    Row(Modifier.fillMaxWidth().background(Color(0xFF2C2C2E), RoundedCornerShape(8.dp)).padding(2.dp)) {
+        for ((value, label) in options) {
+            val on = value == selected
+            Box(
+                Modifier.weight(1f).background(if (on) Color(0xFF636366) else Color.Transparent, RoundedCornerShape(6.dp))
+                    .clickable(enabled = enabled && !on) { onPick(value) }.padding(vertical = 6.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(label, color = if (enabled) Color.White else Secondary, fontSize = 14.sp,
+                     fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal)
+            }
+        }
     }
 }
 

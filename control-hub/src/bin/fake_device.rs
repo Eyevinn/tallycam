@@ -14,11 +14,10 @@
 //! after a disconnect.
 //!
 //! With protocol 2 (the default for a keyed device) it also acts like a
-//! phone with shading (docs/SHADING.md): it runs the core's ownership state
-//! machine for exposure, colour and focus, answers `own` and `release`,
-//! refuses `set` keys and commands of groups the remote does not own, applies
-//! the hub's `production`, and sends `image_stats` from its test picture
-//! while the hub asks for them. `--protocol 1` acts as an app before that.
+//! phone with shading (docs/SHADING.md): it applies the hub's `production`
+//! (when the stream stops, if live) and sends `image_stats` from its test
+//! picture while the hub asks for them. `--protocol 1` acts as an app before
+//! that.
 
 use std::f64::consts::PI;
 use std::io::Cursor;
@@ -30,16 +29,13 @@ use serde_json::{json, Map, Value};
 use tallycam_core::clock::report::clock_status;
 use tallycam_core::clock::sim::{Scenario, SimServer, Simulation};
 use tallycam_core::image_stats::{self, Grid};
-use tallycam_core::ownership::{command_group, control_group, Group, Ownership};
 use tallycam_hub::device_key::{self, SoftwareKey};
 use tallycam_hub::protocol::{
     Battery, CommandDescriptor, ControlDescriptor, ControlKind, DeviceInfo, DeviceMessage,
     EnumOption, Hello, Log, Preview, Production, Scale, ServerToDevice, ShutterPolicy, Status,
     StreamStatus, TallyState, Values, CONTROL_PATH, DEVICE_PATH, PROTOCOL_VERSION,
 };
-use tallycam_hub::protocol::{
-    ClockStatus, CommandResult, Holder, ImageStats, Percentiles, StreamLatency,
-};
+use tallycam_hub::protocol::{ClockStatus, CommandResult, ImageStats, Percentiles, StreamLatency};
 use tokio::time::{interval, sleep, sleep_until, MissedTickBehavior};
 use tokio_tungstenite::tungstenite::Message;
 
@@ -131,7 +127,7 @@ fn parse_args() -> Args {
                      \x20                default: a new key, and so a new device, on every run.\n\
                      --legacy-id ID   no device key, this id (an app before device keys).\n\
                      --protocol N     LCP version in hello, 1 to {PROTOCOL_VERSION} (default\n\
-                     \x20                {PROTOCOL_VERSION}); 1 has no ownership, production or image stats."
+                     \x20                {PROTOCOL_VERSION}); 1 has no production or image stats."
                 );
                 std::process::exit(0);
             }
@@ -429,14 +425,12 @@ struct Camera {
     clock: FakeClock,
     /// `hello.protocol`.
     protocol: u32,
-    /// Who owns exposure, colour and focus (protocol 2).
-    ownership: Ownership,
     /// From the hub (protocol 2); `None` until it sends one.
     production: Option<Production>,
     /// `image_stats` per second while the hub asks for them.
     stats: Option<f64>,
     /// The production shutter in use (1/x s), `None` without a production
-    /// or under `free`. A new production waits until the stream stops.
+    /// or when the shutter is free. A new production waits until the stream stops.
     applied_shutter: Option<i64>,
 }
 
@@ -532,7 +526,6 @@ impl Camera {
             } else {
                 args.protocol
             },
-            ownership: Ownership::new(Group::ALL),
             production: None,
             stats: None,
             applied_shutter: None,
@@ -541,30 +534,6 @@ impl Camera {
 
     fn shading(&self) -> bool {
         self.protocol >= 2
-    }
-
-    fn shutter_policy(&self) -> ShutterPolicy {
-        self.production
-            .as_ref()
-            .map(|p| p.shutter)
-            .unwrap_or_default()
-    }
-
-    /// The `ownership` message.
-    fn ownership_message(&self) -> DeviceMessage {
-        DeviceMessage::Ownership {
-            groups: self.ownership.report(),
-        }
-    }
-
-    /// May the remote change `group`? `None` for keys outside the groups and
-    /// for protocol 1.
-    fn refusal(&self, group: Option<Group>) -> Option<String> {
-        let group = group.filter(|_| self.shading())?;
-        self.ownership
-            .check_remote(group)
-            .err()
-            .map(|r| r.to_string())
     }
 
     fn rand(&mut self) -> f64 {
@@ -686,25 +655,7 @@ impl Camera {
         let old_lens = self.str_of("lens").to_string();
         // Controls without a condition first, so `{"exposure_mode":"manual",
         // "iso":400}` in one set works.
-        // Keys of groups the remote does not own are refused by name; the
-        // rest still apply.
-        let shutter = self.shutter_policy();
-        let mut refused = Vec::new();
-        let values_ok: Values = values
-            .iter()
-            .filter(|(k, _)| match self.refusal(control_group(k, shutter)) {
-                Some(why) => {
-                    if !refused.contains(&why) {
-                        refused.push(why);
-                    }
-                    false
-                }
-                None => true,
-            })
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect();
-        errors.append(&mut refused);
-        let (plain, conditional): (Vec<_>, Vec<_>) = values_ok.iter().partition(|(k, _)| {
+        let (plain, conditional): (Vec<_>, Vec<_>) = values.iter().partition(|(k, _)| {
             self.controls
                 .iter()
                 .find(|c| &c.id == *k)
@@ -774,10 +725,8 @@ impl Camera {
         args: Option<Map<String, Value>>,
     ) -> Vec<DeviceMessage> {
         let mut out = Vec::new();
-        let refused = self.refusal(command_group(name));
-        let res: Result<(), String> = match (name, refused) {
-            (_, Some(why)) => Err(why),
-            ("focus_at", None) => {
+        let res: Result<(), String> = match name {
+            "focus_at" => {
                 let args = args.unwrap_or_default();
                 let x = args.get("x").and_then(Value::as_f64);
                 let y = args.get("y").and_then(Value::as_f64);
@@ -802,7 +751,7 @@ impl Camera {
                     _ => Err("focus_at needs x and y in 0..1".into()),
                 }
             }
-            ("wb_one_shot", None) => {
+            "wb_one_shot" => {
                 let k = (5600.0 + (self.rand() - 0.5) * 400.0) / 50.0;
                 let k = (k.round() * 50.0) as i64;
                 self.state.insert("wb_mode".into(), json!("locked"));
@@ -813,78 +762,13 @@ impl Camera {
                 out.push(DeviceMessage::State { values });
                 Ok(())
             }
-            (_, None) => Err(format!("unknown command '{name}'")),
+            _ => Err(format!("unknown command '{name}'")),
         };
         if let Some(id) = id {
             out.push(DeviceMessage::Result(CommandResult {
                 id,
                 ok: res.is_ok(),
                 error: res.err(),
-                data: None,
-            }));
-        }
-        out
-    }
-
-    /// `own` from the hub: the values stay as they are.
-    fn apply_own(
-        &mut self,
-        id: Option<Value>,
-        groups: &[String],
-        holder: &Holder,
-    ) -> Vec<DeviceMessage> {
-        let taken = self.ownership.own(groups, holder);
-        println!(
-            "fake_device: own {groups:?} by {} ({}): taken {:?}, from local {:?}",
-            holder.label, holder.id, taken.taken, taken.from_local
-        );
-        let mut out = vec![self.ownership_message()];
-        if !taken.from_local.is_empty() {
-            let names: Vec<_> = taken.from_local.iter().map(|g| g.as_str()).collect();
-            out.push(DeviceMessage::Log(Log {
-                level: "info".into(),
-                message: format!("{} taken over by {}", names.join(", "), holder.label),
-            }));
-        }
-        if let Some(id) = id {
-            let skipped = (!taken.skipped.is_empty())
-                .then(|| format!("no such group: {}", taken.skipped.join(", ")));
-            out.push(DeviceMessage::Result(CommandResult {
-                id,
-                ok: skipped.is_none(),
-                error: skipped,
-                data: None,
-            }));
-        }
-        out
-    }
-
-    /// `release` from the hub: the released groups go back to auto (rule 4).
-    fn apply_release(&mut self, id: Option<Value>, groups: &[String]) -> Vec<DeviceMessage> {
-        let released = self.ownership.release(groups);
-        println!("fake_device: release {groups:?}: released {released:?}");
-        let mut values = Values::new();
-        for group in &released {
-            let auto: &[(&str, Value)] = match group {
-                Group::Exposure => &[("exposure_mode", json!("auto")), ("ev_bias", json!(0.0))],
-                Group::WhiteBalance => &[("wb_mode", json!("auto"))],
-                Group::Focus => &[("focus_mode", json!("auto"))],
-            };
-            for (k, v) in auto {
-                self.state.insert((*k).into(), v.clone());
-                values.insert((*k).into(), v.clone());
-            }
-        }
-        let mut out = Vec::new();
-        if !values.is_empty() {
-            out.push(DeviceMessage::State { values });
-        }
-        out.push(self.ownership_message());
-        if let Some(id) = id {
-            out.push(DeviceMessage::Result(CommandResult {
-                id,
-                ok: true,
-                error: None,
                 data: None,
             }));
         }
@@ -901,12 +785,11 @@ impl Camera {
     /// The shutter the production asks for, made to fit the frame rate (a
     /// shutter longer than a frame doubles to the next flicker-free value).
     fn production_shutter(&self) -> Option<i64> {
-        let p = self.production.as_ref()?;
+        let p = self.production.as_ref().filter(|p| !p.shutter_free())?;
         let mut shutter = match p.shutter {
             ShutterPolicy::Mains if p.mains_hz == 60 => 60,
-            ShutterPolicy::Mains => 50,
             ShutterPolicy::Fixed(x) => i64::from(x),
-            ShutterPolicy::Free => return None,
+            _ => 50,
         };
         let fps = self.num_of("frame_rate").max(1.0) as i64;
         while shutter < fps {
@@ -1240,13 +1123,7 @@ fn on_server_message(
         }
         // Protocol 1 apps do not know these (they parse as unknown and are
         // ignored), so neither does the fake device then.
-        ServerToDevice::Own { .. }
-        | ServerToDevice::Release { .. }
-        | ServerToDevice::Production(_)
-        | ServerToDevice::Stats { .. }
-            if !cam.shading() => {}
-        ServerToDevice::Own { id, groups, holder } => out = cam.apply_own(id, &groups, &holder),
-        ServerToDevice::Release { id, groups } => out = cam.apply_release(id, &groups),
+        ServerToDevice::Production(_) | ServerToDevice::Stats { .. } if !cam.shading() => {}
         ServerToDevice::Production(p) => out = cam.apply_production(p),
         ServerToDevice::Stats { enabled, fps } => {
             if enabled {
@@ -1314,13 +1191,6 @@ async fn run_once(args: &Args, cam: &mut Camera) -> Result<(), String> {
         }
     }
     sink.send(text(&cam.full_state())).await.map_err(send_err)?;
-    if cam.shading() {
-        // After the full state, as a phone does (docs/SHADING.md).
-        cam.ownership.set_connected(true);
-        sink.send(text(&cam.ownership_message()))
-            .await
-            .map_err(send_err)?;
-    }
     cam.preview = None;
     cam.stats = None;
 
@@ -1396,8 +1266,6 @@ async fn main() {
         if let Err(e) = run_once(&args, &mut cam).await {
             eprintln!("fake_device: {e}, reconnecting in 2 s");
         }
-        // Remote groups keep their values while the hub is away (rule 6).
-        cam.ownership.set_connected(false);
         sleep(Duration::from_secs(2)).await;
     }
 }

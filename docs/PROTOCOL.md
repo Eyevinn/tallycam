@@ -131,8 +131,10 @@ again every second (`status.stream.state` `connecting` with the reason in
   proxy, see "Deployment" below); `--srt-url` sets the SRT URL handed out
   (default `srt://<address>:9000?streamid={device}&latency=100`);
   `--invites` requires an invite (and so a device key) from new phones;
-  `--state-file` keeps known devices and their keys (the key file of the
-  hub's own tools is written owner-only, 0600, and never overwritten).
+  `--state-file` keeps known devices and their keys, and the production
+  settings (the key file of the hub's own tools is written owner-only, 0600,
+  and never overwritten); `--mains-hz` and `--shutter`, when given, replace
+  the stored production at startup.
 
 ## Device keys
 
@@ -356,18 +358,6 @@ puts it in `data`.
 { "type": "log", "level": "warn", "message": "Thermal state serious, lowering frame rate" }
 ```
 
-### `ownership` (protocol 2)
-
-Who owns each control group: `auto`, `local` (the camera operator) or
-`remote` (the server, with the `holder` it named in `own`). In full after the
-full `state` on admission, and again in full on every change. See SHADING.md.
-
-```json
-{ "type": "ownership",
-  "groups": { "exposure": { "owner": "remote", "holder": { "id": "c7f3a1", "label": "Shader" } },
-              "white_balance": { "owner": "local" }, "focus": { "owner": "auto" } } }
-```
-
 ### `image_stats` (protocol 2)
 
 Exposure and colour statistics of the encoded picture, only while the server
@@ -392,15 +382,14 @@ statistics"; computed by `core/src/image_stats.rs`.
 | `message` | `text` | shown to the person at the phone |
 | `preview` | `enabled`, `fps?` (default 1), `width?` (default 480) | start or stop preview images |
 | `challenge` | `server`, `nonce` | prove the device key, see "Device keys" |
-| `own` | `id?`, `groups`, `holder: {id, label}` | protocol 2: the remote takes these groups (`exposure`, `white_balance`, `focus`); values stay. Skipped groups are named in `result.error` |
-| `release` | `id?`, `groups` | protocol 2: these remote groups go back to auto |
-| `production` | `mains_hz`, `shutter` (`"mains"`, `"free"` or a denominator) | protocol 2: the production's mains frequency and shutter; kept until the stream stops when it arrives while live |
+| `production` | `mains_hz`, `shutter` (`"mains"`, `"free"` or a denominator) | protocol 2: the production's mains frequency and shutter; kept until the stream stops when it arrives while live. The shutter is free under `"free"`, and under `"mains"` with `mains_hz` 0 |
 | `stats` | `enabled`, `fps?` (default 1, 0.2 to 4) | protocol 2: start or stop `image_stats` |
 
-From protocol 2 a `set` key or `command` of a group the server does not own
-(owner not `remote`) is refused for that key, with the reason in
-`result.error`; the other keys apply. Controls outside the groups (stream,
-lens, zoom, image) work as before. See SHADING.md.
+Exposure, colour and focus are plain controls: the server and the camera
+operator both change them at any time, and the last write wins (SHADING.md,
+D13). Earlier protocol 2 builds had ownership (`own`, `release`,
+`ownership`); a device ignores `own` and `release`, a server ignores
+`ownership`.
 
 ## Control descriptor
 
@@ -455,9 +444,9 @@ lens, zoom, image) work as before. See SHADING.md.
 | `torch` | bool | where the lens has a torch |
 | `exposure_mode` | enum | `auto`, `locked`, `manual`. `auto`: the core's auto ISO loop at the production shutter (iOS auto exposure moves the shutter and the frame duration, which genlock owns); under a free shutter the loop shortens the shutter once the ISO is at its minimum. `manual` sets the ISO (and the shutter under a free shutter). `auto_iso` is accepted as `auto` |
 | `iso` | range | manual only |
-| `shutter` | enum | denominator of 1/x seconds, e.g. 50 = 1/50 s. A production setting (`production.shutter`, SHADING.md): `readonly` unless the production shutter is free, then writable in manual. A shutter longer than the frame becomes the longest flicker-free one that fits |
+| `shutter` | enum | denominator of 1/x seconds, e.g. 50 = 1/50 s. A production setting (`production.shutter`, SHADING.md): `readonly` unless the shutter is free (policy `free`, or `mains` with mains 0), then writable in manual; auto ISO then holds a 180° shutter (half the frame period, 1/60 at 30 fps) and shortens it only at the lowest ISO. A shutter longer than the frame becomes the longest flicker-free one that fits |
 | `ev_bias` | range | exposure compensation in EV, auto and auto_iso |
-| `mains_hz` | enum | `readonly` while a server's `production` applies; refused while live. 50, 60, or 0 (off: no mains-lit light in the picture, for example outdoors, so auto ISO may use any shutter); default from the device region, persisted. In auto_iso (and when genlock moves exposure to auto_iso) the shutter is rounded to a whole number of half mains periods that fits the frame (2% room while genlock runs); the ISO compensates. No flicker-free shutter fits above 100 fps at 50 Hz or 120 fps at 60 Hz, and the shutter is then left alone |
+| `mains_hz` | enum | `readonly` while a server's `production` applies (which overrides the phone's own setting without overwriting it; forgetting the server returns to it); refused while live. 50, 60, or 0 (off: no mains-lit light in the picture, for example outdoors, so the shutter is free); default from the device region, persisted in the phone's Settings. In auto_iso (and when genlock moves exposure to auto_iso) the shutter is rounded to a whole number of half mains periods that fits the frame (2% room while genlock runs); the ISO compensates. No flicker-free shutter fits above 100 fps at 50 Hz or 120 fps at 60 Hz, and the shutter is then left alone |
 | `genlock` | bool | soft genlock: the frame timing locks to the TAI frame grid (docs/GENLOCK.md). Moves auto exposure to auto_iso; status in `status.genlock` |
 | `genlock_offset_us` | range | where frames land after each grid point, µs (per-model calibration, or measurement sweeps); -50000 to 50000 |
 | `wb_mode` | enum | `auto`, `locked`, `manual` |
@@ -673,10 +662,13 @@ bitstream parser. Byte vectors for both codecs are in
   measured value may be outside the enum options (`shutter: 33`).
 - When a lens change alters the control set, the phone resends `hello` and then
   a full `state`.
-- The controller-side messages (`snapshot`, `device_<type>`, `error`) belong to
-  the control hub, not to this device protocol. Snapshot entries and
-  `device_hello` carry `key_fingerprint` for a device with a key;
-  `device_removed` says a device was forgotten.
+- The controller-side messages (`snapshot`, `device_<type>`, `production`,
+  `error`) belong to the control hub, not to this device protocol. Snapshot
+  entries and `device_hello` carry `key_fingerprint` for a device with a
+  key; `device_removed` says a device was forgotten. A controller's
+  `production` is accepted any time and kept across restarts; a `holder`
+  field from an older controller is ignored (SHADING.md, "Controller ↔
+  hub").
 
 ## Deployment: Strom alone or behind Open Live
 

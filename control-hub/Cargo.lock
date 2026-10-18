@@ -143,7 +143,7 @@ checksum = "c2459377285ad874054d797f3ccebf984978aa39129f6eafde5cdc8315b612f8"
 
 [[package]]
 name = "control-hub"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "axum",
  "base64",
@@ -1004,7 +1004,7 @@ checksum = "0bf256ce5efdfa370213c1dabab5935a12e49f2c58d15e9eac2870d3b4f27263"
 
 [[package]]
 name = "tallycam-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base64",
  "p256",
@@ -1015,7 +1015,7 @@ dependencies = [
 
 [[package]]
 name = "tallycam-hub"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "axum",
  "futures-util",

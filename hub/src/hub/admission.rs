@@ -19,6 +19,8 @@ pub enum AdmitError {
     /// The key did not sign the challenge (wrong key, replayed or missing
     /// signature).
     BadSignature,
+    /// A new device, and the hub already lists [`MAX_DEVICES`].
+    TooManyDevices,
 }
 
 impl fmt::Display for AdmitError {
@@ -32,6 +34,9 @@ impl fmt::Display for AdmitError {
             AdmitError::BadKey(why) => write!(f, "the device key is not usable: {why}"),
             AdmitError::BadSignature => {
                 f.write_str("the device key did not verify; forget the server and scan a new code")
+            }
+            AdmitError::TooManyDevices => {
+                f.write_str("this server lists too many cameras; forget some on the server")
             }
         }
     }
@@ -129,6 +134,7 @@ impl Hub {
         let id = hello.device.id.as_str();
         let Some(key_text) = hello.public_key.as_deref() else {
             let inner = self.lock();
+            inner.check_room(id)?;
             let bound = inner
                 .devices
                 .get(id)
@@ -175,6 +181,7 @@ impl Hub {
             Some(_) => return Err(AdmitError::BadSignature),
             None => {}
         }
+        inner.check_room(id)?;
         if !inner.invite_required {
             return Ok(admission);
         }
@@ -227,6 +234,17 @@ impl Hub {
 pub struct Admission {
     pub(super) key: Option<String>,
     pub(super) forgets: u64,
+}
+
+impl Inner {
+    /// Is there room for `id` in the device list?
+    fn check_room(&self, id: &str) -> Result<(), AdmitError> {
+        if self.devices.len() >= MAX_DEVICES && !self.devices.contains_key(id) {
+            warn!("Device {id} refused: {MAX_DEVICES} devices listed");
+            return Err(AdmitError::TooManyDevices);
+        }
+        Ok(())
+    }
 }
 
 /// Checks the public key of a `hello` before it is challenged: a usable key,

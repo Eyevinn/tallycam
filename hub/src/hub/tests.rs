@@ -1013,3 +1013,33 @@ fn controllers_never_see_the_srt_passphrase() {
         "srt://strom:9000?streamid=cam1&passphrase=0123456789abc&latency=200"
     );
 }
+
+#[test]
+fn the_device_list_and_each_state_are_bounded() {
+    let hub = Hub::new();
+    for i in 0..MAX_DEVICES {
+        let (tx, _rx) = mpsc::channel(DEVICE_QUEUE);
+        join(
+            &hub,
+            hub.new_connection_id(),
+            hello(&format!("d{i}"), "x"),
+            tx,
+        );
+    }
+    let extra = hello("one-too-many", "x");
+    assert_eq!(
+        hub.admit(&extra, None, None).err(),
+        Some(AdmitError::TooManyDevices)
+    );
+    // A listed device still comes back.
+    assert!(hub.admit(&hello("d0", "x"), None, None).is_ok());
+
+    let hub = Hub::new();
+    let _phone = connect_phone(&hub, "cam1");
+    let conn = CONNS.with(|c| c.borrow()["cam1"]);
+    let values: Values = (0..MAX_STATE_KEYS + 10)
+        .map(|i| (format!("k{i}"), Value::from(i)))
+        .collect();
+    hub.device_message(conn, "cam1", DeviceMessage::State { values });
+    assert_eq!(hub.device_state("cam1").len(), MAX_STATE_KEYS);
+}

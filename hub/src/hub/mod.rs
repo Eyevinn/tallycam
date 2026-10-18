@@ -45,6 +45,11 @@ pub use shading::{default_production, DEFAULT_STATS_FPS, SHADING_PROTOCOL};
 pub type DeviceTx = mpsc::Sender<ServerToDevice>;
 /// Messages queued for one phone, at most.
 pub const DEVICE_QUEUE: usize = 256;
+/// Devices the hub lists, at most; a new one beyond is refused
+/// ([`AdmitError::TooManyDevices`]).
+pub const MAX_DEVICES: usize = 1024;
+/// Control values kept per device, at most; new keys beyond are dropped.
+pub(crate) const MAX_STATE_KEYS: usize = 512;
 
 /// One controller event, typed for an embedding server that maps it to its
 /// own events, and as JSON for LCP controllers. Cloning is cheap.
@@ -540,7 +545,9 @@ impl Hub {
             DeviceMessage::Hello(_) => return, // handled by device_hello
             DeviceMessage::State { values } => {
                 for (k, v) in &values {
-                    entry.state.insert(k.clone(), v.clone());
+                    if entry.state.len() < MAX_STATE_KEYS || entry.state.contains_key(k) {
+                        entry.state.insert(k.clone(), v.clone());
+                    }
                 }
                 ControllerEvent::DeviceState {
                     device,

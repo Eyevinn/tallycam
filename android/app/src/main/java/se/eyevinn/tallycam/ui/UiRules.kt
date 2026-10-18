@@ -212,23 +212,43 @@ val SIDE_GROUPS = listOf("zoom", "exposure", "white_balance", "focus")
 /**
  * What the two side controls run (docs/UI_DESIGN.md, "Side control"): zoom
  * on the left and exposure on the right until changed; never the same
- * group on both sides.
+ * group on both sides. A side may be hidden ("–"), folded into a tab at
+ * the edge; it keeps its group for when it comes back.
  */
-data class Sides(val left: String?, val right: String?) {
+data class Sides(val left: String?, val right: String?, val leftHidden: Boolean = false, val rightHidden: Boolean = false) {
     /** The choice where the camera has the group, else the first it has that the other side does not run. */
     fun resolved(available: List<String>): Sides {
         val r = right?.takeIf { it in available } ?: available.firstOrNull { it != left }
         val l = left?.takeIf { it in available && it != r } ?: available.firstOrNull { it != r }
-        return Sides(l, r)
+        return copy(left = l, right = r)
     }
 
-    /** A selector tap on one side: choosing the other side's group swaps the two. */
-    fun choose(leftSide: Boolean, group: String): Sides =
-        if (leftSide) Sides(group, if (group == right) left else right)
-        else Sides(if (group == left) right else left, group)
+    /**
+     * A selector tap on one side: the chosen group again hides that side;
+     * the other side's group swaps the two (each side keeps whether it is
+     * hidden).
+     */
+    fun choose(leftSide: Boolean, group: String): Sides = when {
+        leftSide && group == left -> copy(leftHidden = true)
+        !leftSide && group == right -> copy(rightHidden = true)
+        leftSide -> copy(left = group, right = if (group == right) left else right)
+        else -> copy(left = if (group == left) right else left, right = group)
+    }
 
-    /** A tap in the values row: the group goes to the right unless a side runs it already. */
-    fun fromValues(group: String): Sides = if (group == left || group == right) this else Sides(left, group)
+    /** A tap on a hidden side's tab: it comes back with its group. */
+    fun show(leftSide: Boolean): Sides = if (leftSide) copy(leftHidden = false) else copy(rightHidden = false)
+
+    /**
+     * A tap in the values row: nothing while a shown side runs the group; a
+     * hidden side running it comes back; else the group goes to the right,
+     * which shows.
+     */
+    fun fromValues(group: String): Sides = when {
+        group == left && !leftHidden || group == right && !rightHidden -> this
+        group == left -> copy(leftHidden = false)
+        group == right -> copy(rightHidden = false)
+        else -> copy(right = group, rightHidden = false)
+    }
 
     companion object {
         val DEFAULT = Sides("zoom", "exposure")

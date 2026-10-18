@@ -63,8 +63,18 @@ object Chrome {
     /** Padding inside the safe area so chrome clears the tally border on edges without an inset. */
     fun edge(inset: Dp): Dp = maxOf(minEdge, tallyClearance - inset)
 
-    /** Values: tabular digits in the default face (iOS `monospacedDigit`). */
-    val tabular = TextStyle(fontFeatureSettings = "tnum")
+    /** A soft shadow under white text, so it reads over a bright picture. */
+    private val softShadow = androidx.compose.ui.graphics.Shadow(Color.Black.copy(alpha = 0.6f),
+                                                                 androidx.compose.ui.geometry.Offset(0f, 1f), 4f)
+    val shadowed = TextStyle(shadow = softShadow)
+    /** Values: tabular digits in the default face (iOS `monospacedDigit`), with the soft shadow. */
+    val tabular = TextStyle(fontFeatureSettings = "tnum", shadow = softShadow)
+    /**
+     * The side controls' light surface (docs/UI_DESIGN.md, "Light
+     * backgrounds"): black at 30 %, translucent (Android has no backdrop blur
+     * for a composable over a camera preview).
+     */
+    val surface = Color.Black.copy(alpha = 0.30f)
 
     /**
      * A side-control group's colour: the rocker's outline and knob ring, the

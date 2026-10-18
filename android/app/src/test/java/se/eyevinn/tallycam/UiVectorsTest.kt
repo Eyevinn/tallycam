@@ -125,16 +125,17 @@ class UiVectorsTest {
         val default = s.getJSONObject("default")
         assertEquals(Sides(default.getString("left"), default.getString("right")), Sides.DEFAULT)
         for (c in s.getJSONArray("cases").objects()) {
-            val start = c.getJSONObject("start").let { Sides(it.getString("left"), it.getString("right")) }
+            fun sides(o: JSONObject) = Sides(o.getString("left"), o.getString("right"), o.optBoolean("left_hidden"), o.optBoolean("right_hidden"))
+            val start = sides(c.getJSONObject("start"))
             val available = c.optJSONArray("available")?.let { a -> (0 until a.length()).map { a.getString(it) } } ?: SIDE_GROUPS
             val shown = start.resolved(available)
             val result = when {
                 c.has("choose") -> c.getJSONObject("choose").let { shown.choose(it.getString("side") == "left", it.getString("group")) }
                 c.has("values_tap") -> shown.fromValues(c.getString("values_tap"))
+                c.has("show") -> shown.show(c.getString("show") == "left")
                 else -> shown
             }
-            val e = c.getJSONObject("expect")
-            assertEquals(c.getString("name"), Sides(e.getString("left"), e.getString("right")), result)
+            assertEquals(c.getString("name"), sides(c.getJSONObject("expect")), result)
         }
     }
 }

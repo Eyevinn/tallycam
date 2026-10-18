@@ -200,7 +200,7 @@ fun SideControl(model: AppModel, group: String, groups: List<String>, leading: B
         val grow by animateFloatAsState(if (adjusting) 1.25f else 1f, tween(150), label = "value")
         val tone = if (auto) Color.White else Chrome.yellow
         Box(Modifier.height(Chrome.valueHeight).graphicsLayer { scaleX = grow; scaleY = grow }
-                .background(Color.Black.copy(alpha = if (adjusting) 0.75f else 0.55f), CircleShape)
+                .background(if (adjusting) Color.Black.copy(alpha = 0.5f) else Chrome.surface, RoundedCornerShape(Chrome.cellRadius))
                 .padding(horizontal = 8.dp), contentAlignment = Alignment.Center) {
             Text(text, color = if (adjusting) tone else tone.copy(alpha = 0.8f), fontSize = 13.sp, style = Chrome.tabular,
                  fontWeight = FontWeight.SemiBold, maxLines = 1, softWrap = false)
@@ -303,10 +303,11 @@ private fun ModeRow(model: AppModel, group: String, mode: String) {
 /** K or Tint for colour's rocker. */
 @Composable
 private fun TintSwitch(tint: Boolean, onChange: (Boolean) -> Unit) {
-    Row(Modifier.background(Color.Black.copy(alpha = 0.45f), CircleShape).padding(2.dp)) {
+    Row(Modifier.background(Chrome.surface, RoundedCornerShape(Chrome.cellRadius)).padding(2.dp)) {
         for ((title, on) in listOf("K" to !tint, "Tint" to tint)) {
-            Text(title, color = if (on) Color.Black else Color.White.copy(alpha = 0.8f), fontSize = 12.sp, fontWeight = FontWeight.Bold,
-                 modifier = Modifier.height(Chrome.tintHeight).background(if (on) Color.White else Color.Transparent, CircleShape)
+            Text(title, color = if (on) Color.Black else Color.White.copy(alpha = 0.9f), fontSize = 12.sp, fontWeight = FontWeight.Bold,
+                 style = if (on) androidx.compose.ui.text.TextStyle.Default else Chrome.shadowed,
+                 modifier = Modifier.height(Chrome.tintHeight).background(if (on) Color.White else Color.Transparent, RoundedCornerShape(6.dp))
                      .clickable { if (!on) onChange(title == "Tint") }
                      .semantics { contentDescription = if (title == "K") "Rocker moves the temperature" else "Rocker moves the tint" }
                      .padding(horizontal = 8.dp, vertical = 5.dp))
@@ -328,7 +329,7 @@ private fun heldMode(model: AppModel, group: String): String {
 /**
  * ZOOM EXP over WB FOC beside the upper half of the rocker: the chosen
  * group filled in its colour with white text; a tap puts that group on
- * this side (docs/UI_DESIGN.md, "Side control").
+ * this side, the chosen one again hides it (docs/UI_DESIGN.md, "Side control").
  */
 @Composable
 private fun GroupSelector(groups: List<String>, selected: String, onSelect: (String) -> Unit) {
@@ -336,7 +337,8 @@ private fun GroupSelector(groups: List<String>, selected: String, onSelect: (Str
         Cell(shortName(it), on = it == selected, enabled = it in groups, fill = Chrome.groupColor(it), onText = Color.White,
              description = title(it))
     }
-    Cells(cells.chunked(2)) { row, column -> onSelect(SIDE_GROUPS[row * 2 + column]) }
+    // The chosen cell again hides this side.
+    Cells(cells.chunked(2), tapOn = true) { row, column -> onSelect(SIDE_GROUPS[row * 2 + column]) }
 }
 
 /** The lens buttons in the mode row on zoom, shortest left, the active one filled. */
@@ -365,7 +367,8 @@ private class Cell(val label: String, val on: Boolean, val enabled: Boolean = tr
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun Cells(rows: List<List<Cell>>, fontSize: androidx.compose.ui.unit.TextUnit = 12.sp, onTap: (Int, Int) -> Unit) {
+private fun Cells(rows: List<List<Cell>>, fontSize: androidx.compose.ui.unit.TextUnit = 12.sp, tapOn: Boolean = false,
+                  onTap: (Int, Int) -> Unit) {
     val shape = RoundedCornerShape(Chrome.cellRadius)
     Column(Modifier.width(Chrome.blockWidth), verticalArrangement = Arrangement.spacedBy(Chrome.cellGap)) {
         rows.forEachIndexed { r, row ->
@@ -373,9 +376,9 @@ private fun Cells(rows: List<List<Cell>>, fontSize: androidx.compose.ui.unit.Tex
                 row.forEachIndexed { c, cell ->
                     Box(
                         Modifier.weight(1f).height(Chrome.cell)
-                            .background(if (cell.on) cell.fill else Color.Black.copy(alpha = 0.35f), shape)
+                            .background(if (cell.on) cell.fill else Chrome.surface, shape)
                             .border(1.dp, if (cell.on) Color.Transparent else Color.White.copy(alpha = 0.25f), shape)
-                            .combinedClickable(enabled = cell.enabled, onClick = { if (!cell.on) onTap(r, c) },
+                            .combinedClickable(enabled = cell.enabled, onClick = { if (!cell.on || tapOn) onTap(r, c) },
                                                onLongClick = cell.longPress,
                                                onLongClickLabel = cell.longPress?.let { "White balance once" })
                             .semantics {
@@ -385,7 +388,8 @@ private fun Cells(rows: List<List<Cell>>, fontSize: androidx.compose.ui.unit.Tex
                         contentAlignment = Alignment.Center,
                     ) {
                         Text(cell.label, color = if (cell.on) cell.onText else Color.White.copy(alpha = if (cell.enabled) 0.8f else 0.3f),
-                             fontSize = fontSize, fontWeight = FontWeight.Bold, maxLines = 1, softWrap = false)
+                             fontSize = fontSize, fontWeight = FontWeight.Bold, maxLines = 1, softWrap = false,
+                             style = if (cell.on && cell.onText == Color.Black) androidx.compose.ui.text.TextStyle.Default else Chrome.shadowed)
                     }
                 }
             }

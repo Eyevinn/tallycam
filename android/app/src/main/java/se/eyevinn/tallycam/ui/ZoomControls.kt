@@ -115,13 +115,15 @@ fun Rocker(high: String, low: String, label: String, length: Dp, accent: Color =
         contentAlignment = Alignment.Center,
     ) {
         val track = RoundedCornerShape(Chrome.rockerRadius)
-        Box(Modifier.matchParentSize().background(Color.Black.copy(alpha = 0.35f), track).border(1.5.dp, accent, track))
+        Box(Modifier.matchParentSize().background(Chrome.surface, track).border(1.5.dp, accent, track))
         Column(Modifier.fillMaxSize().padding(vertical = 8.dp), horizontalAlignment = Alignment.CenterHorizontally,
                verticalArrangement = Arrangement.SpaceBetween) {
             // Smaller for words (Far, Near) than for signs.
             val size = if (high.length > 2 || low.length > 2) 11.sp else 13.sp
-            Text(high, color = Color.White.copy(alpha = 0.6f), fontSize = size, fontWeight = FontWeight.SemiBold, maxLines = 1)
-            Text(low, color = Color.White.copy(alpha = 0.6f), fontSize = size, fontWeight = FontWeight.SemiBold, maxLines = 1)
+            Text(high, color = Color.White.copy(alpha = 0.85f), fontSize = size, fontWeight = FontWeight.SemiBold, maxLines = 1,
+                 style = Chrome.shadowed)
+            Text(low, color = Color.White.copy(alpha = 0.85f), fontSize = size, fontWeight = FontWeight.SemiBold, maxLines = 1,
+                 style = Chrome.shadowed)
         }
         Box(Modifier.offset { IntOffset(0, (-shown * travel.toPx()).roundToInt()) }.size(KNOB)
                 .background(Color.White.copy(alpha = if (sentStep == 0) 0.7f else 0.95f), RoundedCornerShape(Chrome.knobRadius))

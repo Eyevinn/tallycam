@@ -58,6 +58,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -136,7 +137,8 @@ private fun BoxScope.ShootingScreen(model: AppModel, onScan: () -> Unit) {
     val prefs = remember { context.getSharedPreferences("chrome", android.content.Context.MODE_PRIVATE) }
     var sides by remember {
         mutableStateOf(Sides(prefs.getString("left", null) ?: Sides.DEFAULT.left,
-                             prefs.getString("right", null) ?: Sides.DEFAULT.right))
+                             prefs.getString("right", null) ?: Sides.DEFAULT.right,
+                             prefs.getBoolean("leftHidden", false), prefs.getBoolean("rightHidden", false)))
     }
     // The groups this camera has, in the selector's order.
     val groups = SIDE_GROUPS.filter {
@@ -147,7 +149,8 @@ private fun BoxScope.ShootingScreen(model: AppModel, onScan: () -> Unit) {
     val right = shown.right
     fun place(next: Sides) {
         sides = next
-        prefs.edit().putString("left", next.left).putString("right", next.right).apply()
+        prefs.edit().putString("left", next.left).putString("right", next.right)
+            .putBoolean("leftHidden", next.leftHidden).putBoolean("rightHidden", next.rightHidden).apply()
     }
     var toast by remember { mutableStateOf<String?>(null) }
     var toastSerial by remember { mutableIntStateOf(0) }
@@ -203,8 +206,10 @@ private fun BoxScope.ShootingScreen(model: AppModel, onScan: () -> Unit) {
     )) {
         val landscape = maxWidth > maxHeight
         // Narrower than this (portrait), the camera's name gets a row of its own.
+        // Landscape: one top bar (status, name and values); portrait: the
+        // status row over the values, the name on its own row when narrow.
         val nameInline = maxWidth >= 560.dp
-        val rows = if (nameInline) 2 else 3
+        val rows = if (landscape) 1 else if (nameInline) 2 else 3
         val top = Chrome.rowHeight * rows + Chrome.rowGap * (rows - 1)
         // Both side controls the same size: segments 30 dp where the screen
         // allows; on a landscape phone what is left between the top rows and
@@ -218,8 +223,13 @@ private fun BoxScope.ShootingScreen(model: AppModel, onScan: () -> Unit) {
         val nameChip = @Composable { TallyChip(model.tally, model.displayName) }
         val side = @Composable { leftSide: Boolean ->
             (if (leftSide) left else right)?.let { group ->
-                SideControl(model, group, groups, leading = leftSide, metrics = metrics, locked = screenLocked,
-                            onSelect = { place(shown.choose(leftSide, it)) }, modifier = Modifier.touchable(screenLocked))
+                if (if (leftSide) shown.leftHidden else shown.rightHidden) {
+                    // Folded into a tab at the edge; a tap brings it back.
+                    EdgeTab(group, leftSide, Modifier.touchable(screenLocked)) { place(shown.show(leftSide)) }
+                } else {
+                    SideControl(model, group, groups, leading = leftSide, metrics = metrics, locked = screenLocked,
+                                onSelect = { place(shown.choose(leftSide, it)) }, modifier = Modifier.touchable(screenLocked))
+                }
             }
         }
         val messages = @Composable { MessageSlot(model.banner, toast) }
@@ -228,9 +238,22 @@ private fun BoxScope.ShootingScreen(model: AppModel, onScan: () -> Unit) {
         Column(verticalArrangement = Arrangement.spacedBy(Chrome.zoneGap)) {
             Column(Modifier.fillMaxWidth().touchable(screenLocked), horizontalAlignment = Alignment.CenterHorizontally,
                    verticalArrangement = Arrangement.spacedBy(Chrome.rowGap)) {
-                StatusStrip(model, if (nameInline) nameChip else null) { showSettings = true }
-                if (!nameInline) nameChip()
-                CameraValuesRow(model, listOfNotNull(left, right), { place(shown.fromValues(it)) }, onFormat = { settingsAtPicture = true; showSettings = true })
+                val values = @Composable { dropped: Int, bare: Boolean ->
+                    // Underlined: the groups a shown side runs.
+                    CameraValuesRow(model, listOfNotNull(left.takeIf { !shown.leftHidden }, right.takeIf { !shown.rightHidden }),
+                                    { place(shown.fromValues(it)) },
+                                    onFormat = { settingsAtPicture = true; showSettings = true }, bare = bare, dropped = dropped)
+                }
+                if (landscape) {
+                    StatusStrip(model, centre = {
+                        TopBarCentre({ TallyChip(model.tally, model.displayName) },
+                                     { TallyChip(model.tally, model.displayName, short = true) }) { values(it, true) }
+                    }) { showSettings = true }
+                } else {
+                    StatusStrip(model, if (nameInline) nameChip else null) { showSettings = true }
+                    if (!nameInline) nameChip()
+                    values(0, false)
+                }
             }
             if (landscape) {
                 // Left: zoom over the tools. Centre: messages, the slide to
@@ -443,12 +466,13 @@ private fun TallyOverlay(tally: AppModel.Tally) {
  * picture.
  */
 @Composable
-private fun TallyChip(tally: AppModel.Tally, name: String) {
+private fun TallyChip(tally: AppModel.Tally, name: String, short: Boolean = false) {
+    // Short: the name alone (the tally border still shows tally).
     val label = when (tally) {
         AppModel.Tally.PROGRAM -> "ON AIR"
         AppModel.Tally.PREVIEW -> "PREVIEW"
         AppModel.Tally.OFF -> null
-    }
+    }?.takeIf { !short }
     Row(
         Modifier.height(Chrome.rowHeight - 4.dp).background(tallyColor(tally) ?: Color.Black.copy(alpha = 0.55f), CircleShape)
             .padding(horizontal = 12.dp),
@@ -468,7 +492,7 @@ private fun TallyChip(tally: AppModel.Tally, name: String) {
  * enough), hub link, clock and battery. The gear opens Settings.
  */
 @Composable
-private fun StatusStrip(model: AppModel, nameChip: (@Composable () -> Unit)?, onSettings: () -> Unit) {
+private fun StatusStrip(model: AppModel, centre: (@Composable () -> Unit)?, onSettings: () -> Unit) {
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(Unit) {
         while (true) {
@@ -513,8 +537,8 @@ private fun StatusStrip(model: AppModel, nameChip: (@Composable () -> Unit)?, on
             }
         }
         Spacer(Modifier.weight(1f))
-        nameChip?.let {
-            Box(Modifier.weight(3f, fill = false)) { it() }
+        centre?.let {
+            Box(Modifier.weight(6f, fill = false)) { it() }
             Spacer(Modifier.weight(1f))
         }
         val link = when (model.link) {
@@ -725,3 +749,43 @@ private fun JoinDialog(link: ProvisioningLink, live: Boolean, onJoin: (Provision
 /** The host, and the port when the URL has one. */
 private fun hostLabel(url: String): String? = runCatching { android.net.Uri.parse(url) }.getOrNull()
     ?.takeIf { !it.host.isNullOrEmpty() }?.let { if (it.port > 0) "${it.host}:${it.port}" else it.host }
+
+/**
+ * A hidden side control ("–"): a 46 dp tab at the edge in its group's
+ * colour, with a chevron pointing into the screen; a tap brings it back
+ * (docs/UI_DESIGN.md, "Hide a side").
+ */
+@Composable
+private fun EdgeTab(group: String, leading: Boolean, modifier: Modifier, onClick: () -> Unit) {
+    val shape = RoundedCornerShape(Chrome.cellRadius)
+    Box(
+        modifier.size(Chrome.control).background(Chrome.groupColor(group).copy(alpha = 0.85f), shape)
+            .clickable(onClick = onClick).semantics { contentDescription = "Show the ${if (leading) "left" else "right"} control" },
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(if (leading) "›" else "‹", color = Color.White, fontSize = 26.sp, fontWeight = FontWeight.Bold, style = Chrome.shadowed)
+    }
+}
+
+/**
+ * The centre of the landscape top bar: the name chip and the values. Where
+ * they do not fit, the values drop focus, then white balance, then the
+ * chip shortens to the name alone (docs/UI_DESIGN.md, "Landscape: one top bar").
+ */
+@Composable
+private fun TopBarCentre(chip: @Composable () -> Unit, shortChip: @Composable () -> Unit, values: @Composable (Int) -> Unit) {
+    Layout({ chip(); shortChip(); values(0); values(1); values(2) }) { measurables, constraints ->
+        val loose = constraints.copy(minWidth = 0, minHeight = 0)
+        val gap = Chrome.gap.roundToPx()
+        val p = measurables.map { it.measure(loose.copy(maxWidth = androidx.compose.ui.unit.Constraints.Infinity)) }
+        // In order: the full chip with all values, without focus, without white balance, then the short chip.
+        val choices = listOf(0 to 2, 0 to 3, 0 to 4, 1 to 4)
+        val (c, v) = choices.firstOrNull { (c, v) -> p[c].width + gap + p[v].width <= constraints.maxWidth } ?: choices.last()
+        val height = maxOf(p[c].height, p[v].height)
+        val width = minOf(constraints.maxWidth, p[c].width + gap + p[v].width)
+        layout(width, height) {
+            p[c].placeRelative(0, (height - p[c].height) / 2)
+            p[v].placeRelative(p[c].width + gap, (height - p[v].height) / 2)
+        }
+    }
+}

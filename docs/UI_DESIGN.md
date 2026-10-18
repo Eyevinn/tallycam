@@ -165,13 +165,13 @@ Right side shown; the left one is its mirror image.
   values in the values row. Values never take it as text colour, so yellow
   (held), red and green (tally), cyan (hub change) and orange (warning) keep
   their meaning.
-- **Light backgrounds.** All chrome is see-through so the picture shows:
-  selector, mode row, lens row, value, K / Tint, the rocker track, the
-  round buttons and the top bar sit on black at 25 % with a background blur;
-  the chosen cell keeps its colour at 85 %, the knob light grey at 80 %.
-  The blur is iOS's thin material and a translucent surface on Android,
-  never near-black. Text and labels are white with a soft shadow so they
-  read over a bright picture.
+- **See-through, no blur.** The picture must show through the controls
+  clearly: no background blur or frosted material anywhere. Every chrome
+  surface (cells, value, K / Tint, the rocker track, round buttons, the top
+  bar) is a light tint, black at about 15 %, with a thin white border at
+  40 % to give it its shape. The chosen cell is filled in its colour at
+  70 %, the knob light grey at 70 %. Text and labels are white with a soft
+  dark shadow so they read over any picture.
 - **Shape: square-ish, not pills.** Selector and mode cells have an 8 pt
   corner radius, the rocker track a 10 pt radius (a rounded rectangle, not a
   capsule), the knob a rounded square with an 8 pt radius. The same on both

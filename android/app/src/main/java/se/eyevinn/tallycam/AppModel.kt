@@ -211,7 +211,7 @@ class AppModel(private val context: Context) : LcpClient.Listener, LiveStream.Li
 
     /** Settings' Mains: refused while live; under a hub production it holds until the hub sends a new one. */
     fun setOwnMains(hz: Int) {
-        cameraControls.apply("mains_hz", hz)?.let { showBanner(it.capitalizedFirst()) }
+        cameraControls.applyOwnMains(hz)?.let { showBanner(it.capitalizedFirst()) }
         publishState()
     }
 

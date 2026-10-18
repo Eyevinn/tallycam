@@ -4,6 +4,7 @@ import android.os.SystemClock
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -74,7 +75,7 @@ fun CameraValuesRow(model: AppModel, onSides: Collection<String>, onSelect: (Str
     val now = SystemClock.uptimeMillis()
     val flashing = if (flashOver) emptySet() else hubChanged.filterValues { now - it < Shading.HUB_FLASH_MS }.keys
     // In the landscape top bar, on the bar's own background.
-    Box(modifier.height(Chrome.rowHeight).then(if (bare) Modifier else Modifier.background(Chrome.surface, CircleShape))
+    Box(modifier.height(Chrome.rowHeight).then(if (bare) Modifier else Modifier.background(Chrome.surface, CircleShape).border(1.dp, Chrome.border, CircleShape))
             .padding(horizontal = 4.dp), contentAlignment = Alignment.Center) {
         // Focus is last; colour is dropped after it.
         val drop = VALUE_DROP_ORDER.mapNotNull { group -> items.indexOfFirst { it.group == group }.takeIf { it >= 0 } }

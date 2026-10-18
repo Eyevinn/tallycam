@@ -534,7 +534,7 @@ private fun StatusStrip(model: AppModel, centre: (@Composable () -> Unit)?, onSe
              softWrap = false)
 
     Row(
-        Modifier.fillMaxWidth().height(Chrome.rowHeight).background(Chrome.surface, CircleShape)
+        Modifier.fillMaxWidth().height(Chrome.rowHeight).background(Chrome.surface, CircleShape).border(1.dp, Chrome.border, CircleShape)
             .padding(start = 12.dp, end = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),

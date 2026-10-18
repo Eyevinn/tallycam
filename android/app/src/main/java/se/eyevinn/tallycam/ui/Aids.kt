@@ -10,6 +10,7 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -294,7 +295,7 @@ fun AudioMeter(modifier: Modifier = Modifier) {
     if (!active) return
     val clipping = clipUntil > System.currentTimeMillis()
     Column(
-        modifier.background(Chrome.surface, CircleShape).padding(horizontal = 5.dp, vertical = 6.dp),
+        modifier.background(Chrome.surface, CircleShape).border(1.dp, Chrome.border, CircleShape).padding(horizontal = 5.dp, vertical = 6.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(3.dp),
     ) {

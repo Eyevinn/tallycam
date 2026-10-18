@@ -203,6 +203,7 @@ fun SideControl(model: AppModel, group: String, groups: List<String>, leading: B
         val tone = if (auto) Color.White else Chrome.yellow
         Box(Modifier.height(Chrome.valueHeight).graphicsLayer { scaleX = grow; scaleY = grow }
                 .background(if (adjusting) Color.Black.copy(alpha = 0.5f) else Chrome.surface, RoundedCornerShape(Chrome.cellRadius))
+                .border(1.dp, Chrome.border, RoundedCornerShape(Chrome.cellRadius))
                 .padding(horizontal = 8.dp), contentAlignment = Alignment.Center) {
             Text(text, color = if (adjusting) tone else tone.copy(alpha = 0.8f), fontSize = 13.sp, style = Chrome.tabular,
                  fontWeight = FontWeight.SemiBold, maxLines = 1, softWrap = false)
@@ -298,7 +299,8 @@ private fun ModeRow(model: AppModel, group: String, mode: String) {
 /** K or Tint for colour's rocker. */
 @Composable
 private fun TintSwitch(tint: Boolean, onChange: (Boolean) -> Unit) {
-    Row(Modifier.background(Chrome.surface, RoundedCornerShape(Chrome.cellRadius)).padding(2.dp)) {
+    Row(Modifier.background(Chrome.surface, RoundedCornerShape(Chrome.cellRadius))
+            .border(1.dp, Chrome.border, RoundedCornerShape(Chrome.cellRadius)).padding(2.dp)) {
         for ((title, on) in listOf("K" to !tint, "Tint" to tint)) {
             Text(title, color = if (on) Color.Black else Color.White.copy(alpha = 0.9f), fontSize = 12.sp, fontWeight = FontWeight.Bold,
                  style = if (on) androidx.compose.ui.text.TextStyle.Default else Chrome.shadowed,
@@ -372,7 +374,7 @@ private fun Cells(rows: List<List<Cell>>, fontSize: androidx.compose.ui.unit.Tex
                     Box(
                         Modifier.weight(1f).height(Chrome.cell)
                             .background(if (cell.on) Chrome.chosen(cell.fill) else Chrome.surface, shape)
-                            .border(1.dp, if (cell.on) Color.Transparent else Color.White.copy(alpha = 0.25f), shape)
+                            .border(1.dp, if (cell.on) Color.Transparent else Chrome.border, shape)
                             .combinedClickable(enabled = cell.enabled, onClick = { if (!cell.on || tapOn) onTap(r, c) },
                                                onLongClick = cell.longPress,
                                                onLongClickLabel = cell.longPress?.let { "White balance once" })

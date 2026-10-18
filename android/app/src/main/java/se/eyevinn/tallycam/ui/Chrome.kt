@@ -70,15 +70,16 @@ object Chrome {
     /** Values: tabular digits in the default face (iOS `monospacedDigit`), with the soft shadow. */
     val tabular = TextStyle(fontFeatureSettings = "tnum", shadow = softShadow)
     /**
-     * The side controls' light surface (docs/UI_DESIGN.md, "Light
-     * backgrounds"): black at 25 %, translucent (Android has no backdrop blur
-     * for a composable over a camera preview).
+     * Every chrome surface (docs/UI_DESIGN.md, "See-through, no blur"):
+     * black at 15 % with a thin white border at 40 %, so the picture shows
+     * through.
      */
-    val surface = Color.Black.copy(alpha = 0.25f)
-    /** A chosen cell's fill: its colour at 85 %. */
-    fun chosen(color: Color): Color = color.copy(alpha = 0.85f)
-    /** The rockers' knob: light grey at 80 %. */
-    val knob = Color(0xFFD1D1D6).copy(alpha = 0.80f)
+    val surface = Color.Black.copy(alpha = 0.15f)
+    val border = Color.White.copy(alpha = 0.40f)
+    /** A chosen cell's fill: its colour at 70 %. */
+    fun chosen(color: Color): Color = color.copy(alpha = 0.70f)
+    /** The rockers' knob: light grey at 70 %. */
+    val knob = Color(0xFFD1D1D6).copy(alpha = 0.70f)
 
     /**
      * A side-control group's colour: the rocker's outline and knob ring, the
@@ -102,7 +103,7 @@ object Chrome {
 fun ChromeButton(label: String, active: Boolean = false, size: Dp = Chrome.control, onClick: () -> Unit) {
     Box(
         Modifier.size(size).background(Chrome.surface, CircleShape)
-            .border(1.dp, Color.White.copy(alpha = 0.25f), CircleShape)
+            .border(1.dp, Chrome.border, CircleShape)
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {

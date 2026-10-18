@@ -31,15 +31,19 @@ class DeviceKey private constructor(
 ) {
     val deviceId: String get() = identity.deviceId
 
-    /** The `auth` message (JSON text) answering a `challenge`. */
-    fun authMessage(server: String, nonce: String): String {
-        val payload = deviceKeyAuthPayload(server, nonce, identity.deviceId)
+    /**
+     * The `auth` message (JSON text) answering a `challenge` on the
+     * connection to `controlUrl` (the URL dialled): the signature covers its
+     * host, so another server can not pass the challenge on.
+     */
+    fun authMessage(server: String, nonce: String, controlUrl: String): String {
+        val payload = deviceKeyAuthPayload(server, nonce, identity.deviceId, controlUrl)
         val der = Signature.getInstance("SHA256withECDSA").run {
             initSign(privateKey)
             update(payload)
             sign()
         }
-        return deviceKeyAuthMessage(derToRaw(der))
+        return deviceKeyAuthMessage(derToRaw(der), controlUrl)
     }
 
     companion object {

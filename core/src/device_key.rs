@@ -10,7 +10,8 @@
 //!   id is not derived from its key is refused, so an id can not be claimed
 //!   without the key.
 //! - The server answers a keyed hello with a `challenge` (`server`, `nonce`);
-//!   the device signs [`auth_payload`] and answers with `auth`. Signatures
+//!   the device signs [`auth_payload`], which includes the host it
+//!   connected to, and answers with `auth`. Signatures
 //!   are ECDSA P-256 with SHA-256, `r || s` (64 bytes), standard base64.
 //!
 //! The private key never passes through here on a phone: the app keeps it in
@@ -34,8 +35,8 @@ use crate::protocol::DeviceMessage;
 pub const DEVICE_ID_HEX_LEN: usize = 32;
 
 /// Domain separation tag at the start of every signed `auth` payload. The
-/// `v1` changes if the payload ever does.
-pub const AUTH_CONTEXT: &str = "tallycam-lcp-auth-v1";
+/// version changes when the payload does (v2 added the host).
+pub const AUTH_CONTEXT: &str = "tallycam-lcp-auth-v2";
 
 /// Longest `server` and `nonce` a device signs, in bytes.
 pub const MAX_CHALLENGE_FIELD: usize = 128;
@@ -73,25 +74,72 @@ fn usable_field(s: &str) -> bool {
 }
 
 /// The bytes a device signs to answer a `challenge`: the tag, the server id
-/// and nonce from the challenge, and the device id, joined by `\n`. The
-/// server id ties the signature to that server and the nonce to that one
-/// connection, so it can not be replayed. Refuses fields that could smuggle
-/// a separator.
-pub fn auth_payload(server: &str, nonce: &str, device_id: &str) -> Result<Vec<u8>, KeyError> {
-    if !usable_field(server) || !usable_field(nonce) || !usable_field(device_id) {
+/// and nonce from the challenge, the device id and the host it connected
+/// to ([`auth_host`]), joined by `\n`. The nonce ties the signature to that
+/// one connection, so it can not be replayed. The host is what the device
+/// itself dialled: a server it was led to can not pass the signature on to
+/// another server, which got the connection under its own host. Refuses
+/// fields that could smuggle a separator.
+pub fn auth_payload(
+    server: &str,
+    nonce: &str,
+    device_id: &str,
+    host: &str,
+) -> Result<Vec<u8>, KeyError> {
+    if ![server, nonce, device_id, host]
+        .iter()
+        .all(|f| usable_field(f))
+    {
         return Err(KeyError::BadChallenge);
     }
-    Ok(format!("{AUTH_CONTEXT}\n{server}\n{nonce}\n{device_id}").into_bytes())
+    Ok(format!("{AUTH_CONTEXT}\n{server}\n{nonce}\n{device_id}\n{host}").into_bytes())
 }
 
 /// The `auth` message for a signature (`r || s`, 64 bytes, as CryptoKit's
-/// `rawRepresentation`), as the JSON text to send.
-pub fn auth_message(signature: &[u8]) -> Result<String, KeyError> {
+/// `rawRepresentation`) made for `host`, as the JSON text to send.
+pub fn auth_message(signature: &[u8], host: &str) -> Result<String, KeyError> {
     Signature::from_slice(signature).map_err(|_| KeyError::BadSignatureEncoding)?;
     let msg = DeviceMessage::Auth {
         signature: BASE64.encode(signature),
+        host: host.to_string(),
     };
     serde_json::to_string(&msg).map_err(|_| KeyError::BadSignatureEncoding)
+}
+
+/// The host a device signs for its control URL (`ws://` or `wss://`):
+/// the authority, lowercase, without user info and without the scheme's
+/// default port (`hub.example`, `192.0.2.10:8090`, `[2001:db8::1]:8090`).
+/// None for another scheme or no host.
+pub fn auth_host(control_url: &str) -> Option<String> {
+    let (scheme, rest) = control_url.split_once("://")?;
+    let default_port = match scheme.to_ascii_lowercase().as_str() {
+        "ws" | "http" => ":80",
+        "wss" | "https" => ":443",
+        _ => return None,
+    };
+    let authority = rest.split(['/', '?', '#']).next()?;
+    let authority = authority.rsplit('@').next()?.to_ascii_lowercase();
+    let host = authority.strip_suffix(default_port).unwrap_or(&authority);
+    let bare = host
+        .strip_prefix('[')
+        .map_or(host, |h| h.split(']').next().unwrap_or(""));
+    if bare.is_empty() || bare.starts_with(':') || !usable_field(host) {
+        return None;
+    }
+    Some(host.to_string())
+}
+
+/// A server's view of the host a device reached it by (the `Host` header,
+/// or a proxy's `X-Forwarded-Host`), in [`auth_host`]'s form: lowercase,
+/// and without a port of 80 or 443 (the header has no scheme).
+pub fn normalize_host(host: &str) -> String {
+    let host = host.trim().to_ascii_lowercase();
+    for port in [":80", ":443"] {
+        if let Some(h) = host.strip_suffix(port) {
+            return h.to_string();
+        }
+    }
+    host
 }
 
 /// A device's public key, parsed.
@@ -165,15 +213,17 @@ impl PublicKey {
     }
 
     /// Checks an `auth` answer (base64 signature) to the challenge
-    /// (`server`, `nonce`) from the device `device_id`.
+    /// (`server`, `nonce`) from the device `device_id`, signed for `host`.
+    /// The caller checks that `host` is its own.
     pub fn verify_auth(
         &self,
         server: &str,
         nonce: &str,
         device_id: &str,
+        host: &str,
         signature: &str,
     ) -> Result<(), KeyError> {
-        self.verify(&auth_payload(server, nonce, device_id)?, signature)
+        self.verify(&auth_payload(server, nonce, device_id, host)?, signature)
     }
 }
 
@@ -245,10 +295,11 @@ impl SoftwareKey {
         BASE64.encode(self.sign_raw(message))
     }
 
-    /// The base64 `auth` signature for a challenge; empty for an unusable
-    /// challenge (a server would refuse the answer anyway).
-    pub fn sign_auth(&self, server: &str, nonce: &str) -> String {
-        match auth_payload(server, nonce, &self.public_key().device_id()) {
+    /// The base64 `auth` signature for a challenge, for `host` (what the
+    /// device connected to, [`auth_host`]); empty for an unusable challenge
+    /// (a server would refuse the answer anyway).
+    pub fn sign_auth(&self, server: &str, nonce: &str, host: &str) -> String {
+        match auth_payload(server, nonce, &self.public_key().device_id(), host) {
             Ok(payload) => self.sign(&payload),
             Err(_) => String::new(),
         }
@@ -278,24 +329,32 @@ mod tests {
         assert_eq!(BASE64.decode(&b64).unwrap().len(), 65);
         assert_eq!(device_id(&b64).as_deref(), Some(id.as_str()));
 
-        let sig = key.sign_auth("srv", "nonce1");
+        let sig = key.sign_auth("srv", "nonce1", "hub");
         let parsed = PublicKey::from_base64(&b64).unwrap();
-        assert_eq!(parsed.verify_auth("srv", "nonce1", &id, &sig), Ok(()));
         assert_eq!(
-            parsed.verify_auth("srv", "nonce2", &id, &sig),
+            parsed.verify_auth("srv", "nonce1", &id, "hub", &sig),
+            Ok(())
+        );
+        assert_eq!(
+            parsed.verify_auth("srv", "nonce2", &id, "hub", &sig),
             Err(KeyError::SignatureMismatch)
         );
         assert_eq!(
-            parsed.verify_auth("other", "nonce1", &id, &sig),
+            parsed.verify_auth("other", "nonce1", &id, "hub", &sig),
+            Err(KeyError::SignatureMismatch)
+        );
+        // Signed for another host: relayed by a server it was led to.
+        assert_eq!(
+            parsed.verify_auth("srv", "nonce1", &id, "evil", &sig),
             Err(KeyError::SignatureMismatch)
         );
         assert_eq!(
-            parsed.verify_auth("srv", "nonce1", &id, "bm90IGEgc2ln"),
+            parsed.verify_auth("srv", "nonce1", &id, "hub", "bm90IGEgc2ln"),
             Err(KeyError::BadSignatureEncoding)
         );
         let other = self::key(8).public_key();
         assert_eq!(
-            other.verify_auth("srv", "nonce1", &id, &sig),
+            other.verify_auth("srv", "nonce1", &id, "hub", &sig),
             Err(KeyError::SignatureMismatch)
         );
     }
@@ -303,27 +362,73 @@ mod tests {
     #[test]
     fn payload_refuses_fields_that_could_carry_a_separator() {
         assert_eq!(
-            auth_payload("s", "n", "d").unwrap(),
-            b"tallycam-lcp-auth-v1\ns\nn\nd".to_vec()
+            auth_payload("s", "n", "d", "h").unwrap(),
+            b"tallycam-lcp-auth-v2\ns\nn\nd\nh".to_vec()
         );
-        assert_eq!(auth_payload("s\nx", "n", "d"), Err(KeyError::BadChallenge));
-        assert_eq!(auth_payload("s", "", "d"), Err(KeyError::BadChallenge));
-        assert_eq!(auth_payload("s", "n", "a b"), Err(KeyError::BadChallenge));
+        assert_eq!(
+            auth_payload("s\nx", "n", "d", "h"),
+            Err(KeyError::BadChallenge)
+        );
+        assert_eq!(auth_payload("s", "", "d", "h"), Err(KeyError::BadChallenge));
+        assert_eq!(
+            auth_payload("s", "n", "a b", "h"),
+            Err(KeyError::BadChallenge)
+        );
+        assert_eq!(
+            auth_payload("s", "n", "d", "h\nx"),
+            Err(KeyError::BadChallenge)
+        );
         let long = "x".repeat(MAX_CHALLENGE_FIELD + 1);
-        assert_eq!(auth_payload(&long, "n", "d"), Err(KeyError::BadChallenge));
+        assert_eq!(
+            auth_payload(&long, "n", "d", "h"),
+            Err(KeyError::BadChallenge)
+        );
+    }
+
+    #[test]
+    fn the_signed_host_is_the_authority_as_the_server_sees_it() {
+        for (url, host) in [
+            (
+                "wss://Hub.Example/lcp/v0/device?token=x",
+                Some("hub.example"),
+            ),
+            ("wss://hub.example:443/x", Some("hub.example")),
+            ("ws://hub.example:80", Some("hub.example")),
+            (
+                "ws://192.0.2.10:8090/lcp/v0/device",
+                Some("192.0.2.10:8090"),
+            ),
+            ("wss://hub.example:8443/", Some("hub.example:8443")),
+            ("ws://[2001:db8::1]:8090/d", Some("[2001:db8::1]:8090")),
+            ("ws://user@hub.example/d", Some("hub.example")),
+            ("ws://", None),
+            ("ws://:8090/d", None),
+            ("srt://hub.example:9000", None),
+            ("hub.example", None),
+        ] {
+            assert_eq!(auth_host(url).as_deref(), host, "{url}");
+        }
+        assert_eq!(normalize_host("Hub.Example:443"), "hub.example");
+        assert_eq!(normalize_host("hub.example:80"), "hub.example");
+        assert_eq!(normalize_host("192.0.2.10:8090"), "192.0.2.10:8090");
+        assert_eq!(normalize_host("[2001:db8::1]:443"), "[2001:db8::1]");
     }
 
     #[test]
     fn auth_message_carries_the_signature() {
         let key = key(9);
         let raw = key.sign_raw(b"x");
-        let text = auth_message(&raw).unwrap();
+        let text = auth_message(&raw, "hub.example").unwrap();
         let msg: DeviceMessage = serde_json::from_str(&text).unwrap();
-        let DeviceMessage::Auth { signature } = msg else {
+        let DeviceMessage::Auth { signature, host } = msg else {
             panic!("not auth: {text}")
         };
+        assert_eq!(host, "hub.example");
         assert_eq!(key.public_key().verify(b"x", &signature), Ok(()));
-        assert_eq!(auth_message(&[0; 10]), Err(KeyError::BadSignatureEncoding));
+        assert_eq!(
+            auth_message(&[0; 10], "h"),
+            Err(KeyError::BadSignatureEncoding)
+        );
     }
 
     #[test]
@@ -348,7 +453,13 @@ mod tests {
         let key = PublicKey::from_base64(&s("public_key")).unwrap();
         assert_eq!(key.device_id(), s("device_id"));
         assert_eq!(
-            key.verify_auth(&s("server"), &s("nonce"), &s("device_id"), &s("signature")),
+            key.verify_auth(
+                &s("server"),
+                &s("nonce"),
+                &s("device_id"),
+                &s("host"),
+                &s("signature")
+            ),
             Ok(())
         );
     }

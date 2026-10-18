@@ -18,7 +18,9 @@ use serde_json::{Map, Value};
 /// (0.2.0) ownership of exposure, colour and focus. 3 is 2 without
 /// ownership: the server and the operator both change any control. An
 /// `ownership` message from a version 2 phone is an unknown type, ignored.
-pub const PROTOCOL_VERSION: u32 = 3;
+/// 4 binds `auth` to the host the device connected to (`auth.host`, in the
+/// signed payload), so a server can not pass a challenge on to another.
+pub const PROTOCOL_VERSION: u32 = 4;
 /// The version whose phones (0.2.0) refuse exposure, colour and focus from
 /// a server that does not own them: told to update the app.
 pub const OWNERSHIP_PROTOCOL: u32 = 2;
@@ -309,9 +311,11 @@ pub enum DeviceMessage {
     Log(Log),
     /// Answer to `challenge`: the device key's signature over
     /// [`crate::device_key::auth_payload`], P-256 ECDSA with SHA-256,
-    /// `r || s` (64 bytes), standard base64.
+    /// `r || s` (64 bytes), standard base64, and the host it signed
+    /// ([`crate::device_key::auth_host`] of the URL it connected to).
     Auth {
         signature: String,
+        host: String,
     },
     Ping(Ping),
     Pong(Ping),
@@ -667,11 +671,12 @@ mod tests {
             .contains("public_key"));
 
         let auth: DeviceMessage =
-            serde_json::from_str(r#"{"type":"auth","signature":"c2ln"}"#).unwrap();
+            serde_json::from_str(r#"{"type":"auth","signature":"c2ln","host":"h"}"#).unwrap();
         assert_eq!(
             auth,
             DeviceMessage::Auth {
-                signature: "c2ln".into()
+                signature: "c2ln".into(),
+                host: "h".into(),
             }
         );
         let challenge = ServerToDevice::Challenge {

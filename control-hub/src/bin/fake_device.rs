@@ -1433,8 +1433,11 @@ async fn run_once(args: &Args, cam: &mut Camera) -> Result<(), String> {
                     println!("fake_device: challenge, but no device key (legacy)");
                     continue;
                 };
-                let signature = key.sign_auth(&server, &nonce);
-                sink.send(text(&DeviceMessage::Auth { signature }))
+                // Signed for the host it dialled, as the apps do.
+                let host =
+                    tallycam_hub::device_key::auth_host(args.url.as_str()).unwrap_or_default();
+                let signature = key.sign_auth(&server, &nonce, &host);
+                sink.send(text(&DeviceMessage::Auth { signature, host }))
                     .await
                     .map_err(send_err)?;
             }

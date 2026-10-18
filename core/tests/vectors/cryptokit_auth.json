@@ -1,8 +1,10 @@
 {
-  "comment" : "Made by CryptoKit P256.Signing.PrivateKey (core/src/device_key.rs test)",
-  "device_id" : "cbdd2da5173c382db5e77591b8f19052",
+  "comment" : "Made by CryptoKit P256.Signing.PrivateKey (core/src/device_key.rs test); payload v2 with host",
+  "device_id" : "3dc025f81d0e6f89c9ee1826146b5f91",
+  "host" : "hub.example:8090",
   "nonce" : "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
-  "public_key" : "BLxFB1xZwxS1RTcEabOdKEU6KJDj0BBk4+UiCOLSjUQ+XRVRp8g4ocqVq7LGxt0vu8Y292Ql3ostD5K2v2K46YQ=",
+  "public_key" : "BKd2ICqqhlOLq1Kp/nf5arIFFzntwTMyHnYWWCmMhglfBYJclj025x1l3EMQtX5NVgooAmBXBld2aTEswd+vdZU=",
   "server" : "0123456789abcdef0123456789abcdef",
-  "signature" : "Hf/COp8I2g094rNxoDmza8m/WSAhQzb6SqXySonC1Mbog0Ckyoc5sFsJu0eyaAmpRfFX2B/StEeicuFKk/FJYA=="
+  "signature" : "LYJWbPaJrJKRftruwWoD0AqYDc+sM6e4i4m3bQb/2L41qRH8rC5IhnlYdoKpvxCtSJa3YCD/TG1QsHtmKeh84Q=="
 }
+

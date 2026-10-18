@@ -205,9 +205,9 @@ trusts a claimed device id alone. Code is the source of truth
 
 ```
 phone                                   server
-  │ hello {protocol: 3, device: {id, ...}, public_key, controls, commands}
+  │ hello {protocol: 4, device: {id, ...}, public_key, controls, commands}
   │ ◀─ challenge {server, nonce}
-  │ auth {signature}
+  │ auth {signature, host}
   │ ◀─ tally, preview          (admitted: the normal flow)
   │ state, status, ...
 ```
@@ -218,12 +218,19 @@ phone                                   server
 - The phone signs, with ECDSA P-256 and SHA-256, the UTF-8 bytes
 
   ```
-  tallycam-lcp-auth-v1\n<server>\n<nonce>\n<device id>
+  tallycam-lcp-auth-v2\n<server>\n<nonce>\n<device id>\n<host>
   ```
 
-  and answers `{"type": "auth", "signature": "<base64 r || s, 64 bytes>"}`.
-  The nonce makes every signature good for one connection only; the server
-  id and the tag keep it from meaning anything elsewhere.
+  and answers `{"type": "auth", "signature": "<base64 r || s, 64 bytes>",
+  "host": "<host>"}`. `host` is the authority of the control URL the phone
+  itself dialled, lowercase, without user info and without the scheme's
+  default port (`hub.example`, `192.0.2.10:8090`). The nonce makes every
+  signature good for one connection only. The host keeps a server the phone
+  was led to from passing the challenge on to another server: the server
+  admits only an `auth` signed for the host its connection reached (`Host`,
+  or a proxy's `X-Forwarded-Host`, compared without a port of 80 or 443).
+  The phone answers one `challenge` per connection, before admission
+  (protocol 4).
 - The server admits the phone after a valid `auth`. The phone counts any
   message other than `challenge` and `message` as admission (the hub sends
   `tally` and `preview` at once); with no `challenge` within 3 s of its
@@ -237,7 +244,8 @@ phone                                   server
   with another key closes the connection.
 - A refusal is a `message` with the reason, then the server closes the
   socket: not invited, invite used or expired, key not usable, signature
-  not verified, or an app without a key where one is required.
+  not verified, signed for another host, or an app without a key where one
+  is required.
 
 ### Admission
 
@@ -268,7 +276,7 @@ phone                                   server
 ```json
 {
   "type": "hello",
-  "protocol": 3,
+  "protocol": 4,
   "public_key": "BLxFB1xZ...base64 SEC1 P-256...",
   "device": {
     "id": "cbdd2da5173c382db5e77591b8f19052",

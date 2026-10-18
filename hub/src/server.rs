@@ -321,9 +321,24 @@ pub struct DeviceConnection {
     pub addr: SocketAddr,
     /// The `token` query parameter, if any.
     pub token: Option<String>,
-    /// The `Host` header of the upgrade request: the name or address the
-    /// phone reaches this server by (see [`Hub::device_host`]).
+    /// The host the phone reached this server by: the upgrade request's
+    /// `X-Forwarded-Host` behind a proxy, else its `Host` ([`request_host`]).
+    /// A keyed phone's `auth` must be signed for it, and it is
+    /// [`Hub::device_host`].
     pub host: Option<String>,
+}
+
+/// The host a request reached this server by: the first `X-Forwarded-Host`
+/// (a proxy that rewrites `Host`), else `Host`.
+pub fn request_host(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get("x-forwarded-host")
+        .and_then(|h| h.to_str().ok())
+        .and_then(|h| h.split(',').next())
+        .map(str::trim)
+        .filter(|h| !h.is_empty())
+        .or_else(|| headers.get(header::HOST).and_then(|h| h.to_str().ok()))
+        .map(str::to_string)
 }
 
 /// `ws` with the hub's message size limit ([`MAX_MESSAGE_BYTES`]).
@@ -339,10 +354,7 @@ async fn device_ws(
     Query(q): Query<DeviceQuery>,
     headers: axum::http::HeaderMap,
 ) -> impl IntoResponse {
-    let host = headers
-        .get(header::HOST)
-        .and_then(|h| h.to_str().ok())
-        .map(str::to_string);
+    let host = request_host(&headers);
     let conn = DeviceConnection {
         addr,
         token: q.token,
@@ -582,14 +594,20 @@ pub async fn device_session_for(socket: WebSocket, hub: Arc<Hub>, connection: De
                 **hello = new;
                 continue;
             }
-            (DeviceMessage::Auth { signature }, Phase::Challenged { .. }) => {
+            (
+                DeviceMessage::Auth {
+                    signature,
+                    host: signed,
+                },
+                Phase::Challenged { .. },
+            ) => {
                 let Phase::Challenged {
                     hello, challenge, ..
                 } = std::mem::replace(&mut phase, Phase::Hello)
                 else {
                     unreachable!()
                 };
-                (*hello, Some((challenge, signature)))
+                (*hello, Some((challenge, signature, signed)))
             }
             (DeviceMessage::Hello(hello), Phase::Admitted { id, key }) => {
                 if &hello.device.id != id {
@@ -617,9 +635,11 @@ pub async fn device_session_for(socket: WebSocket, hub: Arc<Hub>, connection: De
                 continue;
             }
         };
-        let proof = proof.as_ref().map(|(challenge, signature)| Proof {
+        let proof = proof.as_ref().map(|(challenge, signature, signed)| Proof {
             challenge,
             signature: signature.as_str(),
+            host: signed.as_str(),
+            reached: host.as_deref(),
         });
         let admission = match hub.admit(&hello, proof, token.as_deref()) {
             Ok(admission) => admission,

@@ -62,21 +62,28 @@ pub fn device_key_identity(public_key_x963: Vec<u8>) -> Result<DeviceKeyIdentity
     })
 }
 
-/// The bytes to sign for a `challenge` (its `server` and `nonce`).
+/// The bytes to sign for a `challenge` (its `server` and `nonce`), on the
+/// connection to `control_url` (the URL the app dialled, ws:// or wss://).
 #[uniffi::export]
 pub fn device_key_auth_payload(
     server: String,
     nonce: String,
     device_id: String,
+    control_url: String,
 ) -> Result<Vec<u8>, DeviceKeyError> {
-    Ok(core_key::auth_payload(&server, &nonce, &device_id)?)
+    let host = core_key::auth_host(&control_url).ok_or(core_key::KeyError::BadChallenge)?;
+    Ok(core_key::auth_payload(&server, &nonce, &device_id, &host)?)
 }
 
 /// The `auth` message (JSON text) for a raw `r || s` signature (CryptoKit
-/// `rawRepresentation`).
+/// `rawRepresentation`) over [`device_key_auth_payload`] for `control_url`.
 #[uniffi::export]
-pub fn device_key_auth_message(signature: Vec<u8>) -> Result<String, DeviceKeyError> {
-    Ok(core_key::auth_message(&signature)?)
+pub fn device_key_auth_message(
+    signature: Vec<u8>,
+    control_url: String,
+) -> Result<String, DeviceKeyError> {
+    let host = core_key::auth_host(&control_url).ok_or(core_key::KeyError::BadChallenge)?;
+    Ok(core_key::auth_message(&signature, &host)?)
 }
 
 /// Does `signature` (raw `r || s`) by `public_key_x963` verify over
@@ -102,8 +109,14 @@ mod tests {
         assert_eq!(id.device_id, public.device_id());
         assert_eq!(id.public_key, public.to_base64());
 
-        let payload =
-            device_key_auth_payload("srv".into(), "nonce".into(), id.device_id.clone()).unwrap();
+        let url = "wss://Hub.Example:443/lcp/v0/device?token=t";
+        let payload = device_key_auth_payload(
+            "srv".into(),
+            "nonce".into(),
+            id.device_id.clone(),
+            url.into(),
+        )
+        .unwrap();
         let raw = key.sign_raw(&payload);
         assert!(device_key_verify(
             x963.clone(),
@@ -111,20 +124,26 @@ mod tests {
             raw.to_vec()
         ));
         assert!(!device_key_verify(x963, b"other".to_vec(), raw.to_vec()));
-        let text = device_key_auth_message(raw.to_vec()).unwrap();
+        let text = device_key_auth_message(raw.to_vec(), url.into()).unwrap();
         let v: serde_json::Value = serde_json::from_str(&text).unwrap();
         assert_eq!(v["type"], "auth");
+        assert_eq!(v["host"], "hub.example");
         assert_eq!(
             public.verify_auth(
                 "srv",
                 "nonce",
                 &id.device_id,
+                "hub.example",
                 v["signature"].as_str().unwrap()
             ),
             Ok(())
         );
         assert!(matches!(
-            device_key_auth_payload("a\nb".into(), "n".into(), id.device_id),
+            device_key_auth_payload("a\nb".into(), "n".into(), id.device_id.clone(), url.into()),
+            Err(DeviceKeyError::Challenge)
+        ));
+        assert!(matches!(
+            device_key_auth_payload("s".into(), "n".into(), id.device_id, "srt://x".into()),
             Err(DeviceKeyError::Challenge)
         ));
         assert!(matches!(

@@ -34,7 +34,9 @@ class LcpClient(private val listener: Listener) {
         .build()
     /** Set on main; read on the preview thread too ([sendDroppable]). */
     @Volatile private var socket: WebSocket? = null
-    private var url: String? = null
+    /** The control URL this client dials (an `auth` is signed for its host). */
+    var url: String? = null
+        private set
     private var backoffMs = 1000L
     private var generation = 0
 

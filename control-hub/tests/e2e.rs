@@ -685,13 +685,26 @@ fn keyed_hello(key: &SoftwareKey, name: &str) -> Value {
            "public_key":public.to_base64()})
 }
 
+/// The host a test socket reached the hub by (its `Host` header).
+fn hub_host(ws: &Ws) -> String {
+    match ws.get_ref() {
+        MaybeTlsStream::Plain(tcp) => tcp.peer_addr().unwrap().to_string(),
+        _ => unreachable!("tests use plain sockets"),
+    }
+}
+
 /// Says hello with `key`, answers the challenge, and returns the first
 /// message after it: `tally` when admitted, `message` when refused.
 async fn handshake(ws: &mut Ws, key: &SoftwareKey, name: &str) -> Value {
     send(ws, keyed_hello(key, name)).await;
     let c = wait_for(ws, 3, "challenge", |v| v["type"] == "challenge").await;
-    let signature = key.sign_auth(c["server"].as_str().unwrap(), c["nonce"].as_str().unwrap());
-    send(ws, json!({"type":"auth","signature":signature})).await;
+    let host = hub_host(ws);
+    let signature = key.sign_auth(
+        c["server"].as_str().unwrap(),
+        c["nonce"].as_str().unwrap(),
+        &host,
+    );
+    send(ws, json!({"type":"auth","signature":signature,"host":host})).await;
     wait_for(ws, 3, "tally or refusal", |v| {
         v["type"] == "tally" || v["type"] == "message"
     })
@@ -775,15 +788,17 @@ async fn device_keys_and_invites() {
     let mut ws = connect(addr, "/lcp/v0/device").await;
     send(&mut ws, keyed_hello(&key, "Invited")).await;
     let first = wait_for(&mut ws, 3, "challenge", |v| v["type"] == "challenge").await;
+    let host = hub_host(&ws);
     let old = key.sign_auth(
         first["server"].as_str().unwrap(),
         first["nonce"].as_str().unwrap(),
+        &host,
     );
     drop(ws);
     let mut ws = connect(addr, "/lcp/v0/device").await;
     send(&mut ws, keyed_hello(&key, "Invited")).await;
     wait_for(&mut ws, 3, "challenge", |v| v["type"] == "challenge").await;
-    send(&mut ws, json!({"type":"auth","signature":old})).await;
+    send(&mut ws, json!({"type":"auth","signature":old,"host":host})).await;
     let m = wait_for(&mut ws, 3, "refusal", |v| v["type"] == "message").await;
     assert!(
         m["text"].as_str().unwrap().contains("did not verify"),

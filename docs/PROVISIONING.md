@@ -74,9 +74,10 @@ phone                                   join server (Open Live or Strom)
   derived from the key. Every connection answers a server challenge with a
   signature, so nothing long-lived is a bearer secret. The invite token is
   spent once, binding the key; afterwards the key alone admits the phone
-  until an operator forgets it. Open: TLS (without it a man in the middle
-  can still relay a challenge or take over an admitted socket), and binding
-  the challenge to the URL the phone dialed once there is TLS.
+  until an operator forgets it. Since protocol 4 the signature covers the
+  host the phone dialled, so a server it was led to can not relay the
+  challenge to another. Open: TLS (without it a man in the middle on the
+  same host can still take over an admitted socket).
 - **Attestation (optional per invite).** Apple App Attest / Google Play
   Integrity prove the request comes from the real TallyCam app on a real
   device. Useful against scripted abuse of open crowd invites.

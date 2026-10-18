@@ -73,19 +73,28 @@ fn admit_ticket(
     token: Option<&str>,
 ) -> Result<Admission, AdmitError> {
     let challenge = hub.challenge();
-    let payload =
-        crate::device_key::auth_payload(&challenge.server, &challenge.nonce, &hello.device.id)
-            .unwrap();
+    let payload = crate::device_key::auth_payload(
+        &challenge.server,
+        &challenge.nonce,
+        &hello.device.id,
+        HOST,
+    )
+    .unwrap();
     let signature = key.sign(&payload);
     hub.admit(
         hello,
         Some(Proof {
             challenge: &challenge,
             signature: &signature,
+            host: HOST,
+            reached: Some(HOST),
         }),
         token,
     )
 }
+
+/// The host test phones dialled and reached.
+const HOST: &str = "hub.test:8090";
 
 /// A device without a key joining an open hub, as a phone before device keys.
 fn join(hub: &Hub, conn: u64, hello: Hello, tx: DeviceTx) {
@@ -516,10 +525,12 @@ fn a_signature_works_for_one_challenge_only() {
 
     // A signature captured from one session...
     let first = hub.challenge();
-    let signature = key.sign_auth(&first.server, &first.nonce);
+    let signature = key.sign_auth(&first.server, &first.nonce, HOST);
     let ok = Proof {
         challenge: &first,
         signature: &signature,
+        host: HOST,
+        reached: Some(HOST),
     };
     assert_eq!(hub.admit(&h, Some(ok), None).map(|_| ()), Ok(()));
     // ...does not answer the next challenge.
@@ -528,6 +539,8 @@ fn a_signature_works_for_one_challenge_only() {
     let replay = Proof {
         challenge: &second,
         signature: &signature,
+        host: HOST,
+        reached: Some(HOST),
     };
     assert_eq!(
         hub.admit(&h, Some(replay), None),
@@ -536,13 +549,15 @@ fn a_signature_works_for_one_challenge_only() {
     // Nor a challenge from another server.
     let other_hub = Hub::new();
     let foreign = other_hub.challenge();
-    let signature = key.sign_auth(&foreign.server, &foreign.nonce);
+    let signature = key.sign_auth(&foreign.server, &foreign.nonce, HOST);
     assert_eq!(
         hub.admit(
             &h,
             Some(Proof {
                 challenge: &foreign,
-                signature: &signature
+                signature: &signature,
+                host: HOST,
+                reached: Some(HOST),
             }),
             None
         ),
@@ -1489,4 +1504,55 @@ fn connect_phone_keeping(hub: &Hub, id: &str) -> mpsc::Receiver<ServerToDevice> 
     join(hub, conn, hello(id, id), tx);
     CONNS.with(|c| c.borrow_mut().insert(id.to_string(), conn));
     rx
+}
+
+#[test]
+fn a_challenge_passed_on_by_another_server_is_refused() {
+    // A rogue server the phone was led to forwards this hub's challenge to
+    // it and the signature back: the phone signed the rogue's host, and
+    // this hub got the connection under its own.
+    let hub = Hub::new();
+    let key = crate::device_key::generate();
+    let h = keyed_hello(&key, "Cam 1");
+    let challenge = hub.challenge();
+    let signature = key.sign_auth(&challenge.server, &challenge.nonce, "rogue.example");
+    let relayed = Proof {
+        challenge: &challenge,
+        signature: &signature,
+        host: "rogue.example",
+        reached: Some("hub.example"),
+    };
+    assert_eq!(
+        hub.admit(&h, Some(relayed), None).err(),
+        Some(AdmitError::WrongHost)
+    );
+    // Claiming this hub's host does not help: the signature is the rogue's.
+    let lying = Proof {
+        host: "hub.example",
+        ..relayed
+    };
+    assert_eq!(
+        hub.admit(&h, Some(lying), None).err(),
+        Some(AdmitError::BadSignature)
+    );
+    // No host known for the connection: refused.
+    let unknown = Proof {
+        reached: None,
+        ..relayed
+    };
+    assert_eq!(
+        hub.admit(&h, Some(unknown), None).err(),
+        Some(AdmitError::WrongHost)
+    );
+
+    // The real thing, with the port the phone left out (wss, 443).
+    let challenge = hub.challenge();
+    let signature = key.sign_auth(&challenge.server, &challenge.nonce, "hub.example");
+    let direct = Proof {
+        challenge: &challenge,
+        signature: &signature,
+        host: "hub.example",
+        reached: Some("Hub.Example:443"),
+    };
+    assert!(hub.admit(&h, Some(direct), None).is_ok());
 }

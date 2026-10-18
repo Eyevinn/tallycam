@@ -21,6 +21,10 @@ pub enum AdmitError {
     BadSignature,
     /// A new device, and the hub already lists [`MAX_DEVICES`].
     TooManyDevices,
+    /// The device signed in for another host than the one this connection
+    /// reached: a challenge passed on by another server, or a URL that
+    /// differs from what the hub knows itself by.
+    WrongHost,
 }
 
 impl fmt::Display for AdmitError {
@@ -38,6 +42,9 @@ impl fmt::Display for AdmitError {
             AdmitError::TooManyDevices => {
                 f.write_str("this server lists too many cameras; forget some on the server")
             }
+            AdmitError::WrongHost => f.write_str(
+                "this camera signed in to another server address; check the server address",
+            ),
         }
     }
 }
@@ -61,12 +68,17 @@ impl Challenge {
     }
 }
 
-/// What a device presented to prove its key: the challenge it was sent and
-/// its `auth` signature.
+/// What a device presented to prove its key: the challenge it was sent,
+/// its `auth` signature and the host it signed for, and the host this
+/// connection reached (`Host`, or a proxy's `X-Forwarded-Host`).
 #[derive(Debug, Clone, Copy)]
 pub struct Proof<'a> {
     pub challenge: &'a Challenge,
     pub signature: &'a str,
+    /// `auth.host`: the host the device signed for.
+    pub host: &'a str,
+    /// The host the connection came in by; None: unknown, refused.
+    pub reached: Option<&'a str>,
 }
 
 impl std::error::Error for AdmitError {}
@@ -152,10 +164,21 @@ impl Hub {
         if proof.challenge.server != self.server_id {
             return Err(AdmitError::BadSignature);
         }
+        // The device signed the host it dialled; a server that relays the
+        // challenge got this connection under its own host instead.
+        let reached = proof.reached.map(crate::device_key::normalize_host);
+        if reached.as_deref() != Some(crate::device_key::normalize_host(proof.host).as_str()) {
+            warn!(
+                "Device {id}: signed for host {:?}, connection reached {:?}",
+                proof.host, proof.reached
+            );
+            return Err(AdmitError::WrongHost);
+        }
         key.verify_auth(
             &proof.challenge.server,
             &proof.challenge.nonce,
             id,
+            proof.host,
             proof.signature,
         )
         .map_err(|e: KeyError| {

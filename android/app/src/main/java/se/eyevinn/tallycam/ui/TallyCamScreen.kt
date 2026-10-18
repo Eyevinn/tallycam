@@ -32,6 +32,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -76,6 +77,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import se.eyevinn.tallycam.AppModel
+import se.eyevinn.tallycam.control.ProvisioningLink
 import se.eyevinn.tallycam.control.Shading
 import se.eyevinn.tallycam.media.LiveStream
 
@@ -90,7 +92,8 @@ import se.eyevinn.tallycam.media.LiveStream
  * centre in portrait). Everything else is in Settings.
  */
 @Composable
-fun TallyCamScreen(model: AppModel?, permitted: Boolean, onScan: () -> Unit) {
+fun TallyCamScreen(model: AppModel?, permitted: Boolean, onScan: () -> Unit, pendingLink: ProvisioningLink? = null,
+                   onJoin: (ProvisioningLink) -> Unit = {}, onDecline: () -> Unit = {}) {
     MaterialTheme(colorScheme = darkColorScheme()) {
         Box(Modifier.fillMaxSize().background(Color.Black)) {
             if (model == null) {
@@ -108,6 +111,7 @@ fun TallyCamScreen(model: AppModel?, permitted: Boolean, onScan: () -> Unit) {
                 return@Box
             }
             ShootingScreen(model, onScan)
+            pendingLink?.let { JoinDialog(it, live = model.streamState != LiveStream.State.IDLE, onJoin, onDecline) }
         }
     }
 }
@@ -593,3 +597,33 @@ private fun ConnectCard(onScan: () -> Unit, onSettings: () -> Unit, onDismiss: (
         }
     }
 }
+
+/**
+ * "Join <hub>?" before a connect link from a QR code takes the camera to
+ * another control hub (or the first): the hub and where the stream goes,
+ * so a stray code never takes the camera over (D1). A link for the hub in
+ * use applies without asking.
+ */
+@Composable
+private fun JoinDialog(link: ProvisioningLink, live: Boolean, onJoin: (ProvisioningLink) -> Unit, onDecline: () -> Unit) {
+    val hub = hostLabel(link.controlUrl) ?: link.controlUrl
+    AlertDialog(
+        onDismissRequest = onDecline,
+        title = { Text("Join $hub?") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("Control hub: $hub")
+                Text(link.srtUrl?.let { "Stream to: ${hostLabel(it) ?: it}" } ?: "Stream: unchanged")
+                if (live && link.srtUrl != null) {
+                    Text("The stream URL applies on the next Go Live", color = Color.White.copy(alpha = 0.7f), fontSize = 13.sp)
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = { onJoin(link) }) { Text("Join") } },
+        dismissButton = { TextButton(onClick = onDecline) { Text("Cancel") } },
+    )
+}
+
+/** The host, and the port when the URL has one. */
+private fun hostLabel(url: String): String? = runCatching { android.net.Uri.parse(url) }.getOrNull()
+    ?.takeIf { !it.host.isNullOrEmpty() }?.let { if (it.port > 0) "${it.host}:${it.port}" else it.host }

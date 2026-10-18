@@ -124,6 +124,13 @@ Right side shown; the left one is its mirror image.
   switch; the chosen group is filled white. Tap one to put it on this side.
   Both sides may not run the same group: choosing the group the other side
   runs swaps the two. The rocker's job is never a guess.
+- **A colour per group,** so the usual setup is recognised at a glance (blue
+  left, red right by default): zoom blue, exposure red, white balance
+  violet, focus green. It marks only the control: the rocker's outline and
+  knob ring, the chosen selector segment (filled in the colour, white text)
+  and the underline of the group's values in the values row. Values never
+  take it as text colour, so yellow (held), red and green (tally), cyan
+  (hub change) and orange (warning) keep their meaning.
 - **Under the selector,** beside the lower half of the rocker: the mode
   switch for exposure, white balance and focus; the lens buttons for zoom
   (only on a camera with more than one lens). The K/Tint switch (white
@@ -216,6 +223,8 @@ row's footer says why instead of the usual text.
   outline at 25 %; rockers 180 pt long (shorter on a landscape phone, both the
   same).
 - Rows: 34 pt high, dark capsules, tabular digits, white text.
+- Group colours (controls only): zoom blue `#3B82F6`, exposure red
+  `#EF4444`, white balance violet `#A855F7`, focus green `#22C55E`.
 - Colours: yellow manual or locked, red program and clipping, green preview,
   orange warnings and connecting, cyan a change from the hub (a 1 s flash).
 - Spacing from one set of constants (iOS `Chrome`, Android the same names):

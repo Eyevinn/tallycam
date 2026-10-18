@@ -137,7 +137,7 @@ private fun items(model: AppModel): List<Item> {
             else -> Item(iso, tone = held, group = "exposure", ids = ids)
         }
     }
-    v.optDouble("shutter", 0.0).takeIf { it > 0 }?.let { list += Item("1/${it.toLong()}", tone = held, group = "exposure", ids = listOf("shutter")) }
+    v.optDouble("shutter", 0.0).takeIf { it > 0 }?.let { list += Item("1/${kotlin.math.round(it).toLong()}", tone = held, group = "exposure", ids = listOf("shutter")) }
     val bias = v.optDouble("ev_bias", 0.0)
     if (!exposureHeld && abs(bias) >= 0.05) list += Item("%+.1f EV".format(bias), group = "exposure", ids = listOf("ev_bias"))
     if (v.has("wb_mode")) list += colour(v)

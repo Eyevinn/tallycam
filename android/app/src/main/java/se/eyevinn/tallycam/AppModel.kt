@@ -258,8 +258,6 @@ class AppModel(private val context: Context) : LcpClient.Listener, LiveStream.Li
 
     // MARK: Live
 
-    fun toggleLive() = if (streamState == LiveStream.State.IDLE) goLive() else stopLive()
-
     fun goLive(): String? {
         // Asked again while a stop is still under way: start once it is done.
         if (stopping) {

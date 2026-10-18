@@ -1,5 +1,6 @@
 package se.eyevinn.tallycam.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -52,9 +53,11 @@ private val Orange = Color(0xFFFF9F0A)
 private val Red = Color(0xFFFF453A)
 
 /**
- * Settings, as on iOS (ios/TallyCam/Views/SettingsView.swift): everything not
- * needed while shooting, in the same sections and words: camera name,
- * control hub, stream, clock, about. docs/APPS.md lists what differs.
+ * Settings (docs/UI_DESIGN.md, "Settings"; iOS
+ * ios/TallyCam/Views/SettingsView.swift): everything not needed while
+ * shooting, in the same sections, order and words: camera name, control
+ * hub, stream, exposure, orientation, clock, about. Back is Done.
+ * docs/APPS.md lists what differs.
  */
 @Composable
 fun SettingsScreen(model: AppModel, onScan: () -> Unit, onDone: () -> Unit) {
@@ -75,6 +78,7 @@ fun SettingsScreen(model: AppModel, onScan: () -> Unit, onDone: () -> Unit) {
         if (control != model.settings.controlUrl) model.setControlUrl(control)
         onDone()
     }
+    BackHandler(onBack = ::done)
     Box(Modifier.fillMaxSize().background(Color.Black)) {
         Column(Modifier.fillMaxSize()) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -98,7 +102,9 @@ fun SettingsScreen(model: AppModel, onScan: () -> Unit, onDone: () -> Unit) {
                     AppModel.Link.CONNECTING -> Orange to "Reconnecting"
                     AppModel.Link.NOT_SET_UP -> Color.Gray to "Not set up"
                 }
-                Section("Control hub", "To connect, scan the QR code in the control hub with the phone's camera, or here.", width) {
+                val live = model.streamState != LiveStream.State.IDLE
+                Section("Control hub", if (!live) "To connect, scan the QR code in the control hub here or with the Camera app."
+                                       else "Stop the stream to scan here; the Camera app works while live.", width) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Box(Modifier.size(9.dp).background(linkColor, CircleShape))
                         Text("  $linkText", color = Color.White)
@@ -109,14 +115,13 @@ fun SettingsScreen(model: AppModel, onScan: () -> Unit, onDone: () -> Unit) {
                     Field(control, { control = it }, "ws://host:8090/lcp/v0/device", url = true,
                           onDone = { model.setControlUrl(control) })
                     Divider()
-                    Action("Scan QR code", Color(0xFF0A84FF)) { onScan() }
+                    Action("Scan QR code", Color(0xFF0A84FF), enabled = !live) { onScan() }
                     if (model.link != AppModel.Link.NOT_SET_UP) {
                         Divider()
                         Action("Disconnect and forget server", Red) { confirmForget = true }
                     }
                 }
                 // Stream (SRT).
-                val live = model.streamState != LiveStream.State.IDLE
                 Section("Stream (SRT)", (if (!live) "Set by the QR code. Edit only if you know the address." else "Stop the stream to change the address.") +
                         " Adaptive bitrate lowers the video bitrate when the network cannot carry it, and raises it again up to the bitrate set.", width) {
                     Field(srt, { srt = it }, "srt://host:port?streamid=...", url = true, enabled = !live)
@@ -143,10 +148,10 @@ fun SettingsScreen(model: AppModel, onScan: () -> Unit, onDone: () -> Unit) {
                 val mainsOptions = model.mainsOptions
                 if (mainsOptions.size > 1) {
                     val editable = !model.hubProduction && !live
-                    Section("Mains", when {
+                    Section("Exposure", when {
                         model.hubProduction -> "Set by the control hub."
                         live -> "Stop the stream to change."
-                        else -> "The shutter follows the mains frequency so mains-powered light does not flicker. Off outdoors, where the shutter is free."
+                        else -> "The shutter follows the mains frequency so mains-lit light does not flicker. Off outdoors, where the shutter is free."
                     }, width) {
                         Segmented(mainsOptions.map { it to if (it == 0) "Off" else "$it Hz" },
                                   if (model.hubProduction) model.shading.values.optInt("mains_hz", model.ownMainsHz) else model.ownMainsHz, editable) { model.setOwnMains(it) }
@@ -256,9 +261,9 @@ private fun Labeled(label: String, value: String, mono: Boolean = false) {
 }
 
 @Composable
-private fun Action(label: String, color: Color, onClick: () -> Unit) {
-    TextButton(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
-        Text(label, color = color, modifier = Modifier.fillMaxWidth())
+private fun Action(label: String, color: Color, enabled: Boolean = true, onClick: () -> Unit) {
+    TextButton(onClick = onClick, enabled = enabled, modifier = Modifier.fillMaxWidth()) {
+        Text(label, color = if (enabled) color else Secondary, modifier = Modifier.fillMaxWidth())
     }
 }
 

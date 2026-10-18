@@ -357,6 +357,7 @@ pub struct Hub {
     store: Arc<dyn DeviceStore>,
     /// Phone sockets open on this hub and not yet admitted (`server.rs`):
     /// per hub, so one hub's flood does not shut out another's phones.
+    #[cfg_attr(not(feature = "server"), allow(dead_code))]
     pub(crate) unadmitted: Arc<std::sync::atomic::AtomicUsize>,
 }
 

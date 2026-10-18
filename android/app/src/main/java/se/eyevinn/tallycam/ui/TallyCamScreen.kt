@@ -211,15 +211,6 @@ private fun BoxScope.ShootingScreen(model: AppModel, onScan: () -> Unit) {
         val nameInline = maxWidth >= 560.dp
         val rows = if (landscape) 1 else if (nameInline) 2 else 3
         val top = Chrome.rowHeight * rows + Chrome.rowGap * (rows - 1)
-        // Both side controls the same size: segments 30 dp where the screen
-        // allows; on a landscape phone what is left between the top rows and
-        // the bottom row, less the value and K / Tint rows under the rocker;
-        // never from the group shown.
-        // Between the top rows and the bottom row (portrait: the tools row and
-        // the live button under it).
-        val sideHeight = if (landscape) maxHeight - top - Chrome.zoneGap * 2 - Chrome.liveButton
-                         else maxHeight - top - Chrome.zoneGap * 3 - Chrome.control - Chrome.liveButton
-        val metrics = SideMetrics.fitting(sideHeight)
         val nameChip = @Composable { TallyChip(model.tally, model.displayName) }
         val side = @Composable { leftSide: Boolean ->
             (if (leftSide) left else right)?.let { group ->
@@ -227,7 +218,7 @@ private fun BoxScope.ShootingScreen(model: AppModel, onScan: () -> Unit) {
                     // Folded into a tab at the edge; a tap brings it back.
                     EdgeTab(group, leftSide, Modifier.touchable(screenLocked)) { place(shown.show(leftSide)) }
                 } else {
-                    SideControl(model, group, groups, leading = leftSide, metrics = metrics, locked = screenLocked,
+                    SideControl(model, group, groups, leading = leftSide, locked = screenLocked,
                                 onSelect = { place(shown.choose(leftSide, it)) }, modifier = Modifier.touchable(screenLocked))
                 }
             }
@@ -262,7 +253,7 @@ private fun BoxScope.ShootingScreen(model: AppModel, onScan: () -> Unit) {
                 // edge columns centre on the same line.
                 Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(Chrome.gap)) {
                     Column(Modifier.fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(Chrome.zoneGap)) {
-                        Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) { side(true) }
+                        Box(Modifier.weight(1f), contentAlignment = Alignment.BottomStart) { side(true) }
                         Box(Modifier.height(Chrome.liveButton).touchable(screenLocked), contentAlignment = Alignment.BottomStart) {
                             tools()
                         }
@@ -278,15 +269,15 @@ private fun BoxScope.ShootingScreen(model: AppModel, onScan: () -> Unit) {
                     Column(Modifier.fillMaxHeight(), horizontalAlignment = Alignment.End,
                            verticalArrangement = Arrangement.spacedBy(Chrome.zoneGap)) {
                         // Keeps the live button in the corner while nothing is being adjusted.
-                        Box(Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) { side(false) }
+                        Box(Modifier.weight(1f), contentAlignment = Alignment.BottomEnd) { side(false) }
                         Box(Modifier.touchable(screenLocked)) { liveButton(true) }
                     }
                 }
             } else {
                 // Mirror images, the two rockers level; messages between them.
                 Box(Modifier.weight(1f).fillMaxWidth()) {
-                    Box(Modifier.align(Alignment.CenterStart)) { side(true) }
-                    Box(Modifier.align(Alignment.CenterEnd)) { side(false) }
+                    Box(Modifier.align(Alignment.BottomStart)) { side(true) }
+                    Box(Modifier.align(Alignment.BottomEnd)) { side(false) }
                     Box(Modifier.align(Alignment.TopCenter).padding(horizontal = Chrome.control + Chrome.gap)) { messages() }
                 }
                 Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) { unlock() }

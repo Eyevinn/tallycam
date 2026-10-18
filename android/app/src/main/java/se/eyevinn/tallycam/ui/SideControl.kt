@@ -11,8 +11,10 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
@@ -52,7 +54,7 @@ import kotlin.math.roundToLong
  * ios/TallyCam/Views/AdjustControl.swift): one at each edge, mirror
  * images, each running one of ZOOM, EXP, WB, FOC. The rocker sits at the
  * screen edge ([leading]: the left one), as long as the selector and what
- * is under it, the same length on both sides. On its inner side: the
+ * is under it (on every screen), the same on both sides. On its inner side: the
  * selector beside its upper half (a tap puts that group on this side; the
  * other side's group swaps), and beside its lower half the A / M mode
  * switch (M is any held mode, manual or locked; a tap on the other segment
@@ -76,7 +78,7 @@ import kotlin.math.roundToLong
  * camera has no manual sensor.
  */
 @Composable
-fun SideControl(model: AppModel, group: String, groups: List<String>, leading: Boolean, metrics: SideMetrics,
+fun SideControl(model: AppModel, group: String, groups: List<String>, leading: Boolean,
                 locked: Boolean, onSelect: (String) -> Unit, modifier: Modifier = Modifier) {
     val zoom = group == "zoom"
     val descriptors = model.shading.descriptors
@@ -186,12 +188,12 @@ fun SideControl(model: AppModel, group: String, groups: List<String>, leading: B
 
     val rocker = @Composable {
         if (zoom) {
-            Rocker("T", "W", "Zoom", metrics.rocker, Chrome.groupColor(group), onStep = ::step, onReset = ::reset) {
+            Rocker("T", "W", "Zoom", SIDE_HEIGHT, Chrome.groupColor(group), onStep = ::step, onReset = ::reset) {
                 rate = it
                 model.rampZoom(it * MAX_ZOOM_RATE)
             }
         } else {
-            Rocker(highLabel(group, tint), lowLabel(group, tint), "${title(group)} ${ramping?.label ?: ""}", metrics.rocker,
+            Rocker(highLabel(group, tint), lowLabel(group, tint), "${title(group)} ${ramping?.label ?: ""}", SIDE_HEIGHT,
                    Chrome.groupColor(group), onStep = ::step, onReset = ::reset) { rate = it }
         }
     }
@@ -208,7 +210,7 @@ fun SideControl(model: AppModel, group: String, groups: List<String>, leading: B
     }
     val block = @Composable {
         // The 2 x 2 selector over the mode row (or zoom's lenses), beside the rocker.
-        Column(Modifier.width(Chrome.blockWidth).height(SideMetrics.BLOCK), verticalArrangement = Arrangement.SpaceBetween) {
+        Column(Modifier.width(Chrome.blockWidth).height(SIDE_HEIGHT), verticalArrangement = Arrangement.SpaceBetween) {
             GroupSelector(groups, group, onSelect)
             when {
                 zoom -> LensRow(model)
@@ -217,63 +219,29 @@ fun SideControl(model: AppModel, group: String, groups: List<String>, leading: B
             }
         }
     }
-    // The value (a long one may reach past its slot) and the K / Tint row
-    // under it, reserved on every group.
-    val readout = @Composable { width: Dp, align: Alignment.Horizontal ->
-        Layout({ value(); if (hasTint) TintSwitch(tint) { tint = it; rate = 0.0 } },
-               Modifier.width(width)) { measurables, constraints ->
-            val placeables = measurables.map { it.measure(Constraints()) }
-            val w = constraints.maxWidth
-            fun x(pw: Int) = align.align(pw, w, layoutDirection)
-            val first = placeables.first()
-            layout(w, (Chrome.valueHeight + Chrome.gap + Chrome.tintHeight).roundToPx()) {
-                first.place(x(first.width), 0)
-                placeables.getOrNull(1)?.let { it.place(x(it.width), first.height + Chrome.gap.roundToPx()) }
+    // The rocker at the screen edge, exactly as tall as the selector and the
+    // mode row; hidden while the screen is locked, its place kept.
+    val edge = @Composable { if (locked) Box(Modifier.width(Chrome.rockerWidth).height(SIDE_HEIGHT)) else rocker() }
+    // The value and K / Tint beside the block on its inner side, level with
+    // the mode row (docs/UI_DESIGN.md, "Sizes"); the same size whatever the group.
+    Row(modifier.height(SIDE_HEIGHT), horizontalArrangement = Arrangement.spacedBy(Chrome.gap)) {
+        // The value centred on the mode row, K / Tint above it; the slot is
+        // there for every group.
+        val side = @Composable {
+            Column(Modifier.width(Chrome.readoutWidth).fillMaxHeight()
+                       .padding(bottom = (Chrome.cell - Chrome.valueHeight) / 2),
+                   horizontalAlignment = Alignment.CenterHorizontally,
+                   verticalArrangement = Arrangement.spacedBy(Chrome.gap, Alignment.Bottom)) {
+                if (hasTint) TintSwitch(tint) { tint = it; rate = 0.0 }
+                Box(Modifier.wrapContentWidth(unbounded = true)) { value() }
             }
         }
-    }
-    // The rocker at the screen edge; hidden while the screen is locked, its place kept.
-    val edge = @Composable { if (locked) Box(Modifier.width(Chrome.rockerWidth).height(metrics.rocker)) else rocker() }
-    // The same size whatever the group (docs/UI_DESIGN.md, "Sizes").
-    if (!metrics.readoutBeside) {
-        val width = Chrome.blockWidth + Chrome.gap + Chrome.rockerWidth
-        Column(modifier.width(width), verticalArrangement = Arrangement.spacedBy(Chrome.gap)) {
-            // The block centred beside the rocker.
-            Row(horizontalArrangement = Arrangement.spacedBy(Chrome.gap), verticalAlignment = Alignment.CenterVertically) {
-                if (leading) { edge(); block() } else { block(); edge() }
-            }
-            readout(width, if (leading) Alignment.Start else Alignment.End)
-        }
-    } else {
-        // Too low for the readout under the rocker (a landscape phone): beside the block, on the inner side.
-        Row(modifier, horizontalArrangement = Arrangement.spacedBy(Chrome.gap), verticalAlignment = Alignment.CenterVertically) {
-            val side = @Composable { readout(Chrome.readoutWidth, Alignment.CenterHorizontally) }
-            if (leading) { edge(); block(); side() } else { side(); block(); edge() }
-        }
+        if (leading) { edge(); block(); side() } else { side(); block(); edge() }
     }
 }
 
-/**
- * How the side controls sit, the same on both sides and for every group,
- * worked out from the screen once (docs/UI_DESIGN.md, "Sizes"): the rocker
- * as tall as the space between the top rows and the bottom row allows,
- * less the value and K / Tint rows under it; where that leaves less than
- * the selector and the mode row, those rows go beside the block and the
- * rocker takes the full height.
- */
-class SideMetrics(val rocker: Dp, val readoutBeside: Boolean) {
-    companion object {
-        /** The selector (2 x 2) and the mode row: the shortest the rocker gets. */
-        val BLOCK = Chrome.cell * 3 + Chrome.cellGap + Chrome.gap
-        private val READOUT = Chrome.gap * 2 + Chrome.valueHeight + Chrome.tintHeight
-
-        fun fitting(height: Dp): SideMetrics {
-            val under = height - READOUT
-            return if (under >= BLOCK) SideMetrics(under, readoutBeside = false)
-                   else SideMetrics(maxOf(height, BLOCK), readoutBeside = true)
-        }
-    }
-}
+/** A side control's height: the 2 x 2 selector and the mode row; the rocker is as tall, on every screen. */
+val SIDE_HEIGHT = Chrome.cell * 3 + Chrome.cellGap + Chrome.gap
 
 /** The zoom factor against the wide lens, as the lens buttons count: "2.3×", "12×". */
 internal fun zoomFactorText(model: AppModel): String {

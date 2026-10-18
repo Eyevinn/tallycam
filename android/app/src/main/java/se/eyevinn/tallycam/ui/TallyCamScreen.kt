@@ -60,6 +60,9 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.layout
+import androidx.compose.ui.layout.findRootCoordinates
+import androidx.compose.ui.layout.positionInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalLayoutDirection
@@ -253,7 +256,7 @@ private fun BoxScope.ShootingScreen(model: AppModel, onScan: () -> Unit) {
                 // edge columns centre on the same line.
                 Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(Chrome.gap)) {
                     Column(Modifier.fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(Chrome.zoneGap)) {
-                        Box(Modifier.weight(1f), contentAlignment = Alignment.BottomStart) { side(true) }
+                        SideSlot(leading = true, Modifier.weight(1f)) { side(true) }
                         Box(Modifier.height(Chrome.liveButton).touchable(screenLocked), contentAlignment = Alignment.BottomStart) {
                             tools()
                         }
@@ -269,15 +272,15 @@ private fun BoxScope.ShootingScreen(model: AppModel, onScan: () -> Unit) {
                     Column(Modifier.fillMaxHeight(), horizontalAlignment = Alignment.End,
                            verticalArrangement = Arrangement.spacedBy(Chrome.zoneGap)) {
                         // Keeps the live button in the corner while nothing is being adjusted.
-                        Box(Modifier.weight(1f), contentAlignment = Alignment.BottomEnd) { side(false) }
+                        SideSlot(leading = false, Modifier.weight(1f)) { side(false) }
                         Box(Modifier.touchable(screenLocked)) { liveButton(true) }
                     }
                 }
             } else {
                 // Mirror images, the two rockers level; messages between them.
                 Box(Modifier.weight(1f).fillMaxWidth()) {
-                    Box(Modifier.align(Alignment.BottomStart)) { side(true) }
-                    Box(Modifier.align(Alignment.BottomEnd)) { side(false) }
+                    SideSlot(leading = true, Modifier.fillMaxSize()) { side(true) }
+                    SideSlot(leading = false, Modifier.fillMaxSize()) { side(false) }
                     Box(Modifier.align(Alignment.TopCenter).padding(horizontal = Chrome.control + Chrome.gap)) { messages() }
                 }
                 Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) { unlock() }
@@ -780,3 +783,33 @@ private fun TopBarCentre(chip: @Composable () -> Unit, shortChip: @Composable ()
         }
     }
 }
+
+/**
+ * Where a side control sits in its zone (docs/UI_DESIGN.md, "Zones"): its
+ * centre at 65 % of the screen's height from the top, moved up only as far
+ * as it must to clear the bottom row (and down to clear the top rows);
+ * both sides the same.
+ */
+@Composable
+private fun SideSlot(leading: Boolean, modifier: Modifier, content: @Composable () -> Unit) {
+    // The zone's top in the window and the window's height, once laid out.
+    var place by remember { mutableStateOf<Pair<Float, Float>?>(null) }
+    Layout(content, modifier.onGloballyPositioned {
+        place = it.positionInRoot().y to it.findRootCoordinates().size.height.toFloat()
+    }) { measurables, constraints ->
+        val p = measurables.map { it.measure(constraints.copy(minWidth = 0, minHeight = 0)) }
+        // As wide as the control (or the zone, where it fills), as tall as the zone.
+        val w = maxOf(constraints.minWidth, p.maxOfOrNull { it.width } ?: 0)
+        val h = constraints.maxHeight
+        layout(w, h) {
+            p.forEach { child ->
+                val centre = place?.let { (top, root) -> root * SIDE_CENTRE - top } ?: (h / 2f)
+                val y = (centre - child.height / 2f).coerceIn(0f, (h - child.height).coerceAtLeast(0).toFloat())
+                child.placeRelative(if (leading) 0 else w - child.width, y.roundToInt())
+            }
+        }
+    }
+}
+
+/** A side control's centre, as a share of the screen's height from the top. */
+private const val SIDE_CENTRE = 0.65f

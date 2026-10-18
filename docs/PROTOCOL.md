@@ -557,9 +557,11 @@ clock. A later provisioning step may hand the phone a venue NTP server instead
   most 500 ppm (a 40 ms frame interval changes by at most 20 µs) and the clock
   is never stepped; otherwise it may step once, in the first 3 updates, when
   more than 1 s off.
-- TAI - UTC comes from a built-in leap second table (37 s since 2017); a leap
-  second the servers announce and the table does not know is applied at the
-  end of June 30 or December 31.
+- TAI - UTC comes from a built-in leap second table: 37 s since 2017, and
+  for good (none at the end of 2026, and UTC has no leap seconds from May
+  2027 by the CGPM's 2026 decision). A leap second the servers announce and
+  the table does not know is still applied at the end of June 30 or
+  December 31.
 
 ### `status.clock`
 

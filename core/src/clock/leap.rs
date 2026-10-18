@@ -39,12 +39,10 @@ pub const LEAP_TABLE: [(i64, i32); 28] = [
     (1_483_228_800, 37), // 2017-01-01
 ];
 
-/// The table is known complete until this UTC time (2026-12-28, the expiry of
-/// the IERS list it was taken from). After that only leap seconds the NTP
-/// sources announce are applied.
-pub const TABLE_EXPIRES_UTC_S: i64 = 1_798_416_000;
-
-/// TAI - UTC as of 2026, as Strom's clock health expects.
+/// TAI - UTC for good: IERS Bulletin C 72 (2026-07-06) announced no leap
+/// second at the end of 2026, and the CGPM decided on 2026-10-15 that UTC
+/// has no leap seconds from May 2027. The table needs no expiry and no more
+/// updates. As Strom's clock health expects.
 pub const EXPECTED_TAI_OFFSET_S: i32 = 37;
 
 const NS: i64 = 1_000_000_000;

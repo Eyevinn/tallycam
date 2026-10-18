@@ -161,7 +161,9 @@ Right side shown; the left one is its mirror image.
   white balance once) holds the camera's current values as numbers, which
   the rocker then changes. Moving the rocker in auto switches white balance
   and focus to manual; exposure stays in auto and changes the compensation. For zoom
-  the lens buttons take this row (only on a camera with more than one lens).
+  the lens buttons take this row (only on a camera with more than one lens),
+  widest on the left to longest on the right (`0.5×` `1×` `4×`), as in the
+  iPhone camera, on both sides.
   For white balance a third cell, `◎`, sits beside `A` and `M`: a tap sets
   the white balance once from the picture (`wb_one_shot`) and holds it (`M`).
 - **A colour per group,** so the usual setup is recognised at a glance (blue

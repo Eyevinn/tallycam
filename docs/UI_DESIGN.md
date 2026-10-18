@@ -153,7 +153,7 @@ Right side shown; the left one is its mirror image.
   side's hidden flag. Only shown sides underline their values.
 - **Mode switch.** Two cells side by side, `A` and `M`, under the selector,
   the same size and look. It shows the state, not an action: the filled cell
-  is the current mode (white auto, yellow held). Tap the other cell to
+  is the current mode (white auto, yellow manual). Tap the other cell to
   switch; the values are kept. There are only two modes: `A` (auto) and `M`
   (manual). Going to `M` from auto (the switch, a long press on the picture,
   white balance once) holds the camera's current values as numbers, which

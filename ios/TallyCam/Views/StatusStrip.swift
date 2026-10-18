@@ -37,6 +37,9 @@ struct StatusStrip<Centre: View>: View {
                             .foregroundStyle(.yellow)
                             .accessibilityLabel("Orientation applies when the stream stops")
                     }
+                    Timecode(fps: capture.format.frameRate, health: remote.clock?.health)
+                        // Kept whole: the middle gives way first.
+                        .fixedSize()
                     linkDot
                     clockDot
                     DeviceIndicators()
@@ -188,6 +191,27 @@ private struct DotLabelStyle: LabelStyle {
         HStack(spacing: 5) {
             configuration.icon
             configuration.title
+        }
+    }
+}
+
+/// The time of day from the phone's disciplined clock, "14:51:46:12" (frames
+/// at the stream rate), the same on every camera (docs/UI_DESIGN.md, zone
+/// 1): white while the clock is healthy, orange when not, dim with "--"
+/// frames when it is not synchronised. Redrawn 10 times a second, its own
+/// text only.
+private struct Timecode: View {
+    let fps: Int
+    let health: ClockSummary.Health?
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 0.1)) { _ in
+            // The same TAI-to-UTC mapping the frames' timestamps use.
+            let mapping = ClockMapping.at(hostNs: HostClock.nowNs())
+            Text(UiRules.timecode(utcNs: mapping.utcNs, fps: fps, synced: mapping.synced))
+                .monospacedDigit()
+                .foregroundStyle(!mapping.synced ? .white.opacity(0.45) : health == .healthy ? .white : .orange)
+                .accessibilityLabel("Time code")
         }
     }
 }

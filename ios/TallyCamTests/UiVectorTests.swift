@@ -168,4 +168,15 @@ final class UiVectorTests: XCTestCase {
             XCTAssertEqual(result, sides(vector["expect"]?.object), name)
         }
     }
+
+    func testTimecode() throws {
+        let utc = try XCTUnwrap(TimeZone(identifier: "UTC"))
+        let stockholm = try XCTUnwrap(TimeZone(identifier: "Europe/Stockholm"))
+        // 2026-10-18 12:51:46.500 UTC.
+        let ns: Int64 = 1_792_327_906_500_000_000
+        XCTAssertEqual(UiRules.timecode(utcNs: ns, fps: 25, timeZone: utc, synced: true), "12:51:46:12")
+        XCTAssertEqual(UiRules.timecode(utcNs: ns, fps: 25, timeZone: stockholm, synced: true), "14:51:46:12")
+        XCTAssertEqual(UiRules.timecode(utcNs: ns, fps: 30, timeZone: utc, synced: false), "12:51:46:--")
+        XCTAssertEqual(UiRules.timecode(utcNs: ns + 499_999_999, fps: 30, timeZone: utc, synced: true), "12:51:46:29")
+    }
 }

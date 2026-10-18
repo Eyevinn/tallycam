@@ -242,6 +242,23 @@ enum UiRules {
         return h > 0 ? fmt("%d:%02d:%02d", h, m, s) : fmt("%02d:%02d", m, s)
     }
 
+    /// The top bar's time-of-day timecode, "14:51:46:12": local time from
+    /// UTC ns (the disciplined clock's), frames at `fps`; "--" frames when
+    /// the clock is not synchronised (or no frame rate).
+    static func timecode(utcNs: Int64, fps: Int, timeZone: TimeZone = .current, synced: Bool) -> String {
+        let seconds = utcNs.quotientAndRemainder(dividingBy: 1_000_000_000)
+        // Floor towards earlier times before 1970 too.
+        let whole = seconds.remainder < 0 ? seconds.quotient - 1 : seconds.quotient
+        let fraction = Double(seconds.remainder < 0 ? seconds.remainder + 1_000_000_000 : seconds.remainder) / 1e9
+        let offset = Int64(timeZone.secondsFromGMT(for: Date(timeIntervalSince1970: TimeInterval(whole))))
+        let ofDay = ((whole + offset) % 86400 + 86400) % 86400
+        let time = fmt("%02d:%02d:%02d", Int(ofDay / 3600), Int(ofDay / 60 % 60), Int(ofDay % 60))
+        guard synced, fps > 0 else {
+            return time + ":--"
+        }
+        return time + fmt(":%02d", min(Int(fraction * Double(fps)), fps - 1))
+    }
+
     // MARK: Rockers
 
     /// Zoom doublings per second at full deflection, and per tap on an end.

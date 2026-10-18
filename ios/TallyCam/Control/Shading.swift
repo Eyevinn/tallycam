@@ -101,12 +101,12 @@ enum ShadingGroup: String, CaseIterable, Identifiable {
         }
     }
 
-    /// Above the adjust control's mode switch.
+    /// In the adjust control's group selector.
     var caption: String {
         switch self {
         case .exposure: "EXP"
         case .whiteBalance: "WB"
-        case .focus: "FOCUS"
+        case .focus: "FOC"
         }
     }
 

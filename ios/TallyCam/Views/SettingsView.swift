@@ -274,7 +274,11 @@ private struct MainsSection: View {
     private func section(fromHub: Bool) -> some View {
         Section {
             Picker("Mains", selection: Binding(
-                get: { shading.values["mains_hz"]?.double.flatMap { Int(exactly: $0) } ?? -1 },
+                // Before the camera reports it: the phone's own saved value.
+                get: {
+                    shading.values["mains_hz"]?.double.flatMap { Int(exactly: $0) }
+                        ?? UserDefaults.standard.object(forKey: CameraControls.mainsKey) as? Int ?? -1
+                },
                 set: { remote.localSet(["mains_hz": .int($0)]) }
             )) {
                 Text("50 Hz").tag(50)

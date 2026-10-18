@@ -3,9 +3,10 @@ import SwiftUI
 /// The shooting screen: full-bleed preview and tally, and the chrome on
 /// one grid (docs/APPS.md, `Chrome`). Information in the middle, controls
 /// at the sides, under the thumbs. Top: the status line and the camera
-/// values row, with one slot under them for banners and toasts. Left edge:
-/// lenses and zoom. Right edge: the adjust control of the group chosen in
-/// the values row. Bottom: tools left, the microphone meter right, and the live
+/// values row, with one slot under them for banners and toasts. Left and
+/// right edges: a side control each (zoom, exposure, colour or focus,
+/// chosen on it; a value in the values row puts its group on the right).
+/// Bottom: tools left, the microphone meter right, and the live
 /// button in the bottom-right corner (bottom centre in portrait).
 /// Everything else is in Settings.
 struct ContentView: View {
@@ -33,8 +34,10 @@ struct ContentView: View {
     @State private var pendingJoin: ProvisioningLink?
     /// The join alert is up (after the Settings sheet has gone, if it was open).
     @State private var askingJoin = false
-    /// The group the adjust control at the right edge changes; remembered.
-    @AppStorage("adjust.group") private var adjustGroup = ShadingGroup.exposure
+    /// What each side control runs; remembered (docs/UI_DESIGN.md, "Side
+    /// control").
+    @AppStorage("side.left") private var leftGroup = SideGroup.zoom
+    @AppStorage("side.right") private var rightGroup = SideGroup.exposure
     #if DEBUG
         @State private var previewBackdrop = false
     #endif
@@ -60,9 +63,7 @@ struct ContentView: View {
                         .transition(.opacity)
                 }
                 let nameInline = geometry.size.width >= Self.nameInlineWidth
-                chrome(landscape: landscape, nameInline: nameInline,
-                       rocker: Self.rockerLength(height: geometry.size.height, insets: insets,
-                                                 landscape: landscape, nameInline: nameInline))
+                chrome(landscape: landscape, nameInline: nameInline)
                     .padding(.top, Chrome.edge(insets.top))
                     .padding(.bottom, Chrome.edge(insets.bottom))
                     .padding(.leading, Chrome.edge(insets.leading))
@@ -151,18 +152,18 @@ struct ContentView: View {
     /// with the centre between them. While the screen is locked everything
     /// stays in place but only the slide to unlock takes touches.
     @ViewBuilder
-    private func chrome(landscape: Bool, nameInline: Bool, rocker: CGFloat) -> some View {
+    private func chrome(landscape: Bool, nameInline: Bool) -> some View {
         VStack(spacing: Chrome.zoneGap) {
             topRows(nameInline: nameInline)
                 .allowsHitTesting(!screenLocked)
             if landscape {
-                // Left: zoom over the tools. Centre: messages, the slide to
-                // unlock, the meter. Right: the adjust control over the live
-                // button. The bottom row is the live button's height, so
+                // Left: a side control over the tools. Centre: messages, the
+                // slide to unlock, the meter. Right: a side control over the
+                // live button. The bottom row is the live button's height, so
                 // both edge columns centre on the same line.
                 HStack(spacing: Chrome.gap) {
                     VStack(alignment: .leading, spacing: Chrome.zoneGap) {
-                        levelled(zoomColumn(rocker: rocker))
+                        sideColumn(.left)
                         tools
                             .frame(height: LiveButton.size, alignment: .bottom)
                     }
@@ -178,21 +179,20 @@ struct ContentView: View {
                     }
                     .frame(maxWidth: .infinity)
                     VStack(alignment: .trailing, spacing: Chrome.zoneGap) {
-                        levelled(adjustColumn(rocker: rocker))
+                        sideColumn(.right)
                         liveButton(hintAbove: true)
                     }
                 }
             } else {
-                // Mirror images, the two rockers level.
+                // Messages in a band of their own (the side controls leave
+                // little between them), then the side controls, mirror
+                // images, their rockers level.
+                messageSlot
+                    .frame(height: Self.portraitMessageHeight, alignment: .top)
                 HStack(spacing: Chrome.gap) {
-                    levelled(zoomColumn(rocker: rocker))
+                    sideColumn(.left)
                     Spacer(minLength: 0)
-                    levelled(adjustColumn(rocker: rocker))
-                }
-                .overlay(alignment: .top) {
-                    // Between the edge columns, which are centred lower.
-                    messageSlot
-                        .padding(.horizontal, Chrome.control + Chrome.gap)
+                    sideColumn(.right)
                 }
                 unlockSlider
                 HStack(alignment: .bottom, spacing: Chrome.gap) {
@@ -203,25 +203,15 @@ struct ContentView: View {
                 liveButton(hintAbove: false)
             }
         }
-        .animation(.easeInOut(duration: 0.2), value: adjustGroup)
+        .animation(.easeInOut(duration: 0.2), value: leftGroup)
+        .animation(.easeInOut(duration: 0.2), value: rightGroup)
         .animation(.easeInOut(duration: 0.2), value: screenLocked)
         .animation(.easeInOut(duration: 0.2), value: remote.banner)
     }
 
-    /// The rockers' length: the full one, or what a landscape phone has
-    /// between the top rows and the bottom row.
-    private static func rockerLength(height: CGFloat, insets: EdgeInsets, landscape: Bool,
-                                     nameInline: Bool) -> CGFloat
-    {
-        guard landscape else {
-            return Chrome.rocker
-        }
-        let rows: CGFloat = nameInline ? 2 : 3
-        let top = rows * Chrome.rowHeight + (rows - 1) * Chrome.rowGap
-        let free = height - Chrome.edge(insets.top) - Chrome.edge(insets.bottom) - top
-            - 2 * Chrome.zoneGap - LiveButton.size
-        return max(min(Chrome.rocker, free), 100)
-    }
+    /// The message band above the side controls in portrait: two lines of
+    /// a banner.
+    private static let portraitMessageHeight: CGFloat = 64
 
     /// Status line, then the camera values (the entry to exposure, colour,
     /// focus and Settings).
@@ -235,7 +225,10 @@ struct ContentView: View {
             if !nameInline {
                 nameChip
             }
-            CameraValuesRow(shading: remote.shading, capture: capture, selection: $adjustGroup) {
+            CameraValuesRow(shading: remote.shading, capture: capture,
+                            selected: [leftGroup.shading, rightGroup.shading].compactMap { $0 },
+                            onSelect: selectFromValues)
+            {
                 showSettings = true
             }
         }
@@ -245,54 +238,24 @@ struct ContentView: View {
         TallyChip(tally: remote.tally, cameraName: controller.displayName)
     }
 
-    /// An edge column in the full height of its zone, its rocker in the
-    /// middle: zoom and the adjust control level, whatever sits above and
-    /// below them (and the live button stays in its corner while nothing is
-    /// adjusted).
-    private func levelled(_ column: some View) -> some View {
-        ZStack(alignment: Alignment(horizontal: .center, vertical: .rockerCentre)) {
-            Color.clear
-                .frame(width: 0)
-            column
-        }
-        .frame(maxHeight: .infinity)
-    }
-
-    /// Lens buttons above the zoom rocker; beside it, on the inner side,
-    /// where the screen is too low for both (a landscape phone).
-    private func zoomColumn(rocker: CGFloat) -> some View {
-        ViewThatFits(in: .vertical) {
-            VStack(spacing: Chrome.gap) {
-                lensButtons
-                zoomRocker(rocker)
-            }
-            HStack(spacing: Chrome.gap) {
-                zoomRocker(rocker)
-                lensButtons
-            }
-        }
-        .opacity(screenLocked ? 0 : 1)
-        .allowsHitTesting(!screenLocked)
-    }
-
-    private var lensButtons: some View {
-        LensButtons(shading: remote.shading) { lens in
-            capture.controls.apply(["lens": .string(lens)]) { _, _ in }
-        }
-    }
-
-    private func zoomRocker(_ length: CGFloat) -> some View {
-        ZoomControl(controls: capture.controls, shading: remote.shading, length: length)
-            .alignmentGuide(.rockerCentre) { $0[VerticalAlignment.center] }
-    }
-
-    /// The chosen group's mode button, rocker and value, mirroring zoom.
-    /// Hidden (in place) while the screen is locked, as zoom is.
-    private func adjustColumn(rocker: CGFloat) -> some View {
-        AdjustControl(remote: remote, shading: remote.shading, group: adjustGroup, rockerLength: rocker)
-            .id(adjustGroup)
+    /// A side control: the left or right edge's, the full height of its
+    /// zone. Hidden (in place) while the screen is locked.
+    private func sideColumn(_ side: Side) -> some View {
+        SideControl(side: side, group: side == .left ? $leftGroup : $rightGroup,
+                    other: side == .left ? $rightGroup : $leftGroup,
+                    remote: remote, controls: capture.controls, shading: remote.shading)
             .opacity(screenLocked ? 0 : 1)
             .allowsHitTesting(!screenLocked)
+    }
+
+    /// A tap on a value in the values row: its group goes on the right side
+    /// control, unless a side already shows it.
+    private func selectFromValues(_ group: ShadingGroup) {
+        let chosen = SideGroup(group)
+        guard leftGroup != chosen, rightGroup != chosen else {
+            return
+        }
+        rightGroup = chosen
     }
 
     /// Operator messages and toasts, centred under the values row, over the
@@ -477,22 +440,13 @@ struct ContentView: View {
             remote.preview(tally: .program, banner: "Wider please")
             connectCardDismissed = true
             previewBackdrop = true
-            adjustGroup = defaults.string(forKey: "uiPreviewGroup").flatMap(ShadingGroup.init(rawValue:)) ?? .exposure
+            if let group = defaults.string(forKey: "uiPreviewGroup").flatMap(SideGroup.init(rawValue:)) {
+                rightGroup = group
+            }
             shading.hubSet(["wb_temperature"])
             if defaults.bool(forKey: "uiPreviewToast") {
                 showToast("Lock the screen against stray touches: lock button, bottom left")
             }
         }
     #endif
-}
-
-extension VerticalAlignment {
-    /// The middle of a rocker: zoom and the adjust control line up on it.
-    private enum RockerCentre: AlignmentID {
-        static func defaultValue(in context: ViewDimensions) -> CGFloat {
-            context[VerticalAlignment.center]
-        }
-    }
-
-    static let rockerCentre = VerticalAlignment(RockerCentre.self)
 }

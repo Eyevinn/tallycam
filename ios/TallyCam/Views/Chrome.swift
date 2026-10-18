@@ -7,7 +7,7 @@ enum Chrome {
     static let tallyClearance: CGFloat = 22
     /// Least padding inside a safe-area inset.
     static let minEdge: CGFloat = 8
-    /// Round buttons, rockers and the bottom row.
+    /// Round buttons and the bottom row.
     static let control: CGFloat = 46
     /// The status and camera values rows.
     static let rowHeight: CGFloat = 34
@@ -17,9 +17,6 @@ enum Chrome {
     static let rowGap: CGFloat = 6
     /// Between the zones (top, middle, bottom).
     static let zoneGap: CGFloat = 10
-    /// The zoom and adjust rockers' length, where the screen is tall
-    /// enough (shorter on a landscape phone, both the same).
-    static let rocker: CGFloat = 180
 
     /// Padding inside the safe area so chrome clears the tally border on
     /// edges without a safe-area inset (landscape top, for example).

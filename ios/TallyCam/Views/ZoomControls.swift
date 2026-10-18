@@ -1,45 +1,62 @@
 import SwiftUI
 import UIKit
 
-/// The zoom rocker on the left edge: push up to zoom in, down to zoom out;
-/// how far sets the speed, for a usable zoom move on air. Letting go stops
-/// the zoom where it is. A tap on an end zooms a quarter doubling, a double
-/// tap on the knob goes back to the lens's own 1× (no digital zoom). The
-/// zoom factor shows beside the knob while it moves.
-struct ZoomControl: View {
+/// A side control running zoom (`SideControl`, docs/UI_DESIGN.md "Side
+/// control"): push up to zoom in, down to zoom out; how far sets the speed,
+/// for a usable zoom move on air. Letting go stops the zoom where it is. A
+/// tap on an end zooms a quarter doubling, a double tap on the knob goes
+/// back to the lens's own 1× (no digital zoom). The lens buttons sit under
+/// the selector (more than one lens), the zoom factor under the rocker.
+struct ZoomControl<Selector: View>: View {
     let controls: CameraControls
     @ObservedObject var shading: Shading
-    var length = Chrome.rocker
+    let side: Side
+    let metrics: SideMetrics
+    @ViewBuilder let selector: () -> Selector
 
     /// Rate at full deflection, doublings per second.
-    private static let maxRate = 2.0
+    private static var maxRate: Double { 2.0 }
     /// A tap on an end, in doublings.
-    private static let tapStep = 0.25
+    private static var tapStep: Double { 0.25 }
 
     @State private var ramping = false
     /// The last tap's zoom, so quick taps add up before the camera reports.
     @State private var tapped: (zoom: Double, at: Date)?
-    @State private var badgeTask: Task<Void, Never>?
-    @State private var showFactor = false
+    /// A tap or reset just now: the value label stays large a moment.
+    @State private var touched = false
+    @State private var touchedTask: Task<Void, Never>?
 
     var body: some View {
-        Rocker(high: "T", low: "W", label: "Zoom", length: length, badge: showFactor ? factorText : nil,
+        SideLayout(side: side, metrics: metrics, selector: selector) {
+            LensSwitch(shading: shading) { lens in
+                controls.apply(["lens": .string(lens)]) { _, _ in }
+            }
+        } rocker: {
+            rocker
+        } value: {
+            SideValueLabel(text: factorText, adjusting: ramping || touched,
+                           anchor: side == .left ? .leading : .trailing)
+        } rowSwitch: {
+            EmptyView()
+        }
+    }
+
+    private var rocker: some View {
+        Rocker(high: "T", low: "W", label: "Zoom", length: metrics.rocker, tint: SideGroup.zoom.color,
                onStep: step, onReset: reset)
         { rate in
             if rate == 0 {
                 ramping = false
                 controls.stopZoomRamp()
-                hideFactorSoon()
             } else {
                 ramping = true
-                badgeTask?.cancel()
-                showFactor = true
                 controls.rampZoom(rate: rate * Self.maxRate)
             }
         }
+        .accessibilityValue(factorText)
         .onChange(of: zoom) { old, new in
-            // The ramp reached the end of the range.
-            // The camera reports it to 0.01.
+            // The ramp reached the end of the range (the camera reports it
+            // to 0.01).
             if ramping, let range, old != new, new <= range.lowerBound + 0.01 || new >= range.upperBound - 0.01 {
                 Haptics.limit()
             }
@@ -62,7 +79,7 @@ struct ZoomControl: View {
     /// The zoom against the wide lens ("2.3×"), as the lens buttons count.
     private var factorText: String {
         let option = shading.descriptor("lens")?.options?.first { $0.value == shading.values["lens"] }
-        let factor = (option.flatMap { LensButtons.factor(label: $0.label) } ?? 1) * zoom
+        let factor = (option.flatMap { LensSwitch.factor(label: $0.label) } ?? 1) * zoom
         return String(format: factor < 10 ? "%.1f×" : "%.0f×", factor)
     }
 
@@ -88,16 +105,12 @@ struct ZoomControl: View {
         } else {
             Haptics.tick()
         }
-        showFactor = true
-        hideFactorSoon()
-    }
-
-    private func hideFactorSoon() {
-        badgeTask?.cancel()
-        badgeTask = Task {
-            try? await Task.sleep(for: .seconds(1))
+        touched = true
+        touchedTask?.cancel()
+        touchedTask = Task {
+            try? await Task.sleep(for: .seconds(0.8))
             if !Task.isCancelled {
-                withAnimation(.easeIn(duration: 0.2)) { showFactor = false }
+                touched = false
             }
         }
     }
@@ -119,8 +132,8 @@ enum Haptics {
     }
 }
 
-/// A spring-loaded vertical rocker (zoom on the left edge, the adjust
-/// control on the right), the same three gestures on every one: drag up or
+/// A spring-loaded vertical rocker (a side control's), the same three
+/// gestures on every one: drag up or
 /// down, how far sets the speed (letting go springs back and reports 0); tap
 /// an end for one step; double tap the knob for the neutral value.
 struct Rocker: View {
@@ -128,9 +141,9 @@ struct Rocker: View {
     let low: String
     /// For VoiceOver.
     let label: String
-    var length = Chrome.rocker
-    /// Shown beside the knob (on the right), the zoom factor while zooming.
-    var badge: String?
+    let length: CGFloat
+    /// The group's colour: the outline and the knob's ring.
+    var tint: Color = .white.opacity(0.25)
     /// A tap on an end: 1 up, -1 down.
     var onStep: ((Int) -> Void)?
     /// A double tap on the knob.
@@ -145,7 +158,9 @@ struct Rocker: View {
     /// A touch shorter and smaller than these is a tap.
     private static let tapTime: TimeInterval = 0.35
     private static let tapSlop: CGFloat = 8
-    private static let knob: CGFloat = 30
+    private static let knob: CGFloat = 40
+    /// Full deflection, at most: a tall rocker does not need a longer drag.
+    private static let maxTravel: CGFloat = 70
 
     @State private var deflection: CGFloat = 0
     @State private var sentStep = 0
@@ -153,44 +168,33 @@ struct Rocker: View {
     @State private var lastKnobTap = Date.distantPast
 
     private var travel: CGFloat {
-        (length - Chrome.control - 10) / 2
+        // Clear of the end labels.
+        min((length - Self.knob - 48) / 2, Self.maxTravel)
     }
 
     var body: some View {
         ZStack {
-            Capsule()
+            RoundedRectangle(cornerRadius: 10)
                 .fill(.black.opacity(0.35))
+                .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(tint, lineWidth: 1.5))
             VStack {
                 Text(high)
                 Spacer()
                 Text(low)
             }
-            .font(.system(size: high.count > 2 || low.count > 2 ? 11 : 13, weight: .semibold, design: .rounded))
+            .font(.system(size: high.count > 2 || low.count > 2 ? 13 : 15, weight: .semibold, design: .rounded))
             .lineLimit(1)
             .minimumScaleFactor(0.7)
             .foregroundStyle(.white.opacity(0.6))
-            .padding(.vertical, 8)
-            Circle()
+            .padding(.vertical, 10)
+            RoundedRectangle(cornerRadius: 8)
                 .fill(.white.opacity(sentStep == 0 ? 0.7 : 0.95))
                 .frame(width: Self.knob, height: Self.knob)
-                .overlay(alignment: .leading) {
-                    if let badge {
-                        Text(badge)
-                            .font(.system(size: 13, weight: .semibold, design: .rounded).monospacedDigit())
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 7)
-                            .frame(height: 24)
-                            .background(.black.opacity(0.55), in: Capsule())
-                            .fixedSize()
-                            .offset(x: Self.knob + (Chrome.control - Self.knob) / 2 + 6)
-                            .transition(.opacity)
-                            .allowsHitTesting(false)
-                    }
-                }
+                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(tint, lineWidth: 2))
                 .offset(y: -deflection * travel)
         }
-        .frame(width: Chrome.control, height: length)
-        .contentShape(Capsule())
+        .frame(width: SideMetrics.rockerWidth, height: length)
+        .contentShape(RoundedRectangle(cornerRadius: 10))
         .gesture(
             DragGesture(minimumDistance: 0)
                 .onChanged { value in
@@ -250,33 +254,23 @@ struct Rocker: View {
     }
 }
 
-/// One button per lens the camera has (from the `lens` control); the
-/// active one is highlighted.
-struct LensButtons: View {
+/// The lens buttons in a zoom side control's mode row: one cell per lens
+/// the camera has (from the `lens` control), sharing the row, longest
+/// first, the active one filled. Nothing with a single lens.
+struct LensSwitch: View {
     @ObservedObject var shading: Shading
     let onSelect: (String) -> Void
 
     var body: some View {
-        let options = shading.descriptor("lens")?.options ?? []
+        // Longest first.
+        let options = (shading.descriptor("lens")?.options ?? []).reversed().map { $0 }
         let current = shading.values["lens"]?.string
         if options.count > 1 {
-            VStack(spacing: 6) {
-                // Longest lens on top, like the rocker's T.
-                ForEach(options.reversed(), id: \.label) { option in
-                    let id = option.value.string ?? ""
-                    Button {
-                        onSelect(id)
-                    } label: {
-                        Text(Self.label(id, fallback: option.label))
-                            .font(.system(size: 15, weight: .semibold, design: .rounded))
-                            .foregroundStyle(id == current ? .yellow : .white.opacity(0.85))
-                            .frame(width: Chrome.control, height: Chrome.control)
-                            .background(.black.opacity(0.35), in: Circle())
-                            .overlay(Circle().strokeBorder(.white.opacity(0.25), lineWidth: 1))
-                            .contentShape(Circle())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(option.label)
+            CellGrid(cells: options.map {
+                .init(title: Self.label($0.value.string ?? "", fallback: $0.label), on: $0.value.string == current)
+            }, columns: options.count, fontSize: 13) { index in
+                if let id = options[index].value.string, id != current {
+                    onSelect(id)
                 }
             }
         }

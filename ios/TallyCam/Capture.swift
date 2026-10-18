@@ -33,7 +33,6 @@ final class Capture: ObservableObject {
     private let sessionQueue: DispatchQueue
     private let videoOutput: AVCaptureVideoDataOutput
     private var deviceName: String?
-    private var micSuffix = ""
     private var side: DeviceSide = .landscapeHomeRight
     private var lastLandscape: DeviceSide = .landscapeHomeRight
     /// Set while live: the stream keeps its portrait or landscape geometry.
@@ -191,7 +190,7 @@ final class Capture: ObservableObject {
             return
         }
         let size = streamSize
-        status = "\(deviceName) \(size.width)x\(size.height) \(format.frameRate) fps" + micSuffix
+        status = "\(deviceName) \(size.width)x\(size.height) \(format.frameRate) fps"
     }
 
     func start() async {
@@ -249,7 +248,6 @@ final class Capture: ObservableObject {
             }
         }
         hasAudio = addedAudio
-        micSuffix = addedAudio ? " + mic" : ", no mic"
         deviceName = device.localizedName
         updateStatus()
         observeSession()

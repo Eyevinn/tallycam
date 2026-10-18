@@ -1,31 +1,29 @@
 import SwiftUI
 
-/// One group's controls at the right edge, always there like zoom on the
-/// left; the group is chosen by tapping its value in the camera values row
-/// (exposure until then, remembered): the group's caption, a mode switch (A
-/// over M; tap the other segment, the values are kept), a rocker as long
-/// as the zoom rocker that ramps the group's value (up is more; a tap on an
-/// end is one step, a double tap on the knob the neutral value, see
-/// docs/UI_DESIGN.md "Adjust control"), and the value, which grows while
-/// it is being adjusted. Above the rocker where the screen
-/// is tall enough, else beside it on the inner side. Exposure ramps the
-/// bias in auto and ISO otherwise; colour the temperature; focus the lens
-/// position (up is far). Moving colour or focus while auto
-/// switches them to manual first. A long press on colour's mode button is
-/// "white balance once"; a K / Tint switch above colour's rocker picks
-/// what it ramps (K each time colour is opened). A locked group (from the
-/// hub, or focus locked on the picture) shows M too; a tap on A goes to
-/// auto. The operator and the hub may both change the values; the last
-/// change wins (docs/SHADING.md).
-struct AdjustControl: View {
+/// A side control running exposure, colour or focus (`SideControl`,
+/// docs/UI_DESIGN.md "Side control"): the rocker ramps the group's value
+/// (up is more; a tap on an end is one step, a double tap on the knob the
+/// neutral value); the mode switch under the selector (A over M; tap the
+/// other segment, the values are kept); the value under the rocker, which
+/// grows while it is being adjusted. Exposure ramps the bias in auto and
+/// ISO otherwise; colour the temperature; focus the lens position (up is
+/// far). Moving colour or focus while auto switches them to manual first.
+/// A long press on colour's mode switch is "white balance once"; a K / Tint
+/// switch under colour's value picks what it ramps (K each time colour is
+/// chosen). A locked group (from the hub, or focus locked on the picture)
+/// shows M too; a tap on A goes to auto. The operator and the hub may both
+/// change the values; the last change wins (docs/SHADING.md).
+struct AdjustControl<Selector: View>: View {
     let remote: RemoteControl
     @ObservedObject var shading: Shading
+    /// The group the rocker adjusts.
     let group: ShadingGroup
-    /// The rocker's length, the same as the zoom rocker's.
-    var rockerLength = Chrome.rocker
+    let side: Side
+    let metrics: SideMetrics
+    @ViewBuilder let selector: () -> Selector
 
     /// Sets go out at most this often while the rocker is held.
-    private static let tick = 0.1
+    private static var tick: Double { 0.1 }
 
     /// The rocker's speed, -1 ... 1.
     @State private var rate = 0.0
@@ -46,32 +44,21 @@ struct AdjustControl: View {
     @State private var touchedTask: Task<Void, Never>?
 
     var body: some View {
-        if shading.groups.contains(group) {
-            ViewThatFits(in: .vertical) {
-                VStack(spacing: Chrome.gap) {
-                    caption
-                    modeButton
-                    tintSwitch
-                    rocker
-                    valueLabel
-                }
-                HStack(spacing: Chrome.gap) {
-                    VStack(spacing: Chrome.gap) {
-                        caption
-                        modeButton
-                        tintSwitch
-                        valueLabel
-                    }
-                    rocker
-                }
-            }
-            .onDisappear { stopRamp() }
+        SideLayout(side: side, metrics: metrics, selector: selector) {
+            modeButton
+        } rocker: {
+            rocker
+        } value: {
+            valueLabel
+        } rowSwitch: {
+            tintSwitch
         }
+        .onDisappear { stopRamp() }
     }
 
     private var rocker: some View {
         Rocker(high: highLabel, low: lowLabel, label: "\(group.title) \(ramped?.label ?? "")",
-               length: rockerLength, onStep: nudge, onReset: reset)
+               length: metrics.rocker, tint: SideGroup(group).color, onStep: nudge, onReset: reset)
         { newRate in
             rate = newRate
             if newRate == 0 {
@@ -81,7 +68,6 @@ struct AdjustControl: View {
             }
         }
         .accessibilityValue(valueText)
-        .alignmentGuide(.rockerCentre) { $0[VerticalAlignment.center] }
     }
 
     /// K or Tint for colour's rocker, where the camera has a tint.
@@ -93,7 +79,7 @@ struct AdjustControl: View {
                 switchSegment("Tint", on: tint)
             }
             .padding(2)
-            .background(.black.opacity(0.45), in: Capsule())
+            .background(.black.opacity(0.45), in: RoundedRectangle(cornerRadius: 10))
             .fixedSize()
         }
     }
@@ -109,23 +95,13 @@ struct AdjustControl: View {
                 .font(.system(size: 12, weight: .bold, design: .rounded))
                 .foregroundStyle(on ? .black : .white.opacity(0.8))
                 .padding(.horizontal, 8)
-                .frame(height: Chrome.rowHeight - 10)
-                .background(on ? .white : .clear, in: Capsule())
-                .contentShape(Capsule())
+                .frame(height: SideMetrics.rowHeight - 4)
+                .background(on ? .white : .clear, in: RoundedRectangle(cornerRadius: 8))
+                .contentShape(RoundedRectangle(cornerRadius: 8))
         }
         .buttonStyle(.plain)
         .accessibilityAddTraits(on ? .isSelected : [])
         .accessibilityLabel(title == "K" ? "Rocker moves the temperature" : "Rocker moves the tint")
-    }
-
-    /// The group's short name, so the rocker's job is never a guess.
-    private var caption: some View {
-        Text(group.caption)
-            .font(.system(size: 11, weight: .heavy, design: .rounded))
-            .foregroundStyle(.white.opacity(0.75))
-            .shadow(color: .black.opacity(0.6), radius: 2)
-            .fixedSize()
-            .allowsHitTesting(false)
     }
 
     /// Being adjusted: the rocker is held or was just tapped.
@@ -134,17 +110,8 @@ struct AdjustControl: View {
     }
 
     private var valueLabel: some View {
-        Text(valueText)
-            .font(.system(size: 13, weight: .semibold, design: .rounded).monospacedDigit())
-            .foregroundStyle((isAuto ? Color.white : .yellow).opacity(adjusting ? 1 : 0.8))
-            .lineLimit(1)
-            .fixedSize()
-            .padding(.horizontal, 8)
-            .frame(height: Chrome.rowHeight - 6)
-            .background(.black.opacity(adjusting ? 0.75 : 0.55), in: Capsule())
-            .scaleEffect(adjusting ? 1.25 : 1)
-            .animation(.easeOut(duration: 0.15), value: adjusting)
-            .allowsHitTesting(false)
+        SideValueLabel(text: valueText, tone: isAuto ? .white : .yellow, adjusting: adjusting,
+                       anchor: side == .left ? .leading : .trailing)
     }
 
     // MARK: Mode
@@ -163,18 +130,18 @@ struct AdjustControl: View {
         return options.contains("manual") ? "manual" : "locked"
     }
 
-    /// A over M (or L): the filled segment is the mode; a tap on the other
-    /// switches, keeping the values. A long press on colour's is "white
-    /// balance once".
+    /// A | M: the filled cell is the mode; a tap on the other switches,
+    /// keeping the values. M for any held mode: locked and manual both keep
+    /// the values, and the rocker turns locked into manual anyway. A long
+    /// press on colour's is "white balance once".
     private var modeButton: some View {
-        VStack(spacing: 0) {
-            modeSegment("A", on: isAuto, fill: .white)
-            modeSegment(heldLabel, on: !isAuto, fill: .yellow)
+        CellGrid(cells: [.init(title: "A", on: isAuto, fill: .white), .init(title: "M", on: !isAuto, fill: .yellow)],
+                 columns: 2, fontSize: 17)
+        { index in
+            if (index == 0) != isAuto {
+                toggleMode()
+            }
         }
-        .padding(2)
-        .frame(width: Chrome.control)
-        .background(.black.opacity(0.45), in: Capsule())
-        .overlay(Capsule().strokeBorder(.white.opacity(0.25), lineWidth: 1))
         .onLongPressGesture(minimumDuration: 0.5) {
             if group == .whiteBalance {
                 remote.runLocal(command: "wb_one_shot")
@@ -190,27 +157,6 @@ struct AdjustControl: View {
                 Button("White balance once") { remote.runLocal(command: "wb_one_shot") }
             }
         }
-    }
-
-    /// M for any held mode: locked and manual both keep the values, and
-    /// the rocker turns locked into manual anyway.
-    private var heldLabel: String {
-        "M"
-    }
-
-    private func modeSegment(_ title: String, on: Bool, fill: Color) -> some View {
-        Text(title)
-            .font(.system(size: 15, weight: .bold, design: .rounded))
-            .foregroundStyle(on ? .black : .white.opacity(0.8))
-            .frame(maxWidth: .infinity)
-            .frame(height: Chrome.rowHeight)
-            .background(on ? fill : .clear, in: Capsule())
-            .contentShape(Capsule())
-            .onTapGesture {
-                if !on {
-                    toggleMode()
-                }
-            }
     }
 
     private func toggleMode() {
@@ -373,9 +319,7 @@ struct AdjustControl: View {
             remote.localSet(isAuto ? ["ev_bias": .number(0)] : [group.modeKey: .string("auto")])
         case .whiteBalance:
             if tint {
-                guard !isAuto else {
-                    return
-                }
+                // The mode stays as it is.
                 remote.localSet(["wb_tint": .number(0)])
             } else {
                 remote.runLocal(command: "wb_one_shot")

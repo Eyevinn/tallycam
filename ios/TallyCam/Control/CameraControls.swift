@@ -65,7 +65,7 @@ final class CameraControls: @unchecked Sendable {
     var onFormatChanged: (@Sendable (CaptureFormat) -> Void)?
 
     private static let resolutionKey = "videoResolution"
-    private static let mainsKey = "mainsHz"
+    static let mainsKey = "mainsHz"
 
     let session: AVCaptureSession
     let videoOutput: AVCaptureVideoDataOutput

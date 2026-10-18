@@ -15,8 +15,11 @@ import SwiftUI
 struct CameraValuesRow: View {
     @ObservedObject var shading: Shading
     @ObservedObject var capture: Capture
-    /// The group the adjust control at the right edge changes.
-    @Binding var selection: ShadingGroup
+    /// The groups on the side controls: their values are underlined in the
+    /// group's colour.
+    let selected: [ShadingGroup]
+    /// A tap on a group's value.
+    let onSelect: (ShadingGroup) -> Void
     let onFormat: () -> Void
 
     private struct Item: Hashable {
@@ -61,11 +64,11 @@ struct CameraValuesRow: View {
     }
 
     private func button(_ item: Item) -> some View {
-        let selected = item.group != nil && item.group == selection
+        let selected = item.group.flatMap { self.selected.contains($0) ? $0 : nil }
         let enabled = item.group.map { shading.groups.contains($0) } ?? true
         return Button {
             if let group = item.group {
-                selection = group
+                onSelect(group)
             } else {
                 onFormat()
             }
@@ -80,9 +83,9 @@ struct CameraValuesRow: View {
             .padding(.horizontal, 9)
             .frame(height: Chrome.rowHeight)
             .overlay(alignment: .bottom) {
-                if selected {
+                if let selected {
                     Capsule()
-                        .fill(.white)
+                        .fill(SideGroup(selected).color)
                         .frame(height: 2)
                         .padding(.horizontal, 7)
                         .padding(.bottom, 4)
@@ -93,7 +96,7 @@ struct CameraValuesRow: View {
         .buttonStyle(.plain)
         .disabled(!enabled)
         .accessibilityLabel([item.text, item.flag].compactMap { $0 }.joined(separator: " "))
-        .accessibilityHint(item.group.map { "Adjusts \($0.title) at the right edge" } ?? "Opens Settings")
+        .accessibilityHint(item.group.map { "Adjusts \($0.title) on a side control" } ?? "Opens Settings")
     }
 
     private func items(now: Date) -> (all: [Item], withoutFocus: [Item], colour: Item?) {

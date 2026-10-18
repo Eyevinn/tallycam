@@ -62,4 +62,18 @@ final class SrtUrlTests: XCTestCase {
         XCTAssertEqual(SrtUrl.redacted("srt://192.0.2.1:9000?streamid=cam-a"), "srt://192.0.2.1:9000?streamid=cam-a")
         XCTAssertEqual(SrtUrl.redacted(""), "")
     }
+
+    /// URLComponents stops at `#`: the whole passphrase must still go.
+    func testRedactedHidesAPassphraseWithAHash() {
+        XCTAssertEqual(SrtUrl.redacted("srt://h:9000?passphrase=abc#def123&latency=120"),
+                       "srt://h:9000?passphrase=***&latency=120")
+        XCTAssertEqual(SrtUrl.redacted("srt://h:9000?PASSPHRASE=a#b"), "srt://h:9000?passphrase=***")
+    }
+
+    func testRedactedHidesTheMediaToken() {
+        XCTAssertEqual(SrtUrl.redacted("srt://h:9000?streamid=#!::r=cam-a,t=s3cret,m=publish"),
+                       "srt://h:9000?streamid=#!::r=cam-a,t=***,m=publish")
+        XCTAssertEqual(SrtUrl.redacted("srt://h:9000?streamid=%23!%3A%3Ar%3Dcam-a%2Ct%3Ds3cret%2Cm%3Dpublish&latency=1"),
+                       "srt://h:9000?streamid=%23!%3A%3Ar%3Dcam-a%2Ct%3D***%2Cm%3Dpublish&latency=1")
+    }
 }

@@ -49,8 +49,11 @@ private func clamp<T: Comparable & CustomStringConvertible>(_ value: T, _ range:
 
 private func shutterRange(_ device: AVCaptureDevice) -> ClosedRange<Double> {
     let format = device.activeFormat
-    let frame = device.activeVideoMinFrameDuration.seconds
-    let longest = min(format.maxExposureDuration.seconds, frame.isFinite && frame > 0 ? frame : 1)
+    // The nominal frame period: genlock moves the duration by ppm, which
+    // would make 1/fps come and go from the options.
+    let duration = device.activeVideoMinFrameDuration.seconds
+    let frame = duration.isFinite && duration > 0 ? 1 / (1 / duration).rounded() : 1
+    let longest = min(format.maxExposureDuration.seconds, frame)
     return format.minExposureDuration.seconds ... max(longest, format.minExposureDuration.seconds)
 }
 
@@ -618,7 +621,7 @@ extension CameraControls {
         CameraCommand(
             descriptor: CommandDescriptor(name: "focus_at", label: "Focus at point", args: ["x": "0..1", "y": "0..1"]),
             run: { c, args, done in
-                guard let x = args["x"]?.double, let y = args["y"]?.double else {
+                guard let x = args["x"]?.double, let y = args["y"]?.double, x.isFinite, y.isFinite else {
                     done(ControlError("x and y (0..1) required"))
                     return
                 }

@@ -16,15 +16,16 @@ struct StatusStrip<Centre: View>: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            TimelineView(.periodic(from: .now, by: 1)) { context in
+            // Only the uptime and the device indicators redraw every second,
+            // not the middle (the name chip and the values).
                 HStack(spacing: 12) {
-                    liveIndicator(now: context.date)
-                        // The stream state never truncates; the middle gives way.
-                        .fixedSize()
-                    if controller.state == .live, let kbps = controller.stats?.bitrateKbps {
-                        // Yellow while adaptive bitrate holds the encoder down.
-                        Text(Self.bitrate(kbps))
-                            .foregroundStyle(adapting ? .yellow : .white.opacity(0.85))
+                    TimelineView(.periodic(from: .now, by: 1)) { context in
+                        liveIndicator(now: context.date)
+                    }
+                    // The stream state never truncates; the middle gives way.
+                    .fixedSize()
+                    if controller.state == .live {
+                        LiveBitrate(live: controller.liveStats)
                     }
                     Spacer(minLength: 8)
                     if let centre {
@@ -38,11 +39,15 @@ struct StatusStrip<Centre: View>: View {
                             .accessibilityLabel("Orientation applies when the stream stops")
                     }
                     linkDot
-                    clockDot
-                    genlockBadge
-                    DeviceIndicators()
+                    ClockDot(clock: remote.clock)
+                    TimelineView(.periodic(from: .now, by: 1)) { _ in
+                        HStack(spacing: 12) {
+                            genlockBadge
+                            DeviceIndicators()
+                        }
+                    }
+                    .fixedSize()
                 }
-            }
             Button(action: onSettings) {
                 Image(systemName: "gearshape")
                     .font(.system(size: 17, weight: .regular))
@@ -58,17 +63,6 @@ struct StatusStrip<Centre: View>: View {
         .padding(.trailing, 2)
         .frame(height: Chrome.rowHeight)
         .sideSurface(Capsule())
-    }
-
-    private var adapting: Bool {
-        // Both from the same stats, so an operator change in between does
-        // not count.
-        guard let stats = controller.stats, stats.link != nil,
-              let target = stats.targetKbps, let ceiling = stats.ceilingKbps
-        else {
-            return false
-        }
-        return target < ceiling
     }
 
     @ViewBuilder
@@ -115,16 +109,6 @@ struct StatusStrip<Centre: View>: View {
             .accessibilityLabel(label)
     }
 
-    private var clockDot: some View {
-        let color: Color = switch remote.clock?.health {
-        case .healthy: .green
-        case .degraded: .orange
-        case .bad, nil: .red
-        }
-        return Image(systemName: "clock")
-            .foregroundStyle(color)
-            .accessibilityLabel("Clock \(remote.clock?.health.rawValue ?? "not running")")
-    }
 
     /// "GL" while genlock is on: green locked, orange locking, red in free
     /// run (refreshed with the line, once a second). Never dropped.
@@ -209,5 +193,46 @@ private struct DotLabelStyle: LabelStyle {
             configuration.icon
             configuration.title
         }
+    }
+}
+
+/// The clock's health; observes only the clock, which changes every second.
+private struct ClockDot: View {
+    @ObservedObject var clock: ClockState
+
+    var body: some View {
+        let color: Color = switch clock.health {
+        case .healthy: .green
+        case .degraded: .orange
+        case .bad, nil: .red
+        }
+        Image(systemName: "clock")
+            .foregroundStyle(color)
+            .accessibilityLabel("Clock \(clock.health?.rawValue ?? "not running")")
+    }
+}
+
+/// The stream's bitrate while live; observes only the stream's numbers
+/// (once a second), not the controller.
+private struct LiveBitrate: View {
+    @ObservedObject var live: LiveStats
+
+    var body: some View {
+        if let kbps = live.stats?.bitrateKbps {
+            // Yellow while adaptive bitrate holds the encoder down.
+            Text(UiRules.bitrate(kbps: kbps))
+                .foregroundStyle(adapting ? .yellow : .white.opacity(0.85))
+        }
+    }
+
+    private var adapting: Bool {
+        // Both from the same stats, so an operator change in between does
+        // not count.
+        guard let stats = live.stats, stats.link != nil, let target = stats.targetKbps,
+              let ceiling = stats.ceilingKbps
+        else {
+            return false
+        }
+        return target < ceiling
     }
 }

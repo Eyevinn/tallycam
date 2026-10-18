@@ -43,12 +43,12 @@ enum JSONValue: Codable, Equatable, Sendable {
         .number(Double(value))
     }
 
+    /// Numbers only: a string ("nan", "1e999") is not one.
     var double: Double? {
-        switch self {
-        case let .number(value): value
-        case let .string(value): Double(value)
-        default: nil
+        if case let .number(value) = self {
+            return value
         }
+        return nil
     }
 
     var bool: Bool? {
@@ -174,7 +174,8 @@ struct HelloMessage: Encodable {
     /// (docs/SHADING.md).
     /// 3: 2 without ownership: the phone takes any value from the hub, the
     /// last change wins (a protocol 2 phone is asked to update).
-    let `protocol` = 3
+    /// 4: `auth` is signed for the host the phone dialled (it carries it).
+    let `protocol` = 4
     let device: DeviceInfo
     /// The device key, base64 SEC1 (from the core's `DeviceKeyIdentity`).
     let publicKey: String?
@@ -297,8 +298,46 @@ enum LcpIncoming {
     case stats(enabled: Bool, fps: Double)
 
     /// Returns nil for unknown types and malformed messages, which are ignored.
+    /// Deepest nesting a message may have: the decoder recurses per level, so
+    /// a message nested hundreds deep would overflow the stack.
+    static let maxDepth = 32
+
+    /// The deepest nesting of objects and arrays in JSON text (brackets in
+    /// strings do not count), or nil beyond `limit`. One pass, no recursion.
+    static func depth(of data: Data, atMost limit: Int) -> Int? {
+        var depth = 0, deepest = 0
+        var inString = false, escaped = false
+        for byte in data {
+            if inString {
+                if escaped {
+                    escaped = false
+                } else if byte == UInt8(ascii: "\\") {
+                    escaped = true
+                } else if byte == UInt8(ascii: "\"") {
+                    inString = false
+                }
+                continue
+            }
+            switch byte {
+            case UInt8(ascii: "\""):
+                inString = true
+            case UInt8(ascii: "{"), UInt8(ascii: "["):
+                depth += 1
+                guard depth <= limit else {
+                    return nil
+                }
+                deepest = max(deepest, depth)
+            case UInt8(ascii: "}"), UInt8(ascii: "]"):
+                depth -= 1
+            default:
+                break
+            }
+        }
+        return deepest
+    }
+
     static func parse(_ text: String) -> LcpIncoming? {
-        guard let data = text.data(using: .utf8),
+        guard let data = text.data(using: .utf8), Self.depth(of: data, atMost: Self.maxDepth) != nil,
               let json = try? JSONDecoder().decode([String: JSONValue].self, from: data),
               let type = json["type"]?.string
         else {
@@ -330,7 +369,7 @@ enum LcpIncoming {
                           fps: json["fps"]?.double.flatMap { $0.isFinite ? min(max($0, 0.2), 4) : nil } ?? 1)
         case "preview":
             return .preview(enabled: json["enabled"]?.bool ?? false,
-                            fps: json["fps"]?.double ?? 1,
+                            fps: json["fps"]?.double.flatMap { $0.isFinite ? $0 : nil } ?? 1,
                             // Clamped before converting: Int(Double) traps on huge values.
                             width: json["width"]?.double.flatMap { $0.isFinite ? Int(min(max($0, 0), 4096)) : nil } ?? 480)
         default:

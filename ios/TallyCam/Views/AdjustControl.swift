@@ -229,21 +229,10 @@ struct AdjustControl<Selector: View>: View {
         sent = nil
     }
 
-    /// The ramped control's range and step, and its scale (log2 for a log
-    /// control).
+    /// The ramped control's range.
     private struct Scale {
         let low: Double
         let high: Double
-        let step: Double?
-        let log: Bool
-
-        func scaled(_ value: Double) -> Double {
-            log ? Foundation.log2(value) : value
-        }
-
-        func unscaled(_ position: Double) -> Double {
-            log ? exp2(position) : position
-        }
     }
 
     private func scale(_ ramped: Ramped) -> Scale? {
@@ -252,7 +241,7 @@ struct AdjustControl<Selector: View>: View {
         else {
             return nil
         }
-        return Scale(low: low, high: high, step: descriptor.step, log: ramped.log)
+        return Scale(low: low, high: high)
     }
 
     /// One tick: moves the position by the rate and sends it (`move`).
@@ -265,7 +254,7 @@ struct AdjustControl<Selector: View>: View {
             position = nil
             sent = nil
         }
-        let current = position ?? scale.scaled(shading.values[ramped.id]?.double ?? (scale.low + scale.high) / 2)
+        let current = position ?? ramped.scaled(shading.values[ramped.id]?.double ?? (scale.low + scale.high) / 2)
         position = move(to: current + rate * ramped.speed * Self.tick, ramped, scale)
     }
 
@@ -299,21 +288,15 @@ struct AdjustControl<Selector: View>: View {
     /// Returns the clamped position.
     @discardableResult
     private func move(to position: Double, _ ramped: Ramped, _ scale: Scale) -> Double {
-        let next = min(max(position, scale.scaled(scale.low)), scale.scaled(scale.high))
-        var value = scale.unscaled(next)
-        if let step = scale.step, step > 0 {
-            value = (value / step).rounded() * step
-        }
-        value = min(max(value, scale.low), scale.high)
-        guard value != sent else {
+        let next = min(max(position, ramped.scaled(scale.low)), ramped.scaled(scale.high))
+        // Snapped and clamped as the shared rules do (and the vectors check).
+        guard let set = UiRules.rampSet(ramped, group, shading.descriptorMap, raw: ramped.unscaled(next)),
+              let value = set[ramped.id]?.double, value != sent
+        else {
             return next
         }
         sent = value
-        var values: [String: JSONValue] = [ramped.id: .number(value)]
-        if let mode = ramped.mode {
-            values[group.modeKey] = .string(mode)
-        }
-        remote.localSet(values)
+        remote.localSet(set)
         if value <= scale.low || value >= scale.high {
             Haptics.limit()
         } else {

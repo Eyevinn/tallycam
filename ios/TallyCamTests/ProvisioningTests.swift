@@ -75,11 +75,38 @@ final class ProvisioningTests: XCTestCase {
     func testJoinMessage() throws {
         let link = try XCTUnwrap(ProvisioningLink(url: XCTUnwrap(URL(string: hubLink)), deviceId: deviceId))
         XCTAssertEqual(link.joinTitle, "Join 192.0.2.10?")
-        XCTAssertEqual(link.joinMessage(live: false), "Control hub: 192.0.2.10:8090\nStream to: 192.0.2.10:9000")
+        XCTAssertEqual(link.joinMessage(live: false),
+                       "Control hub: 192.0.2.10:8090\nStream to: 192.0.2.10:9000\nNot encrypted (ws://)")
         XCTAssertEqual(link.joinMessage(live: true),
-                       "Control hub: 192.0.2.10:8090\nStream to: 192.0.2.10:9000\nThe stream URL applies on the next Go Live")
+                       "Control hub: 192.0.2.10:8090\nStream to: 192.0.2.10:9000\nThe stream URL applies on the next Go Live"
+                           + "\nNot encrypted (ws://)")
         let noSrt = try XCTUnwrap(ProvisioningLink(url: XCTUnwrap(URL(string: "tallycam://connect?control=wss%3A%2F%2Fhub.example.com%2Fx")),
                                                    deviceId: deviceId))
         XCTAssertEqual(noSrt.joinMessage(live: true), "Control hub: hub.example.com\nStream: unchanged")
+    }
+
+    private func link(_ control: String, srt: String? = nil) throws -> ProvisioningLink {
+        let encode = { (s: String) in s.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? s }
+        let text = "tallycam://connect?control=\(encode(control))" + (srt.map { "&srt=\(encode($0))" } ?? "")
+        return try XCTUnwrap(ProvisioningLink(url: XCTUnwrap(URL(string: text)), deviceId: deviceId))
+    }
+
+    /// The same hub with the same (or no) stream target joins silently;
+    /// another path, scheme or SRT target asks (a QR with the real hub and an
+    /// attacker's SRT must not redirect the stream silently).
+    func testJoinsSilentlyOnlyWhenNothingChanges() throws {
+        let control = "wss://hub.example.com/lcp/v0/device"
+        let srt = "srt://hub.example.com:9000?streamid=cam-a"
+        XCTAssertTrue(try link(control).joinsSilently(currentControl: control, currentSrt: srt))
+        XCTAssertTrue(try link("wss://HUB.example.com:443/lcp/v0/device", srt: "srt://hub.example.com:9000?streamid=x")
+            .joinsSilently(currentControl: control, currentSrt: srt))
+        XCTAssertFalse(try link(control, srt: "srt://evil.example.com:9000?streamid=cam-a")
+            .joinsSilently(currentControl: control, currentSrt: srt))
+        XCTAssertFalse(try link(control, srt: "srt://hub.example.com:9001")
+            .joinsSilently(currentControl: control, currentSrt: srt))
+        XCTAssertFalse(try link("wss://hub.example.com/other").joinsSilently(currentControl: control, currentSrt: srt))
+        XCTAssertFalse(try link("ws://hub.example.com:443/lcp/v0/device")
+            .joinsSilently(currentControl: control, currentSrt: srt))
+        XCTAssertFalse(try link(control).joinsSilently(currentControl: "", currentSrt: srt))
     }
 }

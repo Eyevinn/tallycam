@@ -64,7 +64,10 @@ final class PeakingProcessor: @unchecked Sendable {
     private static let minimumGradient = 150
 
     private let onMask: @Sendable (Mask) -> Void
-    private let queue = DispatchQueue(label: "peaking", qos: .utility)
+    /// User initiated: the frame it holds belongs to the capture pool, and
+    /// utility work is the first to be throttled when the phone is hot.
+    private let queue = DispatchQueue(label: "peaking", qos: .userInitiated)
+    private static let colorSpace = CGColorSpace(name: CGColorSpace.sRGB)
     private let inFlight = ManagedAtomic<Bool>(false)
     private let lastNs = ManagedAtomic<UInt64>(0)
     // Owned by `queue`.
@@ -113,8 +116,11 @@ final class PeakingProcessor: @unchecked Sendable {
         for i in histogram.indices {
             histogram[i] = 0
         }
+        // Raw buffers: no exclusivity, bounds or copy-on-write checks per
+        // pixel on `self`'s arrays.
         small.withUnsafeBufferPointer { luma in
             gradient.withUnsafeMutableBufferPointer { out in
+              histogram.withUnsafeMutableBufferPointer { histogram in
                 for y in 1 ..< height - 1 {
                     let above = (y - 1) * width, row = y * width, below = (y + 1) * width
                     for x in 1 ..< width - 1 {
@@ -128,6 +134,7 @@ final class PeakingProcessor: @unchecked Sendable {
                         histogram[min(magnitude >> 3, 255)] += 1
                     }
                 }
+              }
             }
         }
         let threshold = max(Self.minimumGradient, Self.percentile(histogram, share: Self.edgeShare,
@@ -135,14 +142,14 @@ final class PeakingProcessor: @unchecked Sendable {
         var rgba = Data(count: width * height * 4)
         rgba.withUnsafeMutableBytes { raw in
             let pixels = raw.bindMemory(to: UInt32.self)
-            for i in 0 ..< width * height where Int(gradient[i]) >= threshold {
-                // Opaque white, premultiplied.
-                pixels[i] = 0xFFFF_FFFF
+            gradient.withUnsafeBufferPointer { gradient in
+                for i in 0 ..< width * height where Int(gradient[i]) >= threshold {
+                    // Opaque white, premultiplied.
+                    pixels[i] = 0xFFFF_FFFF
+                }
             }
         }
-        guard let provider = CGDataProvider(data: rgba as CFData),
-              let colorSpace = CGColorSpace(name: CGColorSpace.sRGB)
-        else {
+        guard let provider = CGDataProvider(data: rgba as CFData), let colorSpace = Self.colorSpace else {
             return nil
         }
         return CGImage(width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32,

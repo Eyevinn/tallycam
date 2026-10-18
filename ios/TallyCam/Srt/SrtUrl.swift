@@ -45,21 +45,19 @@ struct SrtUrl: Equatable {
         options.latencyMs
     }
 
-    /// `url` with the passphrase's value replaced by `***`, for logs and
-    /// status. Other strings are returned as they are.
+    /// `url` with the passphrase's value and a stream id's media token
+    /// (`t=`) replaced by `***`, for logs and status. Other strings are
+    /// returned as they are.
     static func redacted(_ url: String) -> String {
-        guard var components = URLComponents(string: url.trimmingCharacters(in: .whitespacesAndNewlines)),
-              components.scheme?.lowercased() == "srt",
-              var items = components.percentEncodedQueryItems,
-              items.contains(where: { $0.name.lowercased() == "passphrase" })
-        else {
-            return url
-        }
-        for index in items.indices where items[index].name.lowercased() == "passphrase" {
-            items[index].value = "***"
-        }
-        components.percentEncodedQueryItems = items
-        return components.string ?? url
+        // Over the whole text, as Android: URLComponents would stop at a
+        // `#` in the passphrase and leave the rest of it in the log.
+        var text = url.replacingOccurrences(of: "(?i)passphrase=[^&]*", with: "passphrase=***",
+                                            options: .regularExpression)
+        // The media token in a structured stream id (`#!::r=…,t=…`), plain
+        // or percent-encoded.
+        text = text.replacingOccurrences(of: "(?i)([?&,:]t=)[^,&]*", with: "$1***", options: .regularExpression)
+        return text.replacingOccurrences(of: "(?i)((?:%2C|%3A)t%3D)(?:(?!%2C)[^&])*", with: "$1***",
+                                         options: .regularExpression)
     }
 
     /// `url` with its `latency` query parameter set to `ms` (added when

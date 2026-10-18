@@ -91,6 +91,16 @@ final class GenlockController: @unchecked Sendable {
         }
     }
 
+    /// Another device or format with the same config (a lens switch at the
+    /// same frame rate): the loop starts over, and durations queued for the
+    /// old one are dropped.
+    func restart() {
+        lock.withLock {
+            configSerial += 1
+            latest = nil
+        }
+    }
+
     /// True while genlock is on and the loop with `serial` is still the
     /// current one (no format or frame rate change since).
     func isCurrent(serial: Int) -> Bool {

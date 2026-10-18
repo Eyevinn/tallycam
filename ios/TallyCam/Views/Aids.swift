@@ -145,7 +145,6 @@ struct HorizonLevel: View {
                 .foregroundStyle(level ? .green : .white.opacity(0.75))
                 .rotationEffect(.radians(angle))
                 .position(x: rect.midX, y: rect.midY)
-                .animation(.linear(duration: 0.1), value: angle)
             }
         }
         .allowsHitTesting(false)
@@ -166,7 +165,13 @@ final class HorizonMotion: ObservableObject {
     private static let maxFlat = 0.8
 
     /// Radians, clockwise on screen; nil while the phone is not upright.
+    /// Published only when it moves by `step`: a phone on a tripod
+    /// redraws nothing.
     @Published private(set) var angle: Double?
+
+    /// Updates per second (smoothed), and the least change that redraws.
+    private static let rate = 15.0
+    private static let step = 0.05 * .pi / 180
 
     private let manager = CMMotionManager()
     private var smoothed: Double?
@@ -175,7 +180,7 @@ final class HorizonMotion: ObservableObject {
         guard manager.isDeviceMotionAvailable, !manager.isDeviceMotionActive else {
             return
         }
-        manager.deviceMotionUpdateInterval = 1.0 / 30
+        manager.deviceMotionUpdateInterval = 1 / Self.rate
         manager.startDeviceMotionUpdates(to: .main) { [weak self] motion, _ in
             guard let gravity = motion?.gravity else {
                 return
@@ -211,8 +216,10 @@ final class HorizonMotion: ObservableObject {
             }
             return
         }
-        let value = smoothed.map { $0 + 0.3 * (roll - $0) } ?? roll
+        let value = smoothed.map { $0 + 0.45 * (roll - $0) } ?? roll
         smoothed = value
-        angle = value
+        if angle.map({ abs($0 - value) >= Self.step }) ?? true {
+            angle = value
+        }
     }
 }

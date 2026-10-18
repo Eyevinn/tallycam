@@ -81,11 +81,14 @@ final class DeviceKey: @unchecked Sendable {
         return groups.joined(separator: " ")
     }
 
-    /// The `auth` message (JSON text) answering a `challenge`.
-    func authMessage(server: String, nonce: String) throws -> String {
-        let payload = try deviceKeyAuthPayload(server: server, nonce: nonce, deviceId: identity.deviceId)
+    /// The `auth` message (JSON text) answering a `challenge` (protocol 4):
+    /// signed for the control URL this connection dialled, whose host the
+    /// core normalises and the message carries.
+    func authMessage(server: String, nonce: String, controlUrl: String) throws -> String {
+        let payload = try deviceKeyAuthPayload(server: server, nonce: nonce, deviceId: identity.deviceId,
+                                               controlUrl: controlUrl)
         let signature = try signer.sign(payload)
-        return try deviceKeyAuthMessage(signature: signature)
+        return try deviceKeyAuthMessage(signature: signature, controlUrl: controlUrl)
     }
 
     /// The stored key, or a new one; nil when the Keychain cannot be used

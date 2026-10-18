@@ -43,9 +43,10 @@ struct AudioMeter: View {
         .frame(height: Self.height)
         .padding(.horizontal, 5)
         .padding(.vertical, 6)
-        .background(.black.opacity(0.35), in: Capsule())
+        .sideSurface(Capsule())
         .allowsHitTesting(false)
         .accessibilityLabel("Microphone level")
+        .accessibilityValue(clipping ? "clipping" : UiRules.number(Double(max(rmsDb, Self.floorDb)), 0) + " dB")
         .task {
             while !Task.isCancelled {
                 read()
@@ -54,13 +55,24 @@ struct AudioMeter: View {
         }
     }
 
+    /// Writes state only on a visible change (half a dB, or the clip
+    /// marker), so a quiet room redraws nothing.
     private func read() {
         let (peak, rms) = levels.read()
         let peakNow = Self.db(peak)
-        rmsDb = Self.db(rms)
-        peakDb = max(peakNow, peakDb - Self.peakFall)
+        let rmsNow = max(Self.db(rms), Self.floorDb - 1)
+        if abs(rmsNow - rmsDb) >= 0.5 {
+            rmsDb = rmsNow
+        }
+        let peakNext = max(peakNow, peakDb - Self.peakFall, Self.floorDb - 1)
+        if abs(peakNext - peakDb) >= 0.5 {
+            peakDb = peakNext
+        }
         if peakNow > Self.clipDb {
             clipUntil = Date(timeIntervalSinceNow: Self.clipHold)
+        } else if clipUntil != .distantPast, clipUntil < .now {
+            // The marker goes dark: one redraw, then nothing.
+            clipUntil = .distantPast
         }
     }
 

@@ -204,6 +204,11 @@ final class LiveStream: @unchecked Sendable {
         videoEncoder.onOutput = { sampleBuffer, capturePts, encodeInNs, encodeOutNs in
             mux.writeVideo(sampleBuffer, capturePts: capturePts, encodeInNs: encodeInNs, encodeOutNs: encodeOutNs)
         }
+        // A reset encoder sends nothing more: stop with the reason rather
+        // than stream no video.
+        videoEncoder.onSessionInvalid = { [weak self] in
+            self?.stop(reason: "The video encoder was reset; start the stream again")
+        }
         do {
             try videoEncoder.start()
         } catch {
@@ -284,19 +289,25 @@ final class LiveStream: @unchecked Sendable {
 
 /// The muxer and the latency meter, shared by the threads that produce
 /// media (VideoToolbox output, microphone delivery) and the SRT thread
-/// (frame-sent reports). Each call takes the lock briefly: muxing a frame
-/// is tens of microseconds, and the core queues the packets onto the SRT
-/// caller without blocking.
+/// (frame-sent reports). The muxer has its own lock, held while a frame is
+/// muxed (tens to hundreds of microseconds; the core queues the packets onto
+/// the SRT caller without blocking); the meter another, held for a sample,
+/// so the SRT and microphone threads never wait for a frame being muxed.
 private final class MuxPath: @unchecked Sendable {
     private let lock = OSAllocatedUnfairLock()
     // Guarded by `lock`.
     private var muxer: CoreTsMuxer?
     private var audioLabel = ""
+    private let meterLock = OSAllocatedUnfairLock()
+    // Guarded by `meterLock`.
     private var meter = LatencyMeter()
+    private var audioBufferFrames = 0
+    /// The other window, swapped in by `report` (its only user, once a
+    /// second) so the sorting happens outside the lock.
+    private var spare = LatencyMeter()
     /// LCP SEI frame counter, one per encoded frame; wraps.
     private var frameCounter: UInt32 = 0
     private var loggedStart = false
-    private var audioBufferFrames = 0
     private var queueFullCount = 0
     /// Asks the encoder for a keyframe; set before the encoder starts.
     var onWantsKeyframe: (@Sendable () -> Void)?
@@ -316,7 +327,18 @@ private final class MuxPath: @unchecked Sendable {
 
     /// p50/p95/max per stage since the last call, and the muxer's counters.
     func report() -> (LatencyReport, CoreTsMuxer.Stats?) {
-        lock.withLockUnchecked { (meter.report(), muxer?.stats) }
+        meterLock.withLockUnchecked { swap(&meter, &spare) }
+        // Sorted outside the lock; emptied, it is the next spare.
+        let latency = spare.report()
+        return (latency, lock.withLockUnchecked { muxer?.stats })
+    }
+
+    private func record(_ samples: (LatencyMeter.Stage, Int64)...) {
+        meterLock.withLockUnchecked {
+            for (stage, ns) in samples {
+                meter.record(stage, ns: ns)
+            }
+        }
     }
 
     func setVideoFormat(_ format: CMFormatDescription) {
@@ -338,20 +360,18 @@ private final class MuxPath: @unchecked Sendable {
     /// On the SRT thread: the first (`last` false) or last packet of a
     /// video frame went out.
     func frameSent(captureNs: Int64, enqueuedNs: Int64, sentNs: Int64, last: Bool) {
-        lock.withLockUnchecked {
-            if last {
-                meter.record(.sendFrame, ns: sentNs - enqueuedNs)
-            } else {
-                meter.record(.sendQueue, ns: sentNs - enqueuedNs)
-                meter.record(.captureToSend, ns: sentNs - captureNs)
-            }
+        // Wrapping: the stamps come from the core.
+        if last {
+            record((.sendFrame, sentNs &- enqueuedNs))
+        } else {
+            record((.sendQueue, sentNs &- enqueuedNs), (.captureToSend, sentNs &- captureNs))
         }
     }
 
     /// On the microphone's delivery thread, per buffer.
     func audioInput(captureNs: Int64, frames: Int, arrivedNs: Int64) {
-        let changed = lock.withLockUnchecked {
-            meter.record(.audioCaptureToEncode, ns: arrivedNs - captureNs)
+        record((.audioCaptureToEncode, arrivedNs &- captureNs))
+        let changed = meterLock.withLockUnchecked {
             defer { audioBufferFrames = frames }
             return frames != audioBufferFrames
         }
@@ -364,16 +384,15 @@ private final class MuxPath: @unchecked Sendable {
     /// the frame's first sample minus the encoder delay (see
     /// `AudioTiming.ptsNs`).
     func writeAudio(_ packet: UnsafeRawBufferPointer, ptsNs: Int64, encodeNs: Int64) {
+        let nowNs = HostClock.nowNs()
         let result: CoreTsMuxer.Result? = lock.withLockUnchecked {
             guard let muxer else {
                 return nil
             }
-            let nowNs = HostClock.nowNs()
-            meter.record(.audioEncode, ns: encodeNs)
-            meter.record(.audioCaptureToMux, ns: nowNs - ptsNs)
             return muxer.writeAudio(packet, ptsNs: ptsNs, nowNs: nowNs)
         }
         if let result {
+            record((.audioEncode, encodeNs), (.audioCaptureToMux, nowNs &- ptsNs))
             noteSendResult(result)
         }
     }
@@ -396,8 +415,6 @@ private final class MuxPath: @unchecked Sendable {
             guard let muxer else {
                 return (CoreTsMuxer.Result(LC_TS_SKIPPED), nil)
             }
-            meter.record(.captureToEncode, ns: encodeInNs - hostNs)
-            meter.record(.encode, ns: encodeOutNs - encodeInNs)
             let counter = frameCounter
             frameCounter &+= 1
             let result = muxer.writeVideo(sampleBuffer, ptsNs: exposureNs, sendCaptureNs: hostNs,
@@ -407,13 +424,16 @@ private final class MuxPath: @unchecked Sendable {
                 wantsKeyframe = muxer.wantsKeyframe
                 return (result, nil)
             }
-            // Muxing and queueing onto the SRT caller.
-            meter.record(.mux, ns: HostClock.nowNs() - encodeOutNs)
             guard !loggedStart, let startNs = muxer.stats.startNs else {
                 return (result, nil)
             }
             loggedStart = true
             return (result, startNs)
+        }
+        if result != LC_TS_SKIPPED {
+            // Muxing and queueing onto the SRT caller.
+            record((.captureToEncode, encodeInNs &- hostNs), (.encode, encodeOutNs &- encodeInNs),
+                   (.mux, HostClock.nowNs() &- encodeOutNs))
         }
         if wantsKeyframe {
             onWantsKeyframe?()

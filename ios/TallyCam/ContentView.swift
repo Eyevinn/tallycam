@@ -170,6 +170,8 @@ struct ContentView: View {
         VStack(spacing: Chrome.zoneGap) {
             topRows(landscape: landscape, nameInline: nameInline)
                 .allowsHitTesting(!screenLocked)
+                // Locked against VoiceOver and Switch Control too.
+                .accessibilityHidden(screenLocked)
             if UIDevice.current.userInterfaceIdiom == .phone {
                 phoneCorners(landscape: landscape, rowsBeside: rowsBeside, screenHeight: screenHeight)
             } else if landscape {
@@ -257,9 +259,10 @@ struct ContentView: View {
                 Spacer(minLength: 0)
             }
             if landscape {
-                // Between the tools column and the live button.
+                // Between the tools row (up to three buttons) and the live
+                // button, centred.
                 messageSlot
-                    .padding(.horizontal, LiveButton.size + 3 * Chrome.gap + 12)
+                    .padding(.horizontal, 3 * Chrome.control + 3 * Chrome.gap)
                     .frame(maxHeight: .infinity, alignment: .top)
             }
             // The timecode at the bottom centre (between the side controls in
@@ -276,7 +279,7 @@ struct ContentView: View {
 
     /// The time-of-day timecode badge (docs/UI_DESIGN.md, zone 1).
     private var timecode: some View {
-        Timecode(fps: capture.format.frameRate, health: remote.clock?.health)
+        Timecode(fps: capture.format.frameRate, clock: remote.clock)
     }
 
     /// The message band above the side controls in portrait: two lines of
@@ -348,6 +351,7 @@ struct ContentView: View {
                     rowsBeside: rowsBeside, screenHeight: screenHeight, inCorner: inCorner)
             .opacity(screenLocked ? 0 : 1)
             .allowsHitTesting(!screenLocked)
+            .accessibilityHidden(screenLocked)
     }
 
     /// A tap on a value in the values row: its group goes on the right side
@@ -386,6 +390,7 @@ struct ContentView: View {
     private func liveButton(hint: LiveButton.HintPlacement) -> some View {
         LiveButton(state: controller.state, hint: hint, onStart: start, onStop: { controller.stop() })
             .allowsHitTesting(!screenLocked)
+            .accessibilityHidden(screenLocked)
     }
 
     @ViewBuilder
@@ -419,6 +424,7 @@ struct ContentView: View {
             .accessibilityLabel("Lock screen")
         }
         .allowsHitTesting(!screenLocked)
+        .accessibilityHidden(screenLocked)
     }
 
     @ViewBuilder

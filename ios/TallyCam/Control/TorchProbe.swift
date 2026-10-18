@@ -111,6 +111,9 @@ final class TorchProbe: @unchecked Sendable {
     /// Runs the probe on the session queue. Returns at once; the result is
     /// reported through `report` when the run ends, about
     /// cycles × (on + off) + 2 s later.
+    /// The most the recorded profiles may take.
+    static let maxRecordingBytes = 100e6
+
     func start(controls c: CameraControls, settings: Settings,
                report: @escaping @Sendable (_ level: String, _ message: String) -> Void) throws
     {
@@ -140,6 +143,16 @@ final class TorchProbe: @unchecked Sendable {
         let frameDurationNs = device.activeVideoMinFrameDuration.seconds * 1e9
         guard frameDurationNs > 0 else {
             throw ControlError("no frame rate")
+        }
+        // Every frame keeps a profile of one Float per line: refuse a run
+        // that would hold more than this in memory (a long run at a high
+        // frame rate would otherwise get the app killed).
+        let dimensions = CMVideoFormatDescriptionGetDimensions(device.activeFormat.formatDescription)
+        let seconds = Double(settings.cycles) * (settings.onMs + settings.offMs) / 1000 + 2
+        let bytes = seconds * 1e9 / frameDurationNs * Double(max(dimensions.width, dimensions.height)) * 4
+        guard bytes <= Self.maxRecordingBytes else {
+            throw ControlError(String(format: "too long a run for this frame rate (%.0f MB); fewer cycles or shorter",
+                                      bytes / 1e6))
         }
         // The dark baseline needs the torch off. Before anything is set up,
         // so a failure here leaves no probe half started.

@@ -9,7 +9,9 @@ struct CameraStage: View {
     @ObservedObject var capture: Capture
     /// Tap and long press focus through the operator's local controls.
     let remote: RemoteControl
-    @ObservedObject var shading: Shading
+    /// Not observed: the preview must not rebuild with every camera value;
+    /// it follows only the focus mode (below).
+    let shading: Shading
 
     private static let longPress: TimeInterval = 0.55
     /// A touch that moves further than this is not a tap or a long press.
@@ -85,7 +87,7 @@ struct CameraStage: View {
             }
         }
         .onDisappear { peaking.stop() }
-        .onChange(of: shading.mode(.focus)) { _, mode in
+        .onReceive(shading.$values.map { $0["focus_mode"]?.string }.removeDuplicates()) { mode in
             if mode == "auto" {
                 withAnimation(.easeIn(duration: 0.3)) { lockPoint = nil }
             }

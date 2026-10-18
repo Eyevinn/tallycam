@@ -302,6 +302,9 @@ final class MicCapture: @unchecked Sendable {
     }
 
     /// On the delivery thread: stamps and hands over every filled slot.
+    /// When the last sample time jump was logged (delivery thread only).
+    private var lastJumpLogNs: Int64 = 0
+
     private func deliver() {
         while let slot = ring.nextFilled() {
             let arrivedNs = HostClock.nowNs()
@@ -313,7 +316,13 @@ final class MicCapture: @unchecked Sendable {
                 ? HostClock.ns(fromTicks: slot.hostTicks)
                 : arrivedNs - AudioTiming.durationNs(frames: slot.frames, sampleRate: Self.sampleRate)
             let captureNs = AudioTiming.captureNs(bufferHostNs: hostNs, inputLatency: latency)
-            if let last = lastSampleTime, slot.sampleTime != last {
+            // More than a buffer off (a sub-sample difference is rounding),
+            // and at most once a second: a route at another hardware rate
+            // would otherwise log every buffer.
+            if let last = lastSampleTime, abs(slot.sampleTime - last) > Double(slot.frames),
+               arrivedNs - lastJumpLogNs >= 1_000_000_000
+            {
+                lastJumpLogNs = arrivedNs
                 log.info("Microphone sample time jumped by \(slot.sampleTime - last) samples")
             }
             lastSampleTime = slot.sampleTime + Double(slot.frames)

@@ -50,6 +50,11 @@ final class VideoEncoder: @unchecked Sendable {
     /// camera frame it was encoded from, and when the frame went into the
     /// encoder and came out (host ns).
     var onOutput: ((CMSampleBuffer, CMTime, _ encodeInNs: Int64, _ encodeOutNs: Int64) -> Void)?
+    /// Called once when VideoToolbox invalidates the session (a media
+    /// services or hardware encoder reset): no frame gets through after it.
+    var onSessionInvalid: (() -> Void)?
+    /// Encode failures, logged at most once a second with a count.
+    private let failures = FailureLog()
 
     private let settings: VideoEncoderSettings
     /// Whether the running session has low-latency rate control.
@@ -225,7 +230,19 @@ final class VideoEncoder: @unchecked Sendable {
             infoFlagsOut: nil
         )
         if status != noErr {
-            log.error("EncodeFrame failed: \(status)")
+            failed(status, in: "EncodeFrame")
+        }
+    }
+
+    /// Any thread. A failing session fails every frame: one log line a
+    /// second, and the invalid session reported once.
+    private func failed(_ status: OSStatus, in call: String) {
+        let (message, firstInvalid) = failures.note(status)
+        if let message {
+            log.error("\(call, privacy: .public) failed: \(message, privacy: .public)")
+        }
+        if firstInvalid {
+            onSessionInvalid?()
         }
     }
 
@@ -235,7 +252,7 @@ final class VideoEncoder: @unchecked Sendable {
     fileprivate func output(status: OSStatus, encoded: CMSampleBuffer?, encodeInNs: Int64) {
         guard status == noErr, let encoded else {
             if status != noErr {
-                log.error("Encode failed: \(status)")
+                failed(status, in: "Encode")
             }
             return
         }
@@ -273,6 +290,36 @@ enum VideoEncoderError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case let .createFailed(status): "Could not create the video encoder (\(status))"
+        }
+    }
+}
+
+/// Counts encode failures so a failing session logs once a second, not
+/// once a frame.
+private final class FailureLog: @unchecked Sendable {
+    private let lock = NSLock()
+    private var lastLog: UInt64 = 0
+    private var suppressed = 0
+    private var reportedInvalid = false
+
+    /// The line to log now (nil: counted, logged later), and whether this is
+    /// the first `kVTInvalidSessionErr`.
+    func note(_ status: OSStatus) -> (String?, Bool) {
+        let now = DispatchTime.now().uptimeNanoseconds
+        return lock.withLock {
+            let firstInvalid = status == kVTInvalidSessionErr && !reportedInvalid
+            if firstInvalid {
+                reportedInvalid = true
+            }
+            guard lastLog == 0 || now - lastLog >= 1_000_000_000 else {
+                suppressed += 1
+                return (nil, firstInvalid)
+            }
+            defer {
+                lastLog = now
+                suppressed = 0
+            }
+            return ("\(status)" + (suppressed > 0 ? " (and \(suppressed) more)" : ""), firstInvalid)
         }
     }
 }

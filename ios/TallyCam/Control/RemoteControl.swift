@@ -36,8 +36,10 @@ final class RemoteControl: ObservableObject {
     @Published private(set) var connected = false
     @Published private(set) var tally: Tally = .off
     @Published private(set) var banner: String?
-    /// The phone's clock discipline, refreshed every second.
-    @Published private(set) var clock: ClockSummary?
+    /// The phone's clock discipline, refreshed every second. Its own object:
+    /// its error values change every second, and only the views that show
+    /// it (the dots, the timecode, Settings) observe it, not the screen.
+    let clock = ClockState()
     /// The last torch probe's summary (Settings, Diagnostics), and whether
     /// one is running.
     @Published private(set) var torchProbeSummary: String?
@@ -106,6 +108,12 @@ final class RemoteControl: ObservableObject {
     /// phone. A server with device keys first sends `challenge`; any server
     /// admits with its first `tally` (a refusal is a `message`, then close).
     private var awaitingAdmission = false
+    /// Bumped on every open and close, so a timer of one connection never
+    /// acts on the next.
+    private var connectionGeneration = 0
+    /// The control URL the current connection dialled: the device key signs
+    /// its host (protocol 4).
+    private var dialledUrl: String?
     private var lastStreamState: StreamController.State = .idle
     private var statusTimer: Timer?
     private var bannerTask: Task<Void, Never>?
@@ -203,6 +211,7 @@ final class RemoteControl: ObservableObject {
             client.disconnect()
             return
         }
+        dialledUrl = url.absoluteString
         client.connect(to: url)
     }
 
@@ -238,10 +247,9 @@ final class RemoteControl: ObservableObject {
     /// so the hub shows the camera offline at once instead of after its
     /// timeout.
     func enteredBackground() {
-        let app = UIApplication.shared
-        var task = UIBackgroundTaskIdentifier.invalid
-        task = app.beginBackgroundTask(withName: "Close control channel") {
-            app.endBackgroundTask(task)
+        let task = BackgroundTask()
+        task.id = UIApplication.shared.beginBackgroundTask(withName: "Close control channel") {
+            MainActor.assumeIsolated { task.end() }
         }
         backgroundClose?.cancel()
         backgroundClose = Task { @MainActor [weak self] in
@@ -250,7 +258,7 @@ final class RemoteControl: ObservableObject {
                 client.disconnect()
                 closedForBackground = true
             }
-            app.endBackgroundTask(task)
+            task.end()
         }
     }
 
@@ -291,10 +299,11 @@ final class RemoteControl: ObservableObject {
         return parsed
     }
 
-    /// A link for another control server than the current one, or when none
-    /// is set, asks before joining (docs/UI_DESIGN.md, "Joining a hub").
+    /// Asks before joining unless the link changes nothing that matters
+    /// (`ProvisioningLink.joinsSilently`; docs/UI_DESIGN.md, "Joining a
+    /// hub").
     func needsConfirmation(_ link: ProvisioningLink) -> Bool {
-        !ProvisioningLink.sameServer(link.controlUrl, url)
+        !link.joinsSilently(currentControl: url, currentSrt: controller?.url ?? "")
     }
 
     /// Saves the link's control and SRT URLs and connects. While live, the
@@ -340,13 +349,17 @@ final class RemoteControl: ObservableObject {
             }
             awaitingAdmission = true
             challengeSeen = false
+            connectionGeneration += 1
+            let generation = connectionGeneration
             sendHelloMessage()
             // A server before device keys sends no challenge and may send
             // nothing at all until something changes: admitted unless it
-            // challenges soon.
+            // challenges soon (on this connection, not a later one).
             Task { @MainActor [weak self] in
                 try? await Task.sleep(for: .seconds(3))
-                guard let self, connected, awaitingAdmission, !challengeSeen else {
+                guard let self, generation == connectionGeneration, connected, awaitingAdmission,
+                      !challengeSeen
+                else {
                     return
                 }
                 admit()
@@ -356,6 +369,9 @@ final class RemoteControl: ObservableObject {
             connected = false
             helloSent = false
             awaitingAdmission = false
+            connectionGeneration += 1
+            // The next hub asks for image statistics itself.
+            statsInterval = nil
             tally = .off
             capture?.outputs.setPreviewSink(nil)
         case let .message(message):
@@ -430,12 +446,14 @@ final class RemoteControl: ObservableObject {
                 }
             }
         case let .challenge(server, nonce):
-            guard awaitingAdmission, let key = DeviceKey.current() else {
+            // One challenge per connection, and only before admission; any
+            // later one is ignored.
+            guard connected, awaitingAdmission, !challengeSeen, let dialledUrl, let key = DeviceKey.current() else {
                 return
             }
             challengeSeen = true
             do {
-                client.send(text: try key.authMessage(server: server, nonce: nonce))
+                client.send(text: try key.authMessage(server: server, nonce: nonce, controlUrl: dialledUrl))
             } catch {
                 log.error("Cannot answer the challenge: \(String(describing: error), privacy: .public)")
                 showBanner("Cannot prove this camera's key")
@@ -501,7 +519,9 @@ final class RemoteControl: ObservableObject {
         guard let controller else {
             return
         }
-        PhoneClock.shared.setLive(controller.state == .live)
+        // Connecting while a stream exists is an SRT reconnect: the encoder
+        // runs on, so the clock must not step.
+        PhoneClock.shared.setLive(controller.state != .idle)
         // The bitrate range follows the format and codec; the hello carries
         // the camera name.
         if helloSent, StreamControls.descriptors(controller) != streamControls
@@ -591,9 +611,7 @@ final class RemoteControl: ObservableObject {
     private func tick() {
         let clockStatus = PhoneClock.shared.status()
         let summary = clockStatus.map(ClockSummary.init(status:))
-        if summary != clock {
-            clock = summary
-        }
+        clock.update(summary)
         sendStatus(clock: clockStatus)
         reportDroppedFrames()
     }
@@ -805,5 +823,36 @@ final class RemoteControl: ObservableObject {
             }
             self?.banner = nil
         }
+    }
+}
+
+/// The clock discipline as the screen shows it (see `RemoteControl.clock`).
+@MainActor
+final class ClockState: ObservableObject {
+    /// Everything, for Settings.
+    @Published private(set) var summary: ClockSummary?
+
+    var health: ClockSummary.Health? {
+        summary?.health
+    }
+
+    func update(_ summary: ClockSummary?) {
+        if summary != self.summary {
+            self.summary = summary
+        }
+    }
+}
+
+/// A background task ended exactly once, by its expiry or its work.
+@MainActor
+private final class BackgroundTask {
+    var id = UIBackgroundTaskIdentifier.invalid
+
+    func end() {
+        guard id != .invalid else {
+            return
+        }
+        UIApplication.shared.endBackgroundTask(id)
+        id = .invalid
     }
 }

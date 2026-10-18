@@ -133,16 +133,8 @@ struct SettingsView: View {
                 .disabled(controller.state != .idle)
             latencyStepper
             Toggle("Adaptive bitrate", isOn: $controller.adaptiveBitrate)
-            if let stats = controller.stats, controller.state == .live {
-                if controller.adaptiveBitrate, let target = stats.targetKbps {
-                    LabeledContent("Encoder now", value: "\(target) kbit/s")
-                }
-                if let rtt = stats.rttMs {
-                    LabeledContent("Round trip", value: String(format: "%.0f ms", rtt))
-                }
-                if let retransmits = stats.retransmits, let dropped = stats.dropped {
-                    LabeledContent("Retransmitted / dropped", value: "\(retransmits) / \(dropped)")
-                }
+            if controller.state == .live {
+                LiveStatsRows(live: controller.liveStats, adaptive: controller.adaptiveBitrate)
             }
         } header: {
             Text("Stream (SRT)")
@@ -176,8 +168,17 @@ struct SettingsView: View {
     }
 
     private var clockSection: some View {
+        ClockSection(clock: remote.clock)
+    }
+}
+
+/// Settings › Clock; observes only the clock (it changes every second).
+private struct ClockSection: View {
+    @ObservedObject var clock: ClockState
+
+    var body: some View {
         Section {
-            if let clock = remote.clock {
+            if let clock = clock.summary {
                 LabeledContent("Health") {
                     HStack(spacing: 6) {
                         Circle().fill(Self.color(clock.health)).frame(width: 9, height: 9)
@@ -210,6 +211,25 @@ struct SettingsView: View {
         }
     }
 
+    private func reference(_ clock: ClockSummary) -> String {
+        switch (clock.referenceName, clock.reference) {
+        case let (name?, address?): "\(name) (\(address))"
+        case let (name?, nil): name
+        case let (nil, address?): address
+        case (nil, nil): "-"
+        }
+    }
+
+    private static func color(_ health: ClockSummary.Health) -> Color {
+        switch health {
+        case .healthy: .green
+        case .degraded: .orange
+        case .bad: .red
+        }
+    }
+}
+
+extension SettingsView {
     private var aboutSection: some View {
         let key = DeviceKey.current()
         let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?"
@@ -269,22 +289,6 @@ struct SettingsView: View {
         }
     }
 
-    private func reference(_ clock: ClockSummary) -> String {
-        switch (clock.referenceName, clock.reference) {
-        case let (name?, address?): "\(name) (\(address))"
-        case let (name?, nil): name
-        case let (nil, address?): address
-        case (nil, nil): "-"
-        }
-    }
-
-    private static func color(_ health: ClockSummary.Health) -> Color {
-        switch health {
-        case .healthy: .green
-        case .degraded: .orange
-        case .bad: .red
-        }
-    }
 }
 
 /// Mains frequency for flicker-free shutters (off: no mains-lit light, the
@@ -327,6 +331,26 @@ private struct MainsSection: View {
                 Text("The control hub sets this for all cameras; a change here applies to this camera until the hub changes it.")
             } else {
                 Text("The shutter follows the mains frequency so mains-lit light does not flicker. Off outdoors, where the shutter is free.")
+            }
+        }
+    }
+}
+
+/// Settings › Stream's live numbers; observes only them (once a second).
+private struct LiveStatsRows: View {
+    @ObservedObject var live: LiveStats
+    let adaptive: Bool
+
+    var body: some View {
+        if let stats = live.stats {
+            if adaptive, let target = stats.targetKbps {
+                LabeledContent("Encoder now", value: "\(target) kbit/s")
+            }
+            if let rtt = stats.rttMs {
+                LabeledContent("Round trip", value: UiRules.number(rtt, 0) + " ms")
+            }
+            if let retransmits = stats.retransmits, let dropped = stats.dropped {
+                LabeledContent("Retransmitted / dropped", value: "\(retransmits) / \(dropped)")
             }
         }
     }

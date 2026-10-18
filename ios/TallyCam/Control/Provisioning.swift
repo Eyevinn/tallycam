@@ -41,7 +41,36 @@ struct ProvisioningLink: Equatable {
         } else {
             lines.append("Stream: unchanged")
         }
+        if URL(string: controlUrl)?.scheme?.lowercased() == "ws" {
+            lines.append("Not encrypted (ws://)")
+        }
         return lines.joined(separator: "\n")
+    }
+
+    /// A link joins without asking only when it changes nothing that
+    /// matters: the same control endpoint (scheme, host, port and path; ws
+    /// and wss are different), and no SRT URL or one for the same SRT host
+    /// and port as now. Anything else could redirect the stream, so it asks.
+    func joinsSilently(currentControl: String, currentSrt: String) -> Bool {
+        guard let mine = Self.endpoint(of: controlUrl), mine == Self.endpoint(of: currentControl) else {
+            return false
+        }
+        guard let srtUrl else {
+            return true
+        }
+        guard let target = Self.server(of: srtUrl) else {
+            return false
+        }
+        return target == Self.server(of: currentSrt)
+    }
+
+    /// Scheme, host, port (filled in from the scheme) and path of a ws/wss
+    /// URL, or nil.
+    static func endpoint(of url: String) -> String? {
+        guard let parsed = URL(string: url.trimmingCharacters(in: .whitespaces)), let server = server(of: url) else {
+            return nil
+        }
+        return "\(parsed.scheme?.lowercased() ?? "")://\(server)\(parsed.path)"
     }
 
     /// True when `controlUrl` names the same control server (host and port)

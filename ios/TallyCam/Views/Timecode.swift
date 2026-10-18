@@ -4,18 +4,20 @@ import SwiftUI
 /// at the stream rate), the same on every camera (docs/UI_DESIGN.md, zone
 /// 1): white while the clock is healthy, orange when not, dim with "--"
 /// frames when it is not synchronised. A small badge at the bottom centre,
-/// as on a camera monitor. Redrawn 10 times a second, its own text only.
+/// as on a camera monitor. Redrawn 10 times a second (once while not
+/// synchronised, with no frames to show), its own text only.
 struct Timecode: View {
     let fps: Int
-    let health: ClockSummary.Health?
+    @ObservedObject var clock: ClockState
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 0.1)) { _ in
+        TimelineView(.periodic(from: .now, by: clock.summary?.synced == true ? 0.1 : 1)) { _ in
             // The same TAI-to-UTC mapping the frames' timestamps use.
             let mapping = ClockMapping.at(hostNs: HostClock.nowNs())
-            Text(UiRules.timecode(utcNs: mapping.utcNs, fps: fps, synced: mapping.synced))
+            let text = UiRules.timecode(utcNs: mapping.utcNs, fps: fps, synced: mapping.synced)
+            Text(text)
                 .font(.caption.monospacedDigit().weight(.semibold))
-                .foregroundStyle(!mapping.synced ? .white.opacity(0.45) : health == .healthy ? .white : .orange)
+                .foregroundStyle(!mapping.synced ? .white.opacity(0.45) : clock.health == .healthy ? .white : .orange)
                 .shadow(color: .black.opacity(0.5), radius: 2)
                 .lineLimit(1)
                 .fixedSize()
@@ -24,6 +26,8 @@ struct Timecode: View {
                 .sideSurface(Capsule())
                 .allowsHitTesting(false)
                 .accessibilityLabel("Time code")
+                .accessibilityValue(text)
+                .accessibilityAddTraits(.updatesFrequently)
         }
     }
 }

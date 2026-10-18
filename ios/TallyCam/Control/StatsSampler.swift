@@ -18,7 +18,8 @@ final class StatsSampler: @unchecked Sendable {
     /// Called on the sampler queue.
     var onStats: (@Sendable (ImageStatsResult) -> Void)?
 
-    private let queue = DispatchQueue(label: "stats.sample", qos: .utility)
+    /// User initiated: it holds a capture-pool frame while it samples.
+    private let queue = DispatchQueue(label: "stats.sample", qos: .userInitiated)
     private let lock = NSLock()
     // Guarded by `lock`.
     private var interval: TimeInterval = 0.5

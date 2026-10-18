@@ -159,8 +159,7 @@ struct Rocker: View {
     let onRate: (Double) -> Void
 
     private static let steps = 10
-    /// Less deflection than this does not move (a tap's jitter).
-    private static let deadZone: CGFloat = 0.1
+
     /// A touch shorter and smaller than these is a tap.
     private static let tapTime: TimeInterval = 0.35
     private static let tapSlop: CGFloat = 8
@@ -172,6 +171,10 @@ struct Rocker: View {
     @State private var sentStep = 0
     @State private var touchStart: Date?
     @State private var lastKnobTap = Date.distantPast
+    /// True while a drag is in progress; SwiftUI resets it when the gesture
+    /// is cancelled (a call, the app going to the background, the view
+    /// replaced), where `onEnded` never runs.
+    @GestureState private var dragging = false
 
     private var travel: CGFloat {
         // Up to the end labels.
@@ -204,12 +207,16 @@ struct Rocker: View {
         .contentShape(RoundedRectangle(cornerRadius: 10))
         .gesture(
             DragGesture(minimumDistance: 0)
+                .updating($dragging) { _, dragging, _ in dragging = true }
                 .onChanged { value in
                     if touchStart == nil {
                         touchStart = .now
                     }
                     deflection = min(max(-value.translation.height / travel, -1), 1)
-                    let step = abs(deflection) < Self.deadZone ? 0 : Int((deflection * CGFloat(Self.steps)).rounded())
+                    // Nothing moves within a tap's slop: a jittery tap is a
+                    // tap, never also a ramp.
+                    let step = abs(value.translation.height) < Self.tapSlop
+                        ? 0 : Int((deflection * CGFloat(Self.steps)).rounded())
                     guard step != sentStep else {
                         return
                     }
@@ -219,27 +226,40 @@ struct Rocker: View {
                 }
                 .onEnded { value in
                     let quick = touchStart.map { Date.now.timeIntervalSince($0) < Self.tapTime } ?? false
-                    touchStart = nil
-                    withAnimation(.spring(duration: 0.2)) {
-                        deflection = 0
-                    }
-                    if sentStep != 0 {
-                        sentStep = 0
-                        onRate(0)
-                    }
+                    release()
                     if quick, hypot(value.translation.width, value.translation.height) < Self.tapSlop {
                         tap(at: value.startLocation.y)
                     }
                 }
         )
+        .onChange(of: dragging) { _, dragging in
+            // A cancelled drag: stop as if released.
+            if !dragging, touchStart != nil {
+                release()
+            }
+        }
+        .onDisappear(perform: release)
         .accessibilityElement()
         .accessibilityLabel(label)
+        .accessibilityAction(named: "Neutral value") { onReset?() }
         .accessibilityAdjustableAction { direction in
             switch direction {
             case .increment: onStep?(1)
             case .decrement: onStep?(-1)
             @unknown default: break
             }
+        }
+    }
+
+    /// The knob springs back and the move stops.
+    private func release() {
+        touchStart = nil
+        withAnimation(.spring(duration: 0.2)) {
+            deflection = 0
+        }
+        if sentStep != 0 {
+            sentStep = 0
+            onRate(0)
         }
     }
 

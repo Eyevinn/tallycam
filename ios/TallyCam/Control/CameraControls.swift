@@ -636,6 +636,9 @@ final class CameraControls: @unchecked Sendable {
         if device.activeFormat != formats[index] {
             device.activeFormat = formats[index]
         }
+        // Back at the nominal duration: the genlock loop starts over, even
+        // at the same frame rate.
+        genlock.restart()
         let duration = CMTime(value: 1, timescale: CMTimeScale(frameRate))
         device.activeVideoMinFrameDuration = duration
         device.activeVideoMaxFrameDuration = duration
@@ -732,6 +735,12 @@ final class CameraControls: @unchecked Sendable {
         session.addInput(newInput)
         device = newDevice
         input = newInput
+        // The old device's exposure completions may never come: nothing in
+        // flight carries over.
+        autoIsoInFlight = false
+        exposureInFlight = nil
+        exposureSerial += 1
+        genlock.restart()
         var warning: String?
         do {
             let applied = try configure {

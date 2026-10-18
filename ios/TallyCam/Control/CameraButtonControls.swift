@@ -67,14 +67,19 @@ final class CameraButtonControls: NSObject, AVCaptureSessionControlsDelegate, @u
         }
         let key = exposureMode == "auto" ? "ev_bias" : "iso"
         if let value = values[key]?.double, value.isFinite {
-            slider.value = min(max(Float(value), range.lowerBound), range.upperBound)
+            // Only a change: each set may cost a round trip to the overlay.
+            let clamped = min(max(Float(value), range.lowerBound), range.upperBound)
+            if slider.value != clamped {
+                slider.value = clamped
+            }
         }
     }
 
     /// Compensation in auto, ISO otherwise (a locked exposure turns manual,
     /// as with the rocker).
     private func makeExposureSlider(_ device: AVCaptureDevice) -> (slider: AVCaptureSlider, range: ClosedRange<Float>)? {
-        let controls = controls
+        // Weak: the session holds the slider and the slider its action.
+        weak let controls = controls
         if exposureMode == "auto" {
             let low = device.minExposureTargetBias, high = device.maxExposureTargetBias
             guard high > low else {
@@ -83,7 +88,7 @@ final class CameraButtonControls: NSObject, AVCaptureSessionControlsDelegate, @u
             let slider = AVCaptureSlider("Exposure", symbolName: "plusminus.circle", in: low ... high, step: 0.1)
             slider.localizedValueFormat = "%@ EV"
             slider.setActionQueue(queue) { value in
-                controls.apply(["ev_bias": .number((Double(value) * 10).rounded() / 10)]) { _, _ in }
+                controls?.apply(["ev_bias": .number((Double(value) * 10).rounded() / 10)]) { _, _ in }
             }
             return (slider, low ... high)
         }
@@ -101,7 +106,7 @@ final class CameraButtonControls: NSObject, AVCaptureSessionControlsDelegate, @u
             if self?.exposureMode != "manual" {
                 values["exposure_mode"] = .string("manual")
             }
-            controls.apply(values) { _, _ in }
+            controls?.apply(values) { _, _ in }
         }
         return (slider, low ... high)
     }

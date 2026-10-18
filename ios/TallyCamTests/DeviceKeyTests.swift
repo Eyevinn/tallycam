@@ -51,11 +51,12 @@ final class DeviceKeyTests: XCTestCase {
 
     func testAuthMessageVerifies() throws {
         let key = DeviceKey.loadOrCreate(storage: MemoryStorage(), defaults: defaults, secureEnclave: false)!
-        let text = try key.authMessage(server: "srv01", nonce: "n0nce")
+        let text = try key.authMessage(server: "srv01", nonce: "n0nce", controlUrl: "wss://Hub.Example.com/lcp/v0/device")
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any])
         XCTAssertEqual(json["type"] as? String, "auth")
         let signature = try XCTUnwrap(Data(base64Encoded: XCTUnwrap(json["signature"] as? String)))
-        let payload = Data("tallycam-lcp-auth-v1\nsrv01\nn0nce\n\(key.deviceId)".utf8)
+        let host = try XCTUnwrap(json["host"] as? String)
+        let payload = Data("tallycam-lcp-auth-v2\nsrv01\nn0nce\n\(key.deviceId)\n\(host)".utf8)
         let publicKey = try P256.Signing.PublicKey(x963Representation: key.signer.publicKeyX963)
         XCTAssertTrue(publicKey.isValidSignature(try P256.Signing.ECDSASignature(rawRepresentation: signature),
                                                  for: payload))
@@ -64,7 +65,7 @@ final class DeviceKeyTests: XCTestCase {
         XCTAssertFalse(deviceKeyVerify(publicKeyX963: key.signer.publicKeyX963,
                                        payload: Data("other".utf8), signature: signature))
         // A challenge that could smuggle a separator is not signed.
-        XCTAssertThrowsError(try key.authMessage(server: "a\nb", nonce: "n"))
+        XCTAssertThrowsError(try key.authMessage(server: "a\nb", nonce: "n", controlUrl: "ws://h/x"))
     }
 
     func testStoredKeyRoundTrips() throws {

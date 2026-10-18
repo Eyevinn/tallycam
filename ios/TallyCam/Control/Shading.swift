@@ -33,17 +33,16 @@ final class Shading: ObservableObject {
 
     func update(descriptors: [ControlDescriptor]) {
         if descriptors != self.descriptors {
+            descriptorMap = Dictionary(descriptors.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
             self.descriptors = descriptors
         }
     }
 
-    /// The descriptors by id, for `UiRules`.
-    var descriptorMap: [String: ControlDescriptor] {
-        Dictionary(descriptors.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-    }
+    /// The descriptors by id, for `UiRules`; built once per change.
+    private(set) var descriptorMap: [String: ControlDescriptor] = [:]
 
     func descriptor(_ id: String) -> ControlDescriptor? {
-        descriptors.first { $0.id == id }
+        descriptorMap[id]
     }
 
     /// The hub set these controls just now.

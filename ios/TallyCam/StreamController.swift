@@ -65,7 +65,13 @@ final class StreamController: ObservableObject {
 
     @Published private(set) var state: State = .idle
     @Published private(set) var message: String?
-    @Published private(set) var stats: Stats?
+    /// The stream's numbers, refreshed every second while live. In their
+    /// own object: only the views that show them observe it, not the
+    /// screen.
+    let liveStats = LiveStats()
+    var stats: Stats? {
+        liveStats.stats
+    }
     /// When the stream went live (connected), for the uptime display.
     @Published private(set) var liveSince: Date?
     /// The bitrate the operator set; nil follows the format and codec.
@@ -233,7 +239,7 @@ final class StreamController: ObservableObject {
             return
         }
         message = nil
-        stats = nil
+        liveStats.stats = nil
         state = .connecting
         let id = UUID()
         // The frame size is fixed for the whole stream.
@@ -316,7 +322,7 @@ final class StreamController: ObservableObject {
             message = reason
             state = .connecting
             liveSince = nil
-            stats = nil
+            liveStats.stats = nil
             statsTimer?.invalidate()
             statsTimer = nil
         case let .stopped(reason):
@@ -324,7 +330,7 @@ final class StreamController: ObservableObject {
             streamId = nil
             state = .idle
             liveSince = nil
-            stats = nil
+            liveStats.stats = nil
             message = reason
             liveCapture?.unlockStreamOrientation()
             liveCapture?.unlockFormat()
@@ -351,9 +357,15 @@ final class StreamController: ObservableObject {
     }
 
     private func pollStats() {
+        let id = streamId
         stream?.stats { [weak self] stats in
             Task { @MainActor in
-                self?.update(stats: stats)
+                // Not after a stop or a newer stream: a late answer would
+                // bring back numbers that were cleared.
+                guard let self, self.streamId == id, self.state != .idle else {
+                    return
+                }
+                self.update(stats: stats)
             }
         }
     }
@@ -381,6 +393,12 @@ final class StreamController: ObservableObject {
         numbers.targetKbps = stats.targetKbps
         numbers.ceilingKbps = stats.ceilingKbps
         numbers.link = stats.link
-        self.stats = numbers
+        liveStats.stats = numbers
     }
+}
+
+/// `StreamController.stats`, published apart from the controller.
+@MainActor
+final class LiveStats: ObservableObject {
+    @Published var stats: StreamController.Stats?
 }

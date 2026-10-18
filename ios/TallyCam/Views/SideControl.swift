@@ -59,7 +59,9 @@ struct SideControl: View {
     @Binding var sides: Sides
     let remote: RemoteControl
     let controls: CameraControls
-    @ObservedObject var shading: Shading
+    /// Not observed here: only the children that show values observe it, so
+    /// the 4 Hz camera values do not rebuild the whole side control.
+    let shading: Shading
     /// The value and K / Tint rows beside the block; else above it.
     let rowsBeside: Bool
     /// The whole screen's height, safe areas included.

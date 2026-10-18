@@ -148,7 +148,18 @@ struct Ramped: Equatable {
 enum UiRules {
     /// Numbers print with a point in every language ("0.42", never "0,42").
     static func fmt(_ pattern: String, _ args: CVarArg...) -> String {
-        String(format: pattern, locale: Locale(identifier: "en_US_POSIX"), arguments: args)
+        String(format: pattern, locale: posix, arguments: args)
+    }
+
+    private static let posix = Locale(identifier: "en_US_POSIX")
+
+    /// `x` to `places` decimals, halves away from zero (0.25 is "0.3", -0.5
+    /// is "-1", as Android), with a sign when `signed`. Rounded before
+    /// printing: printf rounds exact halves to even. Never "-0".
+    static func number(_ x: Double, _ places: Int, signed: Bool = false) -> String {
+        let scale = pow(10, Double(places))
+        let value = (x * scale).rounded(.toNearestOrAwayFromZero) / scale + 0.0
+        return fmt(signed ? "%+.*f" : "%.*f", Int32(places), value)
     }
 
     /// "1080p30", "4K30", "720p60": the short side and the frame rate.
@@ -182,7 +193,7 @@ enum UiRules {
             list.append(ValueItem(text: format, ids: ["resolution", "frame_rate"]))
         }
         if let iso = values["iso"]?.double {
-            var item = ValueItem(text: fmt("ISO %.0f", iso), tone: held, group: .exposure, ids: ["iso", "exposure_mode"])
+            var item = ValueItem(text: "ISO " + number(iso, 0), tone: held, group: .exposure, ids: ["iso", "exposure_mode"])
             switch warning {
             case "too_dark":
                 item.flag = "DARK"
@@ -197,19 +208,19 @@ enum UiRules {
         }
         if let shutter = values["shutter"]?.double, shutter > 0 {
             // Int(exactly:): Int(Double) traps outside Int's range.
-            let text = Int(exactly: shutter.rounded()).map(String.init) ?? fmt("%.0f", shutter)
+            let text = Int(exactly: shutter.rounded()).map(String.init) ?? number(shutter, 0)
             list.append(ValueItem(text: "1/" + text, tone: held, group: .exposure, ids: ["shutter"]))
         }
         if !exposureHeld, let bias = values["ev_bias"]?.double, abs(bias) >= 0.05 {
-            list.append(ValueItem(text: fmt("%+.1f EV", bias), group: .exposure, ids: ["ev_bias"]))
+            list.append(ValueItem(text: number(bias, 1, signed: true) + " EV", group: .exposure, ids: ["ev_bias"]))
         }
         if let mode = values["wb_mode"]?.string {
             let ids = ["wb_mode", "wb_temperature", "wb_tint"]
             let tone: Tone = mode == "auto" ? .auto : .held
             if let temperature = values["wb_temperature"]?.double {
                 // The tint (magenta +, green −) after the temperature, when not 0.
-                let tint = values["wb_tint"]?.double.flatMap { abs($0) >= 0.5 ? fmt(" %+.0f", $0) : nil } ?? ""
-                list.append(ValueItem(text: fmt("%.0f K", temperature) + tint, tone: tone, group: .whiteBalance,
+                let tint = values["wb_tint"]?.double.flatMap { abs($0) >= 0.5 ? " " + number($0, 0, signed: true) : nil } ?? ""
+                list.append(ValueItem(text: number(temperature, 0) + " K" + tint, tone: tone, group: .whiteBalance,
                                       ids: ids))
             } else {
                 list.append(ValueItem(text: "AWB", tone: tone, group: .whiteBalance, ids: ids))
@@ -221,7 +232,7 @@ enum UiRules {
             case "auto":
                 list.append(ValueItem(text: "AF", group: .focus, ids: ids))
             default:
-                let text = values["focus_position"]?.double.map { fmt("F %.2f", $0) } ?? "MF"
+                let text = values["focus_position"]?.double.map { "F " + number($0, 2) } ?? "MF"
                 list.append(ValueItem(text: text, tone: .held, group: .focus, ids: ids))
             }
         }
@@ -235,31 +246,31 @@ enum UiRules {
         switch group {
         case .exposure:
             if auto {
-                return fmt("%+.1f EV", values["ev_bias"]?.double ?? 0)
+                return number(values["ev_bias"]?.double ?? 0, 1, signed: true) + " EV"
             }
-            return values["iso"]?.double.map { fmt("ISO %.0f", $0) } ?? "ISO"
+            return values["iso"]?.double.map { "ISO " + number($0, 0) } ?? "ISO"
         case .whiteBalance:
             if tint {
-                return values["wb_tint"]?.double.map { fmt("Tint %+.0f", $0) } ?? "Tint"
+                return values["wb_tint"]?.double.map { "Tint " + number($0, 0, signed: true) } ?? "Tint"
             }
-            return values["wb_temperature"]?.double.map { fmt("%.0f K", $0) } ?? "AWB"
+            return values["wb_temperature"]?.double.map { number($0, 0) + " K" } ?? "AWB"
         case .focus:
             if auto {
                 return "AF"
             }
-            return values["focus_position"]?.double.map { fmt("F %.2f", $0) } ?? "F"
+            return values["focus_position"]?.double.map { "F " + number($0, 2) } ?? "F"
         }
     }
 
     /// The zoom factor against the wide lens, as the lens buttons count it:
     /// "2.3×" below 10, "12×" from 10.
     static func zoomFactorText(_ factor: Double) -> String {
-        factor >= 10 ? fmt("%.0f×", factor) : fmt("%.1f×", factor)
+        number(factor, factor >= 10 ? 0 : 1) + "×"
     }
 
     /// The stream's bitrate in the status row.
     static func bitrate(kbps: Int) -> String {
-        kbps >= 1000 ? fmt("%.1f Mb/s", Double(kbps) / 1000) : "\(kbps) kb/s"
+        kbps >= 1000 ? number(Double(kbps) / 1000, 1) + " Mb/s" : "\(kbps) kb/s"
     }
 
     /// Time live in the status row: "01:05", "1:02:05".
@@ -276,14 +287,16 @@ enum UiRules {
         let seconds = utcNs.quotientAndRemainder(dividingBy: 1_000_000_000)
         // Floor towards earlier times before 1970 too.
         let whole = seconds.remainder < 0 ? seconds.quotient - 1 : seconds.quotient
-        let fraction = Double(seconds.remainder < 0 ? seconds.remainder + 1_000_000_000 : seconds.remainder) / 1e9
+        let subsecondNs = seconds.remainder < 0 ? seconds.remainder + 1_000_000_000 : seconds.remainder
         let offset = Int64(timeZone.secondsFromGMT(for: Date(timeIntervalSince1970: TimeInterval(whole))))
         let ofDay = ((whole + offset) % 86400 + 86400) % 86400
         let time = fmt("%02d:%02d:%02d", Int(ofDay / 3600), Int(ofDay / 60 % 60), Int(ofDay % 60))
         guard synced, fps > 0 else {
             return time + ":--"
         }
-        return time + fmt(":%02d", min(Int(fraction * Double(fps)), fps - 1))
+        // Integer arithmetic: floor(subsecond × fps) exactly, as Android.
+        let frame = subsecondNs * Int64(fps) / 1_000_000_000
+        return time + fmt(":%02d", Int(min(frame, Int64(fps) - 1)))
     }
 
     // MARK: Rockers

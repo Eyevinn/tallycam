@@ -12,7 +12,8 @@ final class PreviewEncoder: @unchecked Sendable {
     /// Called on the preview queue with JPEG data and its size.
     var onJpeg: (@Sendable (Data, Int, Int) -> Void)?
 
-    private let queue = DispatchQueue(label: "preview.encode", qos: .utility)
+    /// User initiated: it holds a capture-pool frame while it scales.
+    private let queue = DispatchQueue(label: "preview.encode", qos: .userInitiated)
     private let context = CIContext(options: [.cacheIntermediates: false])
     private let colorSpace = CGColorSpace(name: CGColorSpace.sRGB)
     private let lock = NSLock()
@@ -24,7 +25,8 @@ final class PreviewEncoder: @unchecked Sendable {
 
     func configure(fps: Double, width: Int) {
         lock.withLock {
-            interval = 1 / min(max(fps, 0.1), 10)
+            // NaN would pass min/max and stop the preview for good.
+            interval = 1 / (fps.isFinite ? min(max(fps, 0.1), 10) : 1)
             self.width = min(max(width, 64), 1920) & ~1
             lastTime = 0
         }

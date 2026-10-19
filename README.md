@@ -23,11 +23,29 @@ may change without notice. What works today:
   core, tested on the emulator so far ([APPS](docs/APPS.md)).
 - **Adaptive bitrate** in the core: the bitrate follows the network, up to
   the operator's.
-- **Provisioning** by QR code, optionally invite-only with device keys;
+- **Provisioning** by QR code, invite-only with device keys;
   remote control and tally from the hub or from Strom. The camera operator
   and the hub both change any value; the last change wins.
 - **Time**: a chrony-like clock on the phone, TAI capture time in every
   frame, and software genlock within ±0.25 ms ([GENLOCK](docs/GENLOCK.md)).
+
+## Screenshots
+
+The control hub's page with four cameras (simulated, `fake_device`): tally on
+the camera name and border, live state, the camera's values in the phone's
+formats (manual values in yellow), battery, network and clock.
+
+![Cameras view](docs/images/hub-cameras.png)
+
+A camera's panel, with every control the phone offers:
+
+![Camera panel](docs/images/hub-panel.png)
+
+The Shading view, an RCP per camera: picture, waveform, exposure (auto ISO
+at the production shutter), colour temperature and tint, focus, and the
+production's mains and shutter for every camera:
+
+![Shading view](docs/images/hub-shading.png)
 
 ## Quick start
 
